@@ -1,11 +1,15 @@
 <div align="center">
 
-# nokk
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/nokk-logo-dark.png">
+  <img src="docs/nokk-logo.png" alt="nokk" width="360">
+</picture>
 
 **A stealth headless browser engine in Rust. Passes Cloudflare without Chromium.**
 
 Real V8 and a DOM, a Chrome TLS/HTTP fingerprint (JA3/JA4) and JS-level stealth,
 driven over the Chrome DevTools Protocol: Puppeteer and Playwright connect as usual.
+Also an MCP server for AI agents.
 
 [![CI](https://github.com/koloss777/nokk/actions/workflows/ci.yml/badge.svg)](https://github.com/koloss777/nokk/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/koloss777/nokk?include_prereleases)](https://github.com/koloss777/nokk/releases/latest)
