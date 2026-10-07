@@ -580,6 +580,12 @@ fn same_site(referer: &str, url: &str) -> bool {
 
 impl HttpClient for FingerprintClient {
     async fn send(&self, req: Request) -> Result<Response, NetError> {
+        // Turnstile posts to `/eb/` when its own script throws: a script the
+        // engine runs differently from Chrome. It still may pass, but this is
+        // the first sign of a break (2026-10-07), so say it in plain logs.
+        if req.url.contains("/cdn-cgi/challenge-platform/") && req.url.contains("/eb/") {
+            tracing::warn!(url = %req.url, "challenge reported a script error (Cloudflare error beacon)");
+        }
         // Normalise the method so a lowercase `fetch(url, {method:'get'})` from
         // page JS is accepted rather than reported as an unsupported method.
         let mut rb = match req.method.to_ascii_uppercase().as_str() {

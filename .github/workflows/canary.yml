@@ -1,0 +1,37 @@
+# Cloudflare changes its challenge without notice. Run the latest release
+# against the public targets every six hours, so a break shows up as a failed
+# run (and the usual failure e-mail) before users report it.
+name: canary
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cloudflare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools
+      - name: Fetch the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release list --repo "$GITHUB_REPOSITORY" -L 1 --json tagName -q '.[0].tagName')
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "nokk-${tag}-linux-x86_64.tar.gz"
+          tar -xzf "nokk-${tag}-linux-x86_64.tar.gz"
+          echo "Release: $tag" >> "$GITHUB_STEP_SUMMARY"
+      - name: Public Cloudflare targets
+        run: |
+          set -o pipefail
+          NOKK=./nokk bash tools/cf-check.sh | tee result.txt
+      - name: Summary
+        if: always()
+        run: |
+          { echo '```'; cat result.txt 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
