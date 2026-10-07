@@ -1378,6 +1378,7 @@ dependencies = [
 name = "nokk-cdp"
 version = "0.0.0"
 dependencies = [
+ "base64",
  "futures-util",
  "nokk",
  "serde",

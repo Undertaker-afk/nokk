@@ -290,6 +290,10 @@ struct Target {
     /// `page.goto()` waits for a response whose `loaderId` matches the one
     /// `Page.navigate` reported, and answers `None` when nothing ever does.
     loader_id: Arc<std::sync::Mutex<String>>,
+    /// Requests held for the driver (`Fetch.requestPaused`), by interception id.
+    fetch_held: Arc<std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<nokk::Decision>>>>,
+    /// Requests announced while held: engine request id -> the id the driver saw.
+    net_ids: Arc<std::sync::Mutex<HashMap<String, String>>>,
     /// Frames already announced to the client, so each is reported once. Frames
     /// come into being asynchronously (a page inserts an `<iframe>`, the engine
     /// builds it), so the tick compares this against the live set rather than
@@ -690,6 +694,8 @@ impl Conn {
                     ran_js: Arc::new(AtomicBool::new(false)),
                     pumping: Arc::new(AtomicBool::new(false)),
                     loader_id: Arc::new(std::sync::Mutex::new(String::new())),
+                    fetch_held: Arc::default(),
+                    net_ids: Arc::default(),
                     extra_sessions: Vec::new(),
                     known_frames: std::collections::HashSet::new(),
                     navigating: Arc::new(AtomicBool::new(false)),
@@ -1217,22 +1223,115 @@ impl Conn {
             "Network.enable" => {
                 let ctx = self.targets[idx].ctx.clone();
                 let mut rx = ctx.subscribe_network();
-                let (frame, sess, out, loader) = (
+                let (frame, sess, out, loader, ids) = (
                     self.targets[idx].target_id.clone(),
                     session.clone(),
                     tx.clone(),
                     self.targets[idx].loader_id.clone(),
+                    self.targets[idx].net_ids.clone(),
                 );
                 tokio::spawn(async move {
                     while let Some(rec) = rx.recv().await {
                         let loader_id = loader.lock().map(|l| l.clone()).unwrap_or_default();
-                        for m in network_events(&rec, &frame, &loader_id, &sess) {
+                        let held_id = if rec.announced {
+                            ids.lock().ok().and_then(|mut m| m.remove(&rec.request_id))
+                        } else {
+                            None
+                        };
+                        for m in network_events(&rec, &frame, &loader_id, held_id.as_deref(), &sess) {
                             if out.send(Message::Text(m.to_string())).is_err() {
                                 return;
                             }
                         }
                     }
                 });
+                vec![ok(id, session, json!({}))]
+            }
+            // Request interception (Playwright `page.route`, Puppeteer
+            // `setRequestInterception`): each request is announced, then held
+            // until the driver continues, fails or fulfills it.
+            "Fetch.enable" => {
+                let mut rx = self.targets[idx].ctx.intercept_requests();
+                let (frame, sess, out, loader, held, ids) = (
+                    self.targets[idx].target_id.clone(),
+                    session.clone(),
+                    tx.clone(),
+                    self.targets[idx].loader_id.clone(),
+                    self.targets[idx].fetch_held.clone(),
+                    self.targets[idx].net_ids.clone(),
+                );
+                tokio::spawn(async move {
+                    // A navigation's document request carries its loader's id, once.
+                    let mut loader_taken = String::new();
+                    while let Some(p) = rx.recv().await {
+                        let loader_id = loader.lock().map(|l| l.clone()).unwrap_or_default();
+                        let net_id = if p.resource_type == "Document" && !loader_id.is_empty() && loader_taken != loader_id {
+                            loader_taken.clone_from(&loader_id);
+                            loader_id.clone()
+                        } else {
+                            p.id.clone()
+                        };
+                        if let Ok(mut m) = ids.lock() {
+                            m.insert(p.id.clone(), net_id.clone());
+                        }
+                        let mut request = json!({
+                            "url": p.url, "method": p.method, "headers": p.headers,
+                            "initialPriority": "High", "referrerPolicy": "strict-origin-when-cross-origin",
+                        });
+                        if !p.body.is_empty() {
+                            request["postData"] = json!(String::from_utf8_lossy(&p.body));
+                            request["hasPostData"] = json!(true);
+                        }
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs_f64())
+                            .unwrap_or_default();
+                        let job = next_id("interception-job-");
+                        let sent = event(
+                            "Network.requestWillBeSent",
+                            &sess,
+                            json!({
+                                "requestId": net_id, "loaderId": loader_id, "documentURL": p.url,
+                                "request": request, "timestamp": now, "wallTime": now,
+                                "initiator": { "type": if p.resource_type == "Document" { "other" } else { "parser" } },
+                                "type": p.resource_type, "frameId": frame, "hasUserGesture": false,
+                            }),
+                        );
+                        let paused = event(
+                            "Fetch.requestPaused",
+                            &sess,
+                            json!({
+                                "requestId": job, "request": request, "frameId": frame,
+                                "resourceType": p.resource_type, "networkId": net_id,
+                            }),
+                        );
+                        if let Ok(mut h) = held.lock() {
+                            h.insert(job, p.reply);
+                        }
+                        if out.send(Message::Text(sent.to_string())).is_err()
+                            || out.send(Message::Text(paused.to_string())).is_err()
+                        {
+                            return;
+                        }
+                    }
+                });
+                vec![ok(id, session, json!({}))]
+            }
+            "Fetch.disable" => {
+                self.targets[idx].ctx.stop_intercepting();
+                // Dropping the held answers lets those requests go out unchanged.
+                if let Ok(mut h) = self.targets[idx].fetch_held.lock() {
+                    h.clear();
+                }
+                vec![ok(id, session, json!({}))]
+            }
+            "Fetch.continueRequest" | "Fetch.continueWithAuth" | "Fetch.failRequest" | "Fetch.fulfillRequest" => {
+                let job = params.get("requestId").and_then(|v| v.as_str()).unwrap_or_default();
+                let Some(reply) = self.targets[idx].fetch_held.lock().ok().and_then(|mut h| h.remove(job)) else {
+                    return vec![err(id, session, -32602, "Invalid InterceptionId.")];
+                };
+                let decision = fetch_decision(method, params);
+                let _ = reply.send(decision);
                 vec![ok(id, session, json!({}))]
             }
             "Page.enable"
@@ -2098,6 +2197,7 @@ fn network_events(
     rec: &nokk::NetworkRecord,
     frame_id: &str,
     loader_id: &str,
+    held_id: Option<&str>,
     session: &Option<String>,
 ) -> Vec<Value> {
     let now = std::time::SystemTime::now()
@@ -2116,12 +2216,17 @@ fn network_events(
     // and both Playwright and Puppeteer identify the navigation that way
     // (`requestId === loaderId && type === 'Document'`). Without it `page.goto()`
     // never finds its response and answers `None`.
-    let request_id = if kind == "Document" && !loader_id.is_empty() {
+    let request_id = if let Some(h) = held_id {
+        h.to_string()
+    } else if kind == "Document" && !loader_id.is_empty() {
         loader_id.to_string()
     } else {
         rec.request_id.clone()
     };
-    let mut out = vec![event(
+    let mut out = Vec::new();
+    // A held request was announced when it paused.
+    if !rec.announced {
+        out.push(event(
         "Network.requestWillBeSent",
         session,
         json!({
@@ -2143,7 +2248,8 @@ fn network_events(
             "frameId": frame_id,
             "hasUserGesture": false,
         }),
-    )];
+        ));
+    }
     // Status 0 means the request never produced a response — a blocked tracker,
     // a DNS failure, a reset. Chrome reports that as a loading failure, not as a
     // response, and a client that waits for one would otherwise wait forever.
@@ -2200,6 +2306,38 @@ fn network_events(
         }),
     ));
     out
+}
+
+/// The driver's answer to a held request. Headers come as `[{name, value}]`,
+/// bodies as base64.
+fn fetch_decision(method: &str, params: &Value) -> nokk::Decision {
+    use base64::Engine as _;
+    let b64 = |k: &str| {
+        params.get(k).and_then(|v| v.as_str()).map(|s| base64::engine::general_purpose::STANDARD.decode(s).unwrap_or_default())
+    };
+    let headers = |k: &str| {
+        params.get(k).and_then(|v| v.as_array()).map(|a| {
+            a.iter()
+                .filter_map(|h| Some((h.get("name")?.as_str()?.to_string(), h.get("value")?.as_str()?.to_string())))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        })
+    };
+    let text = |k: &str| params.get(k).and_then(|v| v.as_str()).map(str::to_string);
+    match method {
+        "Fetch.failRequest" => nokk::Decision::Fail,
+        "Fetch.fulfillRequest" => nokk::Decision::Fulfill {
+            status: params.get("responseCode").and_then(|v| v.as_u64()).unwrap_or(200) as u16,
+            headers: headers("responseHeaders").unwrap_or_default(),
+            body: b64("body").unwrap_or_default(),
+        },
+        "Fetch.continueRequest" => nokk::Decision::Continue {
+            url: text("url"),
+            method: text("method"),
+            headers: headers("headers"),
+            body: b64("postData"),
+        },
+        _ => nokk::Decision::Continue { url: None, method: None, headers: None, body: None },
+    }
 }
 
 /// A jar entry in CDP's `Network.Cookie` shape. `expires` is -1 for a session
@@ -2358,7 +2496,6 @@ fn is_configuration_noop(method: &str) -> bool {
             | "Emulation.setPageScaleFactor"
             | "Emulation.setScriptExecutionDisabled"
             | "Emulation.setTouchEmulationEnabled"
-            | "Fetch.disable"
             | "Log.clear"
             | "Log.disable"
             | "Network.disable"
@@ -2469,6 +2606,25 @@ mod tests {
     fn has_event(out: &[Value], method: &str) -> bool {
         out.iter()
             .any(|m| m.get("method").and_then(|v| v.as_str()) == Some(method))
+    }
+
+    #[test]
+    fn fetch_answers_become_decisions() {
+        let d = fetch_decision("Fetch.fulfillRequest", &json!({
+            "requestId": "j", "responseCode": 404,
+            "responseHeaders": [{ "name": "Content-Type", "value": "text/plain" }],
+            "body": "aGk=",
+        }));
+        assert!(matches!(d, nokk::Decision::Fulfill { status: 404, ref headers, ref body }
+            if headers.get("Content-Type").map(String::as_str) == Some("text/plain") && body == b"hi"));
+        let d = fetch_decision("Fetch.continueRequest", &json!({
+            "requestId": "j", "method": "POST", "postData": "eD0x",
+            "headers": [{ "name": "X-Test", "value": "1" }],
+        }));
+        assert!(matches!(d, nokk::Decision::Continue { url: None, method: Some(ref m), headers: Some(ref h), body: Some(ref b) }
+            if m == "POST" && h.len() == 1 && b == b"x=1"));
+        assert!(matches!(fetch_decision("Fetch.failRequest", &json!({ "errorReason": "Aborted" })), nokk::Decision::Fail));
+        assert!(matches!(fetch_decision("Fetch.continueWithAuth", &json!({})), nokk::Decision::Continue { headers: None, .. }));
     }
 
     #[test]

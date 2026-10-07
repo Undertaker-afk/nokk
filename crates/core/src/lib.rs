@@ -30,6 +30,10 @@ use serde_json::Value;
 pub use nokk_net::{CookieRecord, ProxyConfig, ProxyScheme, Response as HttpResponse};
 pub use nokk_pool::{PoolConfig, WorkerId};
 
+mod intercept;
+pub use intercept::{Decision, PausedRequest};
+use intercept::PageClient;
+
 /// Errors surfaced by the engine.
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -735,7 +739,7 @@ impl Engine {
             last_frame_turn: std::sync::Mutex::new(std::time::Instant::now()),
             frames_live: std::sync::atomic::AtomicBool::new(false),
             engine: self.inner.clone(),
-            client,
+            client: PageClient::new(client),
             worker,
             index: std::sync::atomic::AtomicUsize::new(index),
             base_url: std::sync::Mutex::new("about:blank".to_string()),
@@ -896,8 +900,9 @@ enum Prepared {
 pub struct BrowserContext {
     engine: Arc<EngineInner>,
     /// This context's HTTP client — its own proxy + cookie jar when created with
-    /// [`Engine::new_context_with_proxy`], else the engine default.
-    client: Client,
+    /// [`Engine::new_context_with_proxy`], else the engine default — and its
+    /// request interception.
+    client: PageClient,
     worker: WorkerId,
     /// The page's context on its isolate. A new document gets a new context
     /// (see `load_html`), so this changes with every navigation.
@@ -1105,6 +1110,9 @@ impl Drop for BrowserContext {
 pub struct NetworkRecord {
     /// Stable per-request identifier, shared by every CDP event about it.
     pub request_id: String,
+    /// Already announced while paused for interception (`Fetch`), under the
+    /// same id: the driver has seen `requestWillBeSent`.
+    pub announced: bool,
     /// Response headers, for CDP `Network.responseReceived` (empty when the
     /// request never got a response).
     pub headers: std::collections::BTreeMap<String, String>,
@@ -5038,11 +5046,10 @@ impl BrowserContext {
         // fast-local estimate: a zero-duration resource is not a resource.
         let duration_ms = measured_ms.unwrap_or(12.0);
         let started_ms = now - duration_ms;
+        let announced = self.client.hold.take_id(url);
         let rec = NetworkRecord {
-            request_id: format!(
-                "nokk-{}",
-                REQUEST_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-            ),
+            request_id: announced.clone().unwrap_or_else(next_request_id),
+            announced: announced.is_some(),
             headers,
             method: method.to_string(),
             url: url.to_string(),
@@ -5067,6 +5074,18 @@ impl BrowserContext {
         }
     }
 
+    /// Hold every request this context makes from now on until the receiver
+    /// decides (CDP `Fetch.enable`). One interceptor at a time; dropping the
+    /// receiver lets held and later requests go out unchanged.
+    pub fn intercept_requests(&self) -> tokio::sync::mpsc::UnboundedReceiver<PausedRequest> {
+        self.client.intercept()
+    }
+
+    /// Stop holding requests (CDP `Fetch.disable`).
+    pub fn stop_intercepting(&self) {
+        self.client.stop();
+    }
+
     /// Receive every request this context makes from now on, as it completes.
     /// One subscriber at a time (the attached CDP session); subscribing again
     /// replaces the previous one.
@@ -5088,6 +5107,10 @@ impl BrowserContext {
 /// Request ids are unique per process, so a client that watches several pages
 /// never sees two requests share one.
 static REQUEST_IDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+pub(crate) fn next_request_id() -> String {
+    format!("nokk-{}", REQUEST_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+}
 
 /// One round trip that empties both JS-side I/O queues. Written as an expression
 /// so a bare context (no stealth bootstrap, as in some tests) answers with empty
@@ -10016,6 +10039,79 @@ mod tests {
         }
         assert_eq!(ctx.evaluate("document.title").await.unwrap(), Value::String("async;timer;".into()));
         assert!(t.elapsed() < std::time::Duration::from_secs(8), "took {:?}", t.elapsed());
+    }
+
+    /// A driver that intercepts (Playwright `page.route`) decides every request before it
+    /// goes out: failed, answered in its place, or sent on with its own header. Each later
+    /// record carries the id the request had while held, so the driver can pair them.
+    #[tokio::test]
+    async fn an_interceptor_decides_every_request() {
+        let _serial = serial().await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut buf = [0u8; 2048];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]).to_lowercase();
+                let (ctype, body) = if req.starts_with("get /api") {
+                    ("text/plain", if req.contains("x-test: yes") { "header" } else { "plain" }.to_string())
+                } else {
+                    ("text/html", "<html><head><title></title><script src=/a.js></script></head><body>\
+                       <script>fetch('/gone').catch(() => document.title += 'failed;');\
+                       fetch('/api').then((r) => r.text()).then((t) => document.title += t + ';');</script></body></html>".to_string())
+                };
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(resp.as_bytes()).await;
+            }
+        });
+        let engine = Engine::new(EngineConfig {
+            pool: PoolConfig { workers: 1, max_live_contexts: 2, max_heap_mb: None },
+            use_real_network: true,
+            ..Default::default()
+        })
+        .expect("engine");
+        let ctx = engine.new_context().await.unwrap();
+        let mut held = ctx.intercept_requests();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        tokio::spawn(async move {
+            while let Some(p) = held.recv().await {
+                log.lock().unwrap().push((p.id.clone(), p.url.clone(), p.resource_type));
+                let d = if p.url.ends_with("/a.js") {
+                    Decision::Fulfill { status: 200, headers: Default::default(), body: b"document.title += 'fulfilled;';".to_vec() }
+                } else if p.url.ends_with("/gone") {
+                    Decision::Fail
+                } else if p.url.ends_with("/api") {
+                    let mut h = p.headers.clone();
+                    h.insert("X-Test".into(), "yes".into());
+                    Decision::Continue { url: None, method: None, headers: Some(h), body: None }
+                } else {
+                    Decision::Continue { url: None, method: None, headers: None, body: None }
+                };
+                let _ = p.reply.send(d);
+            }
+        });
+        let _ = ctx.navigate(&format!("http://127.0.0.1:{}/", addr.port())).await;
+        let t = std::time::Instant::now();
+        let want = |v: &Value| v.as_str().is_some_and(|s| s.contains("failed;") && s.contains("header;"));
+        while t.elapsed() < std::time::Duration::from_secs(8) && !want(&ctx.evaluate("document.title").await.unwrap()) {
+            let _ = ctx.run_event_loop().await;
+        }
+        let title = ctx.evaluate("document.title").await.unwrap();
+        assert!(want(&title) && title.as_str().unwrap().starts_with("fulfilled;"), "{title}");
+        let seen = seen.lock().unwrap().clone();
+        let kinds: Vec<_> = seen.iter().map(|(_, u, k)| (u.rsplit('/').next().unwrap().to_string(), *k)).collect();
+        assert!(kinds.contains(&("".into(), "Document")) && kinds.contains(&("a.js".into(), "Script")), "{kinds:?}");
+        for rec in ctx.requests() {
+            let held = seen.iter().find(|(_, u, _)| *u == rec.url).expect("every request was held");
+            assert!(rec.announced && rec.request_id == held.0, "{} {}", rec.url, rec.request_id);
+        }
+        ctx.stop_intercepting();
     }
 
     /// Two documents: one that sends itself to the other, and the other.
