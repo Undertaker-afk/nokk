@@ -4035,6 +4035,7 @@
     const compound = () => {
       const tests = [];
       const spec = [0, 0, 0];
+      const toks = [];
       let any = false;
       for (;;) {
         const c = s[i];
@@ -4053,9 +4054,9 @@
           tests.push((e) => e.localName === low || (e.__ptNS && e.__ptNS !== 'http://www.w3.org/1999/xhtml' && e.localName === n));
           continue;
         }
-        if (c === '#') { i++; const n = ident(); if (!n) fail(); spec[0]++; tests.push((e) => e.id === n); any = true; continue; }
+        if (c === '#') { i++; const n = ident(); if (!n) fail(); spec[0]++; toks.push('i' + n); tests.push((e) => e.id === n); any = true; continue; }
         if (c === '.') {
-          i++; const n = ident(); if (!n) fail(); spec[1]++;
+          i++; const n = ident(); if (!n) fail(); spec[1]++; toks.push('c' + n);
           tests.push((e) => { const set = __ptClassSet(e); return set !== null && set.has(n); });
           any = true; continue;
         }
@@ -4127,12 +4128,12 @@
       const n = tests.length;
       const test = n === 0 ? () => true : n === 1 ? tests[0]
         : (e, ctx) => { for (let k = 0; k < n; k++) if (!tests[k](e, ctx)) return false; return true; };
-      return { test, spec };
+      return { test, spec, toks };
     };
     // Complex selector; `relative` is for `:has()`, which may start with a
     // combinator.
     const complex = (relative) => {
-      const comps = [], combs = [];
+      const comps = [], combs = [], toks = [];
       const spec = [0, 0, 0];
       ws();
       let lead = null;
@@ -4140,6 +4141,7 @@
       for (;;) {
         const c = compound();
         comps.push(c.test);
+        toks.push(c.toks);
         spec[0] += c.spec[0]; spec[1] += c.spec[1]; spec[2] += c.spec[2];
         const had = ws();
         if (i >= s.length) break;
@@ -4149,7 +4151,11 @@
         if (had) { combs.push(' '); continue; }
         fail();
       }
-      return { comps, combs, spec, lead };
+      // Tokens every match needs among the subject's ancestors: compounds
+      // reached from it through descendant and child combinators only.
+      const need = [];
+      for (let k = comps.length - 2; k >= 0 && (combs[k] === ' ' || combs[k] === '>'); k--) need.push(...toks[k]);
+      return { comps, combs, spec, lead, needH: need.length ? need.map(__bloomHash) : null };
     };
     const list = (relative) => {
       const out = [];
@@ -4166,6 +4172,45 @@
   }
 
   const __parentEl = (e) => { const p = e.parentNode; return p && p.nodeType === ELEMENT_NODE ? p : null; };
+
+  // Ancestor filter, as browsers do it: a 256-bit set of the id and class
+  // tokens on an element's ancestors. A rule whose ancestor compounds need a
+  // token the set lacks cannot match and is not tested. Must agree with the
+  // matcher: ancestors by `__parentEl`, classes by `__ptClassSet`.
+  function __bloomHash(t) {
+    let x = 2166136261;
+    for (let i = 0; i < t.length; i++) { x ^= t.charCodeAt(i); x = Math.imul(x, 16777619); }
+    return x >>> 0;
+  }
+  const __BLOOM_NONE = new Int32Array(8);
+  let __passBloom = new WeakMap();
+  function __bloomAdd(b, t) { const h = __bloomHash(t); b[(h >>> 5) & 7] |= 1 << (h & 31); }
+  function __ancBloom(el) {
+    const p = __parentEl(el);
+    if (!p) return __BLOOM_NONE;
+    let b = __passBloom.get(p);
+    if (b) return b;
+    b = Int32Array.from(__ancBloom(p));
+    const id = __ptGetA(p, 'id');
+    if (id) __bloomAdd(b, 'i' + id);
+    const set = __ptClassSet(p);
+    if (set) for (const c of set) if (c) __bloomAdd(b, 'c' + c);
+    __passBloom.set(p, b);
+    return b;
+  }
+  function __bloomMayMatch(list, b) {
+    for (const cx of list) {
+      const need = cx.needH;
+      if (!need) return true;
+      let ok = true;
+      for (let k = 0; k < need.length; k++) {
+        const h = need[k];
+        if (!(b[(h >>> 5) & 7] & (1 << (h & 31)))) { ok = false; break; }
+      }
+      if (ok) return true;
+    }
+    return false;
+  }
   const __prevEl = (e) => { let p = e.previousSibling; while (p && p.nodeType !== ELEMENT_NODE) p = p.previousSibling; return p; };
   const __nextEl = (e) => { let p = e.nextSibling; while (p && p.nodeType !== ELEMENT_NODE) p = p.nextSibling; return p; };
 
@@ -7729,6 +7774,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
   function __collectHidden() {
     __rules = [];
     __styleCache = new WeakMap();
+    __passBloom = new WeakMap();
     __passFont = new WeakMap();
     __passInherit = new WeakMap();
     __passCustom = new WeakMap();
@@ -7737,21 +7783,72 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     __foreignRules = new WeakMap();
     const doc = globalThis.document;
     if (!doc || !doc.documentElement) return;
-    __gatherRules(doc.documentElement, __rules);
+    __rules = __gatherRulesCached(doc.documentElement);
     // Hiding is collected in the same pass; it is just another declaration.
+    // One walk per tree, testing only the hiding rules an element's keys and
+    // ancestors allow: the same sets as querying each rule over the tree.
+    const byRoot = new Map();
     for (const r of __rules) {
       const d = __ruleMap(r);
       if (!d) continue;
       const disp = String(d.get('display') || '').toLowerCase();
       const vis = String(d.get('visibility') || '').toLowerCase();
       if (disp !== 'none' && vis !== 'hidden' && vis !== 'collapse') continue;
-      try {
-        for (const el of query(r.root, r.sel)) {
-          __hiddenBySheet.add(el);
-          if (disp === 'none') __noneBySheet.add(el);
-        }
-      } catch (e) {}
+      let list = byRoot.get(r.root);
+      if (!list) byRoot.set(r.root, (list = []));
+      list.push({ r, none: disp === 'none' });
     }
+    for (const [root, list] of byRoot) {
+      const keyed = new Map(), any = [];
+      for (const h of list) {
+        const k = __ruleKey(h.r.sel);
+        if (k == null) { any.push(h); continue; }
+        let l = keyed.get(k);
+        if (!l) keyed.set(k, (l = []));
+        l.push(h);
+      }
+      const ctx = { scope: root };
+      const test = (e, h) => {
+        const r = h.r;
+        try {
+          if (r.__ptSel === undefined) r.__ptSel = __selCompiled(r.sel) || null;
+          if (!r.__ptSel || !__bloomMayMatch(r.__ptSel, __ancBloom(e)) || !__selAny(r.__ptSel, e, ctx)) return;
+        } catch (err) { return; }
+        __hiddenBySheet.add(e);
+        if (h.none) __noneBySheet.add(e);
+      };
+      const byKey = (e, k) => { const l = keyed.get(k); if (l) for (const h of l) test(e, h); };
+      walk(root, (e) => {
+        for (const h of any) test(e, h);
+        if (!keyed.size) return;
+        byKey(e, 't' + String(e.localName || '').toLowerCase());
+        const id = __ptGetA(e, 'id');
+        if (id) byKey(e, 'i' + id);
+        const set = __ptClassSet(e);
+        if (set) for (const c of set) if (c) byKey(e, 'c' + c);
+      });
+    }
+  }
+
+  // The rule list is rebuilt only when a stylesheet changed: every CSSOM
+  // change replaces a sheet's `cssRules`, and `@media` follows the viewport.
+  let __gatherKey = null, __gatherHit = null;
+  function __gatherRulesCached(docEl) {
+    const key = [docEl, LAYOUT.W, LAYOUT.H];
+    const scan = (node, root) => {
+      for (const n of (node.__ptKids || [])) {
+        if (n.nodeType !== ELEMENT_NODE) continue;
+        if ((n.tagName === 'STYLE' || (n.tagName === 'LINK' && n.__ptSheetText)) && n.sheet) key.push(root, n.sheet.cssRules);
+        if (n.__ptShadow) scan(n.__ptShadow, n.__ptShadow);
+        scan(n, root);
+      }
+    };
+    scan(docEl, docEl);
+    const old = __gatherKey;
+    if (old && old.length === key.length && old.every((v, i) => v === key[i])) return __gatherHit;
+    __gatherKey = key;
+    __gatherHit = __gatherRules(docEl, []);
+    return __gatherHit;
   }
 
   /// Declarations reaching the element: stylesheets by weight, then its own
@@ -7772,6 +7869,8 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
   const SVG_LENGTH_ATTRS = new Set(['font-size', 'letter-spacing', 'word-spacing',
     'stroke-width', 'stroke-dashoffset', 'baseline-shift']);
 
+  // Matching only reads the context; one object serves every test.
+  const __CASCADE_CTX = Object.freeze({ scope: null });
   function __cascadeFor(el) {
     if (!el || el.nodeType !== ELEMENT_NODE) return new Map();
     const hit = __styleCache.get(el);
@@ -7790,6 +7889,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       }
     }
     const won = [];
+    const bloom = __ancBloom(el);
     for (const r of __candidateRules(el)) {
       let ok = false;
       // A rule's selector is parsed once and cached on the rule; a shared
@@ -7797,7 +7897,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       // reparse selectors per element per layout.
       try {
         if (r.__ptSel === undefined) r.__ptSel = __selCompiled(r.sel) || null;
-        ok = !!r.__ptSel && __selAny(r.__ptSel, el, { scope: null });
+        ok = !!r.__ptSel && __bloomMayMatch(r.__ptSel, bloom) && __selAny(r.__ptSel, el, __CASCADE_CTX);
       } catch (e) {}
       if (ok) won.push(r);
     }
