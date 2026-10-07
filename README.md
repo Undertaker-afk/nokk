@@ -153,12 +153,13 @@ with nokk.launch(auto_solve=True) as server:   # or: await nokk.launch_async()
     ...  # server.ws_endpoint -> connect_over_cdp
 ```
 
-### crawl4ai and other CDP tools
+### crawl4ai, Scrapy, Playwright MCP and other CDP tools
 
 Anything that drives Chrome over CDP can drive nokk instead. crawl4ai, stopped by
 Cloudflare with its own Chromium, gets the page behind it through nokk:
-`BrowserConfig(browser_mode="custom", cdp_url=server.ws_endpoint)`. See
-[docs/integrations.md](docs/integrations.md).
+`BrowserConfig(browser_mode="custom", cdp_url=server.ws_endpoint)`. Scrapy
+(scrapy-playwright's `PLAYWRIGHT_CDP_URL`) and Playwright MCP (`--cdp-endpoint`)
+work the same way. See [docs/integrations.md](docs/integrations.md).
 
 ### For AI agents (MCP)
 
