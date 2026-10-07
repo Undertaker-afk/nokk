@@ -22,6 +22,8 @@ Also an MCP server for AI agents.
 
 <img src="docs/demo.svg" alt="curl gets 403 from a Cloudflare test page; nokk loads it, clears the challenge and prints the page behind it in about 5 seconds" width="760">
 
+<sub>scrapingcourse.com's Cloudflare test page, one run from a home connection; medians across sites are in the tables below.</sub>
+
 <sub><i>The nøkk is a shapeshifting water-spirit of Norse myth that takes on a
 familiar shape to pass unnoticed. This one takes the shape of Chrome.</i></sub>
 
@@ -84,7 +86,7 @@ rendering engine at all.
 | Screenshots, PDF, layout | no | yes |
 | CDP coverage | the common path | full |
 
-<sub>An 8-core Linux box, October 2026. Cloudflare row: 8 production sites × 3 runs
+<sub>Measured on nokk 0.1.35, an 8-core Linux box, October 2026. Cloudflare row: 8 production sites × 3 runs
 through one proxy, nokk with <code>--until-clearance</code>, Chrome driven by a
 checkbox-clicking harness; a solve counts only if the site then opens with the cookie.</sub>
 
