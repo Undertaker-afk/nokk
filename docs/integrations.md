@@ -49,7 +49,6 @@ with nokk.launch(auto_solve=True) as server:
         },
         "TWISTED_REACTOR": "twisted.internet.asyncioreactor.AsyncioSelectorReactor",
         "PLAYWRIGHT_CDP_URL": server.ws_endpoint,
-        "PLAYWRIGHT_PROCESS_REQUEST_HEADERS": None,   # the browser's headers, not Scrapy's
         "HTTPERROR_ALLOWED_CODES": [403],
     })
     process.crawl(MySpider)   # requests with meta={"playwright": True}
@@ -60,7 +59,9 @@ The status of a page behind a challenge is the challenge's 403: Playwright repor
 a navigation's first response, with Chrome too. The body is the page behind it,
 hence `HTTPERROR_ALLOWED_CODES`. The full script is
 [examples/scrapy_nokk.py](../examples/scrapy_nokk.py). nokk keeps its Chrome
-`User-Agent` and `Accept*` headers whatever a spider sets.
+`User-Agent` and `Accept*` headers whatever a spider sets, so leave
+`PLAYWRIGHT_PROCESS_REQUEST_HEADERS` at its default: setting it to `None` drops a
+POST's `Content-Type`, and servers answer 400.
 
 ## Playwright MCP
 

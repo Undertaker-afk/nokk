@@ -34,8 +34,6 @@ with nokk.launch(auto_solve=True) as server:
         },
         "TWISTED_REACTOR": "twisted.internet.asyncioreactor.AsyncioSelectorReactor",
         "PLAYWRIGHT_CDP_URL": server.ws_endpoint,
-        # Keep the browser's own request headers instead of Scrapy's.
-        "PLAYWRIGHT_PROCESS_REQUEST_HEADERS": None,
         # The navigation's first answer is the challenge's 403, as with Chrome;
         # the body Scrapy gets is the page behind it.
         "HTTPERROR_ALLOWED_CODES": [403],
