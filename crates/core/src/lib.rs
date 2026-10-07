@@ -9788,6 +9788,44 @@ mod tests {
         }
     }
 
+    /// Playwright decides an element is visible with `checkVisibility()` and clicks
+    /// after scrolling it into the window. `checkVisibility` answered nothing, so every
+    /// element was hidden (its page snapshot came back empty), and nothing scrolled, so
+    /// a click below the first screen was "outside of the viewport" forever.
+    #[tokio::test]
+    async fn elements_report_visibility_and_the_document_scrolls() {
+        let _serial = serial().await;
+        let engine = engine(1, 2);
+        let ctx = engine.new_context().await.unwrap();
+        ctx.load_html(
+            "https://example.com/",
+            r#"<html><body style="margin:0"><h1 id=h>top</h1><p id=gone style="display:none">x</p>
+               <div style="height:3000px"></div><a id=far href="/far">far</a><div style="height:3000px"></div></body></html>"#,
+        )
+        .await
+        .unwrap();
+        let out = probe(&ctx, r#"(() => {
+            const h = document.getElementById('h'), far = document.getElementById('far');
+            const before = far.getBoundingClientRect().top;
+            far.scrollIntoView({ block: 'center' });
+            const after = far.getBoundingClientRect().top;
+            const centred = Math.abs(after + far.getBoundingClientRect().height / 2 - innerHeight / 2) < 2;
+            const y = scrollY;
+            scrollTo(0, 0); scrollBy(0, 50);
+            return __ptJSON.stringify({
+              visible: h.checkVisibility(), hidden: document.getElementById('gone').checkVisibility(),
+              moved: after < before, centred, scrolled: y > 0, by: scrollY, top: document.documentElement.scrollTop,
+            });
+        })()"#).await;
+        assert_eq!(out["visible"], true, "{out}");
+        assert_eq!(out["hidden"], false, "display:none is not visible: {out}");
+        assert_eq!(out["moved"], true, "rects are relative to the window: {out}");
+        assert_eq!(out["centred"], true, "{out}");
+        assert_eq!(out["scrolled"], true, "{out}");
+        assert_eq!(out["by"], 50, "scrollBy from 0: {out}");
+        assert_eq!(out["top"], 50, "the root element reports the document's scroll: {out}");
+    }
+
     /// A binary body leaves as its bytes. `String(new Uint8Array(…))` is "1,2,3", and that
     /// is what went out: reCAPTCHA's protobuf `reload` came back "Invalid API parameter(s)"
     /// and no token was ever issued.

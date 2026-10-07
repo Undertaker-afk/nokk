@@ -1847,21 +1847,42 @@ impl Conn {
                 });
                 vec![]
             }
-            "DOM.scrollIntoViewIfNeeded" => vec![ok(id, session, json!({}))],
+            // Clients scroll an element into view before they click it.
+            "DOM.scrollIntoViewIfNeeded" => {
+                let nref = node_ref(params);
+                let (ctx, session, tx) = (self.targets[idx].ctx.clone(), session.clone(), tx.clone());
+                tokio::spawn(async move {
+                    let js = format!("(n => {{ if (n && n.scrollIntoViewIfNeeded) n.scrollIntoViewIfNeeded(true); return ''; }})({nref})");
+                    let _ = ctx.evaluate(&js).await;
+                    let _ = tx.send(Message::Text(ok(id, &session, json!({})).to_string()));
+                });
+                vec![]
+            }
+            // The page's own window and scroll position: a client checks a point is
+            // inside the window before it clicks there.
             "Page.getLayoutMetrics" => {
-                let vp =
-                    json!({ "pageX": 0, "pageY": 0, "clientWidth": 1280, "clientHeight": 720 });
-                let visual = json!({ "offsetX": 0, "offsetY": 0, "pageX": 0, "pageY": 0,
-                    "clientWidth": 1280, "clientHeight": 720, "scale": 1, "zoom": 1 });
-                let content = json!({ "x": 0, "y": 0, "width": 1280, "height": 720 });
-                vec![ok(
-                    id,
-                    session,
-                    json!({
+                let (ctx, session, tx) = (self.targets[idx].ctx.clone(), session.clone(), tx.clone());
+                tokio::spawn(async move {
+                    let js = "JSON.stringify([innerWidth, innerHeight, scrollX, scrollY, document.documentElement ? document.documentElement.scrollWidth : innerWidth, document.documentElement ? document.documentElement.scrollHeight : innerHeight])";
+                    let m: Vec<f64> = ctx
+                        .evaluate(js)
+                        .await
+                        .ok()
+                        .and_then(|v| v.as_str().and_then(|t| serde_json::from_str(t).ok()))
+                        .filter(|v: &Vec<f64>| v.len() == 6)
+                        .unwrap_or_else(|| vec![1280.0, 720.0, 0.0, 0.0, 1280.0, 720.0]);
+                    let (w, h, sx, sy, cw, ch) = (m[0], m[1], m[2], m[3], m[4], m[5]);
+                    let vp = json!({ "pageX": sx, "pageY": sy, "clientWidth": w, "clientHeight": h });
+                    let visual = json!({ "offsetX": 0, "offsetY": 0, "pageX": sx, "pageY": sy,
+                        "clientWidth": w, "clientHeight": h, "scale": 1, "zoom": 1 });
+                    let content = json!({ "x": 0, "y": 0, "width": cw.max(w), "height": ch.max(h) });
+                    let m = ok(id, &session, json!({
                         "layoutViewport": vp, "visualViewport": visual, "contentSize": content,
                         "cssLayoutViewport": vp, "cssVisualViewport": visual, "cssContentSize": content,
-                    }),
-                )]
+                    }));
+                    let _ = tx.send(Message::Text(m.to_string()));
+                });
+                vec![]
             }
             // Input domain: translate coordinate/key events into DOM events via the
             // synthetic layout's point→element hit-test (see __pt_mouse/__pt_key).

@@ -1736,6 +1736,26 @@
     // one. See __relayout / __boxOf below.
     getBoundingClientRect() { return __rectFromBox(__boxOf(this)); }
     getClientRects() { const b = __boxOf(this); if (!b) return __ptRectList([]); return __ptRectList([__rectFromBox(b)]); }
+    // Spec order: no box (display:none here or above) or content-visibility:hidden
+    // above is false; opacity and visibility only when asked. Playwright tests
+    // visibility with this first, so anything but a boolean hid every element.
+    checkVisibility(options) {
+      const o = options || {};
+      const view = globalThis.getComputedStyle;
+      if (!this.isConnected || typeof view !== 'function') return false;
+      for (let e = this; e && e.nodeType === ELEMENT_NODE; e = e.parentElement) {
+        let st; try { st = view(e); } catch (x) { st = null; }
+        if (!st) continue;
+        if (String(st.display) === 'none') return false;
+        if (e !== this && String(st.contentVisibility || st.getPropertyValue && st.getPropertyValue('content-visibility')) === 'hidden') return false;
+        if ((o.checkOpacity || o.opacityProperty) && String(st.opacity) === '0') return false;
+      }
+      if (o.checkVisibilityCSS || o.visibilityProperty) {
+        let st; try { st = view(this); } catch (x) { st = null; }
+        if (st && String(st.visibility) !== 'visible') return false;
+      }
+      return true;
+    }
     get parentElement() { const p = this.parentNode; return p && p.nodeType === ELEMENT_NODE ? p : null; }
     // Layout-metric accessors derived from the synthetic box. `documentElement`'s
     // client size is the viewport (drivers clamp click boxes to it).
@@ -1749,14 +1769,37 @@
     // overflow exceeds its visible part.
     get scrollWidth() { const b = __boxOf(this); return b ? Math.round(Math.max(this.clientWidth, b.sw)) : this.clientWidth; }
     get scrollHeight() { const b = __boxOf(this); return b ? Math.round(Math.max(this.clientHeight, b.sh)) : this.clientHeight; }
-    get scrollTop() { return 0; }
-    get scrollLeft() { return 0; }
+    // The document scrolls through its root element (`scrollingElement`); other
+    // boxes do not scroll here.
+    get scrollTop() { const d = this.ownerDocument || globalThis.document; return d && this === d.documentElement && d === globalThis.document ? __scrollPos[1] : 0; }
+    set scrollTop(v) { const d = this.ownerDocument || globalThis.document; if (d && this === d.documentElement && d === globalThis.document) __scrollWindowTo(__scrollPos[0], v); }
+    get scrollLeft() { const d = this.ownerDocument || globalThis.document; return d && this === d.documentElement && d === globalThis.document ? __scrollPos[0] : 0; }
+    set scrollLeft(v) { const d = this.ownerDocument || globalThis.document; if (d && this === d.documentElement && d === globalThis.document) __scrollWindowTo(v, __scrollPos[1]); }
     get offsetWidth() { const b = __boxOf(this); return b ? Math.round(b.w) : 0; }
     get offsetHeight() { const b = __boxOf(this); return b ? Math.round(b.h) : 0; }
     get offsetTop() { const b = __boxOf(this); return b ? b.y : 0; }
     get offsetLeft() { const b = __boxOf(this); return b ? b.x : 0; }
     get offsetParent() { return __boxOf(this) ? this.parentElement : null; }
-    scrollIntoView() {} scrollIntoViewIfNeeded() {}
+    // Bring the element into the window by scrolling the document: `block` start,
+    // center, end or nearest (`false` is end), as Chrome aligns it.
+    scrollIntoView(arg) {
+      const b = __boxOf(this);
+      if (!b) return;
+      const block = arg === false ? 'end' : (arg && typeof arg === 'object' && arg.block) || 'start';
+      const vh = globalThis.innerHeight || LAYOUT.H, top = b.y, bottom = b.y + b.h, sy = __scrollPos[1];
+      const y = block === 'center' ? top + b.h / 2 - vh / 2
+        : block === 'end' ? bottom - vh
+        : block === 'nearest' ? (top < sy ? top : bottom > sy + vh ? bottom - vh : sy)
+        : top;
+      __scrollWindowTo(__scrollPos[0], y);
+    }
+    scrollIntoViewIfNeeded(center) {
+      const b = __boxOf(this);
+      if (!b) return;
+      const vh = globalThis.innerHeight || LAYOUT.H, sy = __scrollPos[1];
+      if (b.y >= sy && b.y + b.h <= sy + vh) return;
+      this.scrollIntoView({ block: center === false ? 'nearest' : 'center' });
+    }
     focus() {
       const doc = this.ownerDocument || globalThis.document;
       if (!doc || doc.activeElement === this) return;
@@ -10163,13 +10206,51 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
     }
   }
 
+  // The window's scroll offset. Boxes are laid out in document coordinates; what
+  // a page reads (rects, quads, hit tests) is relative to the window.
+  const __scrollPos = [0, 0];
+  function __scrollWindowTo(x, y) {
+    const doc = globalThis.document, de = doc && doc.documentElement;
+    const vw = globalThis.innerWidth || LAYOUT.W, vh = globalThis.innerHeight || LAYOUT.H;
+    const maxX = Math.max(0, (de ? de.scrollWidth : 0) - vw), maxY = Math.max(0, (de ? de.scrollHeight : 0) - vh);
+    const nx = Math.min(maxX, Math.max(0, Math.round(+x || 0))), ny = Math.min(maxY, Math.max(0, Math.round(+y || 0)));
+    if (nx === __scrollPos[0] && ny === __scrollPos[1]) return;
+    __scrollPos[0] = nx; __scrollPos[1] = ny;
+    for (const [k, v] of [['scrollX', nx], ['pageXOffset', nx], ['scrollY', ny], ['pageYOffset', ny]]) {
+      try { const d = Object.getOwnPropertyDescriptor(globalThis, k); if (d && 'value' in d) Object.defineProperty(globalThis, k, Object.assign({}, d, { value: v })); } catch (e) {}
+    }
+    // `scroll` fires on the document after the move and bubbles to the window.
+    setTimeout(() => { try { doc.dispatchEvent(__ptTrust(new Event('scroll', { bubbles: true }))); } catch (e) {} }, 0);
+  }
+  globalThis.__pt_scrollWindowTo = __scrollWindowTo;
+  // window.scrollTo / scroll / scrollBy, made like the shape stubs they replace
+  // (a method without a prototype, native-looking, length 0) and kept on the
+  // window with the same property attributes.
+  const __scrollArgs = (a, base) => {
+    if (a.length && a[0] && typeof a[0] === 'object') {
+      const o = a[0];
+      return [o.left !== undefined ? +o.left + base[0] : (base === __scrollZero ? __scrollPos[0] : base[0]),
+              o.top !== undefined ? +o.top + base[1] : (base === __scrollZero ? __scrollPos[1] : base[1])];
+    }
+    return [(+a[0] || 0) + base[0], (+a[1] || 0) + base[1]];
+  };
+  const __scrollZero = [0, 0];
+  for (const [name, rel] of [['scrollTo', false], ['scroll', false], ['scrollBy', true]]) {
+    const f = ({ [name](...a) { const [x, y] = __scrollArgs(a, rel ? __scrollPos.slice() : __scrollZero); __scrollWindowTo(x, y); } })[name];
+    try {
+      const d = Object.getOwnPropertyDescriptor(globalThis, name) || { writable: true, enumerable: true, configurable: true };
+      Object.defineProperty(globalThis, name, { value: globalThis.__pt_native ? __pt_native(f) : f,
+        writable: d.writable !== false, enumerable: d.enumerable !== false, configurable: d.configurable !== false });
+    } catch (e) {}
+  }
   function __rectFromBox(b) {
-    return b ? new DOMRect(b.x, b.y, b.w, b.h) : new DOMRect(0, 0, 0, 0);
+    return b ? new DOMRect(b.x - __scrollPos[0], b.y - __scrollPos[1], b.w, b.h) : new DOMRect(0, 0, 0, 0);
   }
 
   function __elementFromPoint(x, y) {
     __relayout();
     if (x == null || y == null || x < 0 || y < 0) return null;
+    x += __scrollPos[0]; y += __scrollPos[1];
     // The deepest, latest element whose box covers the point.
     for (let i = __boxes.length - 1; i >= 0; i--) {
       const el = __boxes[i], b = el.__ptBox;
@@ -10190,7 +10271,10 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
     return null;
   }
 
-  const __quad = (b) => [b.x, b.y, b.x + b.w, b.y, b.x + b.w, b.y + b.h, b.x, b.y + b.h];
+  const __quad = (b) => {
+    const x = b.x - __scrollPos[0], y = b.y - __scrollPos[1];
+    return [x, y, x + b.w, y, x + b.w, y + b.h, x, y + b.h];
+  };
 
   // Visible text of an element: skip hidden subtrees, gather text nodes, collapse
   // runs of whitespace. Not a full innerText (no per-block newlines) but enough
