@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::{Mutex, Once};
+use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
 
 use crate::WorkerId;
@@ -1036,10 +1036,16 @@ impl Isolate {
                 *n += 1;
             }
         }
-        watchdog.disarm();
+        let stopped = watchdog.disarm();
         self.isolate.cancel_terminate_execution();
         if self.took_oom() {
             return Err("JavaScript heap out of memory (isolate cap reached)".to_string());
+        }
+        // A callback that ran past the limit is stopped, not the page: Chrome
+        // lets a slow script finish, and failing the turn failed the whole load.
+        if stopped && result.is_err() {
+            tracing::warn!(limit_ms = Self::eval_timeout().as_millis() as u64, "a page timer ran too long and was stopped");
+            return Ok(1);
         }
         result
     }
@@ -1173,12 +1179,15 @@ impl Isolate {
 struct TerminateWatchdog {
     done_tx: Option<mpsc::Sender<()>>,
     handle: Option<std::thread::JoinHandle<()>>,
+    fired: Arc<AtomicBool>,
 }
 
 impl TerminateWatchdog {
     fn arm(isolate: &mut v8::OwnedIsolate) -> Self {
         let tsh = isolate.thread_safe_handle();
         let (done_tx, done_rx) = mpsc::channel::<()>();
+        let fired = Arc::new(AtomicBool::new(false));
+        let flag = fired.clone();
         let handle = std::thread::Builder::new()
             .name("eval-watchdog".into())
             .spawn(move || {
@@ -1187,6 +1196,7 @@ impl TerminateWatchdog {
                 if let Err(RecvTimeoutError::Timeout) =
                     done_rx.recv_timeout(Isolate::eval_timeout())
                 {
+                    flag.store(true, Ordering::SeqCst);
                     tsh.terminate_execution();
                 }
             });
@@ -1194,12 +1204,14 @@ impl TerminateWatchdog {
             Ok(handle) => Self {
                 done_tx: Some(done_tx),
                 handle: Some(handle),
+                fired,
             },
             Err(e) => {
                 tracing::warn!(error = %e, "could not spawn eval watchdog; running without timeout guard");
                 Self {
                     done_tx: None,
                     handle: None,
+                    fired,
                 }
             }
         }
@@ -1207,13 +1219,15 @@ impl TerminateWatchdog {
 
     /// Wake the watchdog and join it, so no pending termination can leak into the
     /// next script run on this isolate.
-    fn disarm(mut self) {
+    /// Returns whether the watchdog stopped the script.
+    fn disarm(mut self) -> bool {
         if let Some(tx) = self.done_tx.take() {
             let _ = tx.send(());
         }
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
+        self.fired.load(Ordering::SeqCst)
     }
 }
 

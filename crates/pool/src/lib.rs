@@ -619,8 +619,11 @@ mod tests {
         assert_eq!(count, 2, "two live contexts remain");
     }
 
+    /// A callback that never returns is stopped by the watchdog, and the page goes
+    /// on: the next timer still runs. Failing the turn failed whole navigations
+    /// on a store page whose layout-heavy timer outran the limit (inno.be).
     #[tokio::test]
-    async fn runaway_timer_callback_is_terminated_not_hung() {
+    async fn runaway_timer_callback_is_stopped_and_the_page_goes_on() {
         let _serial = serial().await;
         // A short eval timeout so the watchdog fires quickly in the test.
         std::env::set_var("NOKK_EVAL_TIMEOUT_MS", "300");
@@ -629,9 +632,10 @@ mod tests {
         let idx = pool
             .dispatch(worker, |iso| {
                 // Minimal timer machinery: a queue with one callback that loops
-                // forever, driven by `__pt_runNextTimer` like the real runtime.
+                // forever, then one that marks it ran, driven by
+                // `__pt_runNextTimer` like the real runtime.
                 iso.create_context(
-                    "var __q = [() => { while (true) {} }]; \
+                    "var __q = [() => { while (true) {} }, () => { globalThis.__after = 1; }]; \
                      globalThis.__pt_runNextTimer = () => { \
                        const f = __q.shift(); if (!f) return false; f(); return true; };",
                 )
@@ -649,7 +653,15 @@ mod tests {
             .await
             .expect("worker hung: run_event_loop was not terminated")
             .unwrap();
-        assert!(out.is_err(), "runaway callback should surface as an error");
+        assert!(out.is_ok(), "a stopped callback must not fail the turn: {out:?}");
+        let after = pool
+            .dispatch(worker, move |iso| {
+                let _ = iso.run_event_loop(idx, 100, std::time::Duration::from_secs(1));
+                iso.eval(idx, "String(globalThis.__after)")
+            })
+            .await
+            .unwrap();
+        assert_eq!(after.as_deref(), Ok("1"), "the next timer ran");
         std::env::remove_var("NOKK_EVAL_TIMEOUT_MS");
     }
 }

@@ -677,6 +677,21 @@ fn fast_timers() -> bool {
 /// [`bootstrap_script`]. Kept as a raw string so the JS reads naturally without
 /// brace-escaping.
 const ENVIRONMENT_TEMPLATE: &str = r#"(() => {
+  // String methods taken before any page script. A page may replace them
+  // (Klarna replaces `trim`); the engine must not call the page's copies.
+  // Other receivers keep their own method, errors included.
+  const __sm = (f, m) => {
+    const call = Function.prototype.call.bind(f);
+    return function (s, a, b) {
+      const n = arguments.length;
+      if (typeof s === 'string') return n === 1 ? call(s) : n === 2 ? call(s, a) : call(s, a, b);
+      return n === 1 ? s[m]() : n === 2 ? s[m](a) : s[m](a, b);
+    };
+  };
+  const __s_slice = __sm(String.prototype.slice, 'slice'),
+    __s_indexOf = __sm(String.prototype.indexOf, 'indexOf'),
+    __s_replace = __sm(String.prototype.replace, 'replace'),
+    __s_split = __sm(String.prototype.split, 'split');
   // Interface object shape. A sloppy function has own `arguments` and `caller`,
   // which browser interfaces lack (two extra names per interface in a graph
   // walk). A strict function has exactly `length, name, prototype` and, unlike
@@ -808,7 +823,7 @@ const ENVIRONMENT_TEMPLATE: &str = r#"(() => {
     // Top stack frames tell who navigated the page; sent with the request for
     // debugging unexpected reloads.
     let via = '';
-    try { via = String(new Error().stack || '').split('\n').slice(1, 4).join(' | ').slice(0, 300); } catch (e) {}
+    try { via = __s_slice(__s_slice(__s_split(String(new Error().stack || ''), '\n'), 1, 4).join(' | '), 0, 300); } catch (e) {}
     const op = { url: abs, replace: !!replace, via };
     if (post) { op.method = 'POST'; op.body = String(post.body); op.contentType = String(post.contentType); }
     navQueue.push(op);
@@ -861,7 +876,7 @@ const ENVIRONMENT_TEMPLATE: &str = r#"(() => {
     if (s === 'auto' || s === 'manual') hist.scrollRestoration = s;
   });
   accessor(HistoryProto, 'state', () => hist.state);
-  const stripHash = (u) => { const i = u.indexOf('#'); return i < 0 ? u : u.slice(0, i); };
+  const stripHash = (u) => { const i = __s_indexOf(u, '#'); return i < 0 ? u : __s_slice(u, 0, i); };
   const canChangeTo = (u) => {
     const doc = locState.href;
     const docUrl = (() => { try { return new URL(doc); } catch (e) { return null; } })();
@@ -876,7 +891,7 @@ const ENVIRONMENT_TEMPLATE: &str = r#"(() => {
     const data = args[0], url = args[2];
     let state;
     try { state = globalThis.structuredClone(data); } catch (e) {
-      const why = String(e && e.message || '').replace(/^Failed to execute 'structuredClone' on 'Window': /, '');
+      const why = __s_replace(String(e && e.message || ''), /^Failed to execute 'structuredClone' on 'Window': /, '');
       const err = __pt_mkErr(globalThis.DOMException || Error, "Failed to execute '" + method + "' on 'History': " + why, 'DataCloneError');
       throw err;
     }
@@ -932,11 +947,11 @@ const ENVIRONMENT_TEMPLATE: &str = r#"(() => {
         if (Array.isArray(v)) return 'Array(' + v.length + ')';
         if (tag !== '[object Object]') return tag;
         const parts = [];
-        for (const k of Object.keys(v).slice(0, 12)) {
+        for (const k of __s_slice(Object.keys(v), 0, 12)) {
           const d = Object.getOwnPropertyDescriptor(v, k);
           if (!d || !('value' in d)) { parts.push(k + ': (...)'); continue; }
           const x = d.value;
-          parts.push(k + ': ' + (typeof x === 'string' ? JSON.stringify(x).slice(0, 60) : typeof x === 'object' && x !== null ? Object.prototype.toString.call(x) : typeof x === 'function' ? 'ƒ' : String(x)));
+          parts.push(k + ': ' + (typeof x === 'string' ? __s_slice(JSON.stringify(x), 0, 60) : typeof x === 'object' && x !== null ? Object.prototype.toString.call(x) : typeof x === 'function' ? 'ƒ' : String(x)));
         }
         return '{' + parts.join(', ') + '}';
       }
@@ -958,7 +973,7 @@ const ENVIRONMENT_TEMPLATE: &str = r#"(() => {
     if (args.length < idx + 2 || typeof args[idx] !== 'string') return;
     const s = args[idx]; let off = 0, ai = idx + 1;
     while (ai < args.length) {
-      const p = s.indexOf('%', off);
+      const p = __s_indexOf(s, '%', off);
       if (p < 0 || p === s.length - 1) break;
       const c = s[p + 1], cur = args[ai];
       if (c === 'd' || c === 'i') args[ai] = typeof cur === 'symbol' ? NaN : parseInt(cur, 10);
@@ -1024,7 +1039,7 @@ const ENVIRONMENT_TEMPLATE: &str = r#"(() => {
       if (!SPOKEN[name] || said.length > 256) return undefined;
       const parts = [];
       for (let i = 0; i < args.length && i < 8; i++) parts.push(typeof texts[i] === 'string' ? texts[i] : show(args[i]));
-      said.push([name, parts.join(' ').slice(0, 600)]);
+      said.push([name, __s_slice(parts.join(' '), 0, 600)]);
       return undefined;
     } }[name];
   }
@@ -1037,9 +1052,24 @@ const ENVIRONMENT_TEMPLATE: &str = r#"(() => {
 /// every locale-aware entry point with a non-ICU JS implementation that returns
 /// values pinned to the profile. `__TZ__`/`__LANG0__` are substituted at build.
 const INTL_SHIM_TEMPLATE: &str = r#"(() => {
+  // String methods taken before any page script. A page may replace them
+  // (Klarna replaces `trim`); the engine must not call the page's copies.
+  // Other receivers keep their own method, errors included.
+  const __sm = (f, m) => {
+    const call = Function.prototype.call.bind(f);
+    return function (s, a, b) {
+      const n = arguments.length;
+      if (typeof s === 'string') return n === 1 ? call(s) : n === 2 ? call(s, a) : call(s, a, b);
+      return n === 1 ? s[m]() : n === 2 ? s[m](a) : s[m](a, b);
+    };
+  };
+  const __s_toUpperCase = __sm(String.prototype.toUpperCase, 'toUpperCase'),
+    __s_slice = __sm(String.prototype.slice, 'slice'),
+    __s_toLowerCase = __sm(String.prototype.toLowerCase, 'toLowerCase'),
+    __s_split = __sm(String.prototype.split, 'split');
   const TZ = __TZ__, LOCALE = __LANG0__;
   const norm = (l) => Array.isArray(l) ? (l[0] || LOCALE) : (l || LOCALE);
-  const list = (l) => Array.isArray(l) ? l.slice() : (l == null ? [] : [l]);
+  const list = (l) => Array.isArray(l) ? __s_slice(l) : (l == null ? [] : [l]);
 
   function DateTimeFormat(locale, opts) {
     opts = opts || {};
@@ -1098,14 +1128,14 @@ const INTL_SHIM_TEMPLATE: &str = r#"(() => {
 
   function Locale(tag, options) {
     if (!(this instanceof Locale)) throw __pt_mkErr(TypeError, "Constructor Intl.Locale requires 'new'");
-    const parts = String(norm(tag) || 'en-US').split('-');
+    const parts = __s_split(String(norm(tag) || 'en-US'), '-');
     const opts = options || {};
     const script = parts.find((p) => p.length === 4 && /^[A-Za-z]+$/.test(p));
-    const region = parts.slice(1).find((p) => /^([A-Za-z]{2}|\d{3})$/.test(p));
+    const region = __s_slice(parts, 1).find((p) => /^([A-Za-z]{2}|\d{3})$/.test(p));
     const set = (k, v) => Object.defineProperty(this, k, { value: v, enumerable: true, configurable: true });
-    set('language', opts.language || parts[0].toLowerCase());
-    set('script', opts.script || (script ? script[0].toUpperCase() + script.slice(1).toLowerCase() : undefined));
-    set('region', opts.region || (region ? region.toUpperCase() : undefined));
+    set('language', opts.language || __s_toLowerCase(parts[0]));
+    set('script', opts.script || (script ? __s_toUpperCase(script[0]) + __s_toLowerCase(__s_slice(script, 1)) : undefined));
+    set('region', opts.region || (region ? __s_toUpperCase(region) : undefined));
     for (const k of ['calendar', 'caseFirst', 'collation', 'hourCycle', 'numeric', 'numberingSystem']) {
       set(k, opts[k]);
     }
@@ -1114,7 +1144,7 @@ const INTL_SHIM_TEMPLATE: &str = r#"(() => {
   Locale.prototype = {
     toString() { return this.baseName; },
     maximize() {
-      const [script, region] = LIKELY[this.language] || ['Latn', (this.language || 'en').toUpperCase()];
+      const [script, region] = LIKELY[this.language] || ['Latn', __s_toUpperCase(this.language || 'en')];
       return new Locale([this.language, this.script || script, this.region || region].join('-'));
     },
     minimize() { return new Locale(this.language); },
@@ -1265,6 +1295,19 @@ fn identity_seed(profile: &StealthProfile) -> u32 {
 /// hung, forever. `NOKK_FAST_TIMERS` brings the old behaviour back for bulk
 /// scraping, where nothing is watching the clock.
 const TIMERS_TEMPLATE: &str = r#"(() => {
+  // String methods taken before any page script. A page may replace them
+  // (Klarna replaces `trim`); the engine must not call the page's copies.
+  // Other receivers keep their own method, errors included.
+  const __sm = (f, m) => {
+    const call = Function.prototype.call.bind(f);
+    return function (s, a, b) {
+      const n = arguments.length;
+      if (typeof s === 'string') return n === 1 ? call(s) : n === 2 ? call(s, a) : call(s, a, b);
+      return n === 1 ? s[m]() : n === 2 ? s[m](a) : s[m](a, b);
+    };
+  };
+  const __s_indexOf = __sm(String.prototype.indexOf, 'indexOf'),
+    __s_slice = __sm(String.prototype.slice, 'slice');
   const FAST = __FAST_TIMERS__;
   let seq = 1;
   let virt = 0; // fast mode only: the clock that jumps to each due time
@@ -1401,12 +1444,12 @@ const TIMERS_TEMPLATE: &str = r#"(() => {
   // driver of their own: their queues are pumped from here. Detached frames
   // drop out of the list.
   const children = [];
-  Object.defineProperty(globalThis, '__pt_addChildRealm', { value: (w) => { if (w && children.indexOf(w) < 0) children.push(w); }, configurable: true, enumerable: false });
+  Object.defineProperty(globalThis, '__pt_addChildRealm', { value: (w) => { if (w && __s_indexOf(children, w) < 0) children.push(w); }, configurable: true, enumerable: false });
   // Diagnostics: every realm this window created, including detached ones.
   const everyChild = [];
-  Object.defineProperty(globalThis, '__pt_childRealms', { value: () => everyChild.slice(), configurable: true, enumerable: false });
+  Object.defineProperty(globalThis, '__pt_childRealms', { value: () => __s_slice(everyChild), configurable: true, enumerable: false });
   const addEvery = globalThis.__pt_addChildRealm;
-  Object.defineProperty(globalThis, '__pt_addChildRealm', { value: (w) => { if (w && everyChild.indexOf(w) < 0) everyChild.push(w); addEvery(w); }, configurable: true, enumerable: false });
+  Object.defineProperty(globalThis, '__pt_addChildRealm', { value: (w) => { if (w && __s_indexOf(everyChild, w) < 0) everyChild.push(w); addEvery(w); }, configurable: true, enumerable: false });
   const liveChildren = () => {
     for (let i = children.length - 1; i >= 0; i--) {
       let ok = false;
@@ -1508,6 +1551,19 @@ pub fn probe_tracer_script() -> String {
 }
 
 const TRACER_TEMPLATE: &str = r##"(() => {
+  // String methods taken before any page script. A page may replace them
+  // (Klarna replaces `trim`); the engine must not call the page's copies.
+  // Other receivers keep their own method, errors included.
+  const __sm = (f, m) => {
+    const call = Function.prototype.call.bind(f);
+    return function (s, a, b) {
+      const n = arguments.length;
+      if (typeof s === 'string') return n === 1 ? call(s) : n === 2 ? call(s, a) : call(s, a, b);
+      return n === 1 ? s[m]() : n === 2 ? s[m](a) : s[m](a, b);
+    };
+  };
+  const __s_lastIndexOf = __sm(String.prototype.lastIndexOf, 'lastIndexOf'),
+    __s_slice = __sm(String.prototype.slice, 'slice');
   // Head ring cap; NOKK_TRACE_CAP raises it for long stalls.
   const HEAD_CAP = __HEAD_CAP__;
   const log = new Map();
@@ -1521,7 +1577,7 @@ const TRACER_TEMPLATE: &str = r##"(() => {
         return tag;
       }
       const s = String(v);
-      return s.length > 90 ? s.slice(0, 90) + '…' : s;
+      return s.length > 90 ? __s_slice(s, 0, 90) + '…' : s;
     } catch (e) { return '<threw>'; }
   };
   // Counters say what the page asked, not where it stopped: hence the tail,
@@ -1544,15 +1600,15 @@ const TRACER_TEMPLATE: &str = r##"(() => {
   globalThis.__pt_probeLog = () => __ptJSON.stringify([...log]
     .sort((a, b) => b[1].n - a[1].n)
     .map(([k, v]) => [k, v.n, v.last]));
-  globalThis.__pt_probeTail = (n) => __ptJSON.stringify(tail.slice(-(n || 60)));
+  globalThis.__pt_probeTail = (n) => __ptJSON.stringify(__s_slice(tail, -(n || 60)));
   // Marker in the trace, to find where a foreign program's segment begins and ends.
   globalThis.__pt_probeMark = (text) => {
     note('== ' + text, '');
     // Snapshot of the tail at the marker: the head ring has overflowed by now,
     // and what matters is what was read just before the event.
-    try { globalThis.__pt_atMark = __ptJSON.stringify(tail.slice(-400)); } catch (e) {}
+    try { globalThis.__pt_atMark = __ptJSON.stringify(__s_slice(tail, -400)); } catch (e) {}
   };
-  globalThis.__pt_probeHead = (n) => __ptJSON.stringify(head.slice(0, n || 40000));
+  globalThis.__pt_probeHead = (n) => __ptJSON.stringify(__s_slice(head, 0, n || 40000));
   globalThis.__pt_probeT0 = () => t0;
 
   const native = globalThis.__pt_native || ((f) => f);
@@ -1571,7 +1627,7 @@ const TRACER_TEMPLATE: &str = r##"(() => {
   const trace = (obj, prefix) => {
     if (!obj) return;
     for (const key of Object.getOwnPropertyNames(obj)) {
-      if (key === 'constructor' || key.lastIndexOf('__pt', 0) === 0) continue;
+      if (key === 'constructor' || __s_lastIndexOf(key, '__pt', 0) === 0) continue;
       if (key === 'eval' || key === 'Function' || key === 'Object' || key === 'Reflect') continue;
       let d;
       try { d = Object.getOwnPropertyDescriptor(obj, key); } catch (e) { continue; }
@@ -1596,11 +1652,11 @@ const TRACER_TEMPLATE: &str = r##"(() => {
               let out;
               try { out = fn.apply(this, args); }
               catch (e) {
-                note('THROW ' + prefix + key + '(' + args.map(show).join(',').slice(0, 30) + ')',
+                note('THROW ' + prefix + key + '(' + __s_slice(args.map(show).join(','), 0, 30) + ')',
                      String((e && e.message) || e));
                 throw e;
               }
-              return note(prefix + key + '(' + args.map(show).join(',').slice(0, 40) + ')', out);
+              return note(prefix + key + '(' + __s_slice(args.map(show).join(','), 0, 40) + ')', out);
             }, key),
           }));
         } catch (e) {}
@@ -1614,7 +1670,7 @@ const TRACER_TEMPLATE: &str = r##"(() => {
     try {
       if (o === globalThis) return 'window';
       if (o === null || o === undefined) return String(o);
-      const tag = Object.prototype.toString.call(o).slice(8, -1);
+      const tag = __s_slice(Object.prototype.toString.call(o), 8, -1);
       if (tag !== 'Object') return tag;
       const c = o.constructor && o.constructor.name;
       return c && c !== 'Object' ? c + '.prototype?' : 'Object';
@@ -1662,16 +1718,16 @@ const TRACER_TEMPLATE: &str = r##"(() => {
     if (typeof X === 'function') {
       const open_ = X.prototype.open, send_ = X.prototype.send;
       X.prototype.open = rename(function (m, u) {
-        note('xhr.open(' + String(m) + ' ' + String(u).slice(-48) + ')', 'opened');
+        note('xhr.open(' + String(m) + ' ' + __s_slice(String(u), -48) + ')', 'opened');
         try {
           this.addEventListener('readystatechange', () => {
             if (this.readyState !== 4) return;
             let n = -1;
             try { n = String(this.responseText || '').length; } catch (e) {}
-            note('xhr.done(' + String(u).slice(-48) + ')', this.status + ', ' + n + ' bytes');
+            note('xhr.done(' + __s_slice(String(u), -48) + ')', this.status + ', ' + n + ' bytes');
           });
-          this.addEventListener('timeout', () => note('xhr.timeout(' + String(u).slice(-48) + ')', 'timed out'));
-          this.addEventListener('error', () => note('xhr.error(' + String(u).slice(-48) + ')', 'error'));
+          this.addEventListener('timeout', () => note('xhr.timeout(' + __s_slice(String(u), -48) + ')', 'timed out'));
+          this.addEventListener('error', () => note('xhr.error(' + __s_slice(String(u), -48) + ')', 'error'));
         } catch (e) {}
         return open_.apply(this, arguments);
       }, 'open');
@@ -1685,11 +1741,11 @@ const TRACER_TEMPLATE: &str = r##"(() => {
   try {
     globalThis.Function = new Proxy(origFunction, {
       construct(t, args) {
-        note('new Function(' + String(args[args.length - 1] || '').slice(0, 50) + ')', 'compiled');
+        note('new Function(' + __s_slice(String(args[args.length - 1] || ''), 0, 50) + ')', 'compiled');
         return Reflect.construct(t, args);
       },
       apply(t, self, args) {
-        note('Function(' + String(args[args.length - 1] || '').slice(0, 50) + ')', 'compiled');
+        note('Function(' + __s_slice(String(args[args.length - 1] || ''), 0, 50) + ')', 'compiled');
         return Reflect.apply(t, self, args);
       },
     });
@@ -1699,7 +1755,7 @@ const TRACER_TEMPLATE: &str = r##"(() => {
   const traceData = (obj, prefix) => {
     if (!obj) return;
     for (const key of Object.getOwnPropertyNames(obj)) {
-      if (key.lastIndexOf('__pt', 0) === 0) continue;
+      if (__s_lastIndexOf(key, '__pt', 0) === 0) continue;
       let d;
       try { d = Object.getOwnPropertyDescriptor(obj, key); } catch (e) { continue; }
       if (!d || !d.configurable || d.get || typeof d.value === 'function') continue;
@@ -1796,6 +1852,22 @@ const PROTO_SHAPE: &str = include_str!("proto_shape.json");
 
 const PROTO_SHAPE_TEMPLATE: &str = r#"(() => {
   'use strict';
+  // String methods taken before any page script. A page may replace them
+  // (Klarna replaces `trim`); the engine must not call the page's copies.
+  // Other receivers keep their own method, errors included.
+  const __sm = (f, m) => {
+    const call = Function.prototype.call.bind(f);
+    return function (s, a, b) {
+      const n = arguments.length;
+      if (typeof s === 'string') return n === 1 ? call(s) : n === 2 ? call(s, a) : call(s, a, b);
+      return n === 1 ? s[m]() : n === 2 ? s[m](a) : s[m](a, b);
+    };
+  };
+  const __s_slice = __sm(String.prototype.slice, 'slice'),
+    __s_indexOf = __sm(String.prototype.indexOf, 'indexOf'),
+    __s_trim = __sm(String.prototype.trim, 'trim'),
+    __s_replace = __sm(String.prototype.replace, 'replace'),
+    __s_split = __sm(String.prototype.split, 'split');
   const T0 = __SHAPE__;
   const SKIP = __SHAPE_SKIP__;
   const T = {};
@@ -1825,13 +1897,13 @@ const PROTO_SHAPE_TEMPLATE: &str = r#"(() => {
     }, name);
     const get = mark(pair.get);
     const write = pair.set;
-    let set = kind.indexOf('s') >= 0 ? mark(write) : undefined;
+    let set = __s_indexOf(kind, 's') >= 0 ? mark(write) : undefined;
     // Read-only from outside, but the engine writes via `__pt_write`.
     if (!set && writers) { let w = writers.get(P); if (!w) { w = Object.create(null); writers.set(P, w); } w[name] = write; }
     // Under tracing a read-only write is logged with its call site and goes
     // through: this finds every place the engine bypasses `__pt_write`.
     if (!set && TRACE) set = function (v) {
-      try { console.error('[brand] write to read-only ' + name + ' on ' + Object.prototype.toString.call(this) + ' | ' + String(new Error().stack || '').split('\n').slice(2, 6).map((x) => x.trim().replace(/https?:\/\/[^ )]*\//, '')).join(' < ')); } catch (e) {}
+      try { console.error('[brand] write to read-only ' + name + ' on ' + Object.prototype.toString.call(this) + ' | ' + __s_slice(__s_split(String(new Error().stack || ''), '\n'), 2, 6).map((x) => __s_replace(__s_trim(x), /https?:\/\/[^ )]*\//, '')).join(' < ')); } catch (e) {}
       write.call(this, v);
     };
     return { get, set };
@@ -1871,7 +1943,7 @@ const PROTO_SHAPE_TEMPLATE: &str = r#"(() => {
   for (const name of Object.keys(T)) {
     const P = protoOf(name); if (!P || typeof P !== 'object') continue;
     for (const k of Object.getOwnPropertyNames(P)) {
-      if (has[name][k] || k.slice(0, 4) === '__pt') continue;
+      if (has[name][k] || __s_slice(k, 0, 4) === '__pt') continue;
       const up = chromeOwnerUp(name, k);
       if (!up) continue;
       const A = protoOf(up);
@@ -1891,11 +1963,11 @@ const PROTO_SHAPE_TEMPLATE: &str = r#"(() => {
         if (inh) d = Object.assign({}, inh);
         else if (kind[0] === 'a') d = stubAccessor(P, k, kind);
         else if (kind[1] === 'f') d = { value: stubMethod(k, r[2]), writable: true };
-        else d = { value: r[2], writable: kind.indexOf('w') >= 0 };
+        else d = { value: r[2], writable: __s_indexOf(kind, 'w') >= 0 };
       }
-      d.enumerable = kind.indexOf('e') >= 0;
-      d.configurable = kind.indexOf('c') >= 0;
-      if (!('get' in d) && !('set' in d) && kind[0] === 'v') d.writable = kind.indexOf('w') >= 0;
+      d.enumerable = __s_indexOf(kind, 'e') >= 0;
+      d.configurable = __s_indexOf(kind, 'c') >= 0;
+      if (!('get' in d) && !('set' in d) && kind[0] === 'v') d.writable = __s_indexOf(kind, 'w') >= 0;
       built.push([k, d]);
     }
     // Remove everything configurable and re-add in order. Extras (about forty
@@ -1903,7 +1975,7 @@ const PROTO_SHAPE_TEMPLATE: &str = r#"(() => {
     // `addEventListener` on Worker and WebSocket...) stay, at the tail.
     const extra = [];
     for (const k of Object.getOwnPropertyNames(P)) {
-      if (k.slice(0, 4) === '__pt') continue;
+      if (__s_slice(k, 0, 4) === '__pt') continue;
       const d = desc(P, k);
       if (!d || !d.configurable) continue;
       if (!has[name][k]) extra.push([k, d]);
@@ -1962,6 +2034,22 @@ const METHOD_LENGTHS: &str = include_str!("method_lengths.json");
 
 const NATURALIZE_TEMPLATE: &str = r#"(() => {
   'use strict';
+  // String methods taken before any page script. A page may replace them
+  // (Klarna replaces `trim`); the engine must not call the page's copies.
+  // Other receivers keep their own method, errors included.
+  const __sm = (f, m) => {
+    const call = Function.prototype.call.bind(f);
+    return function (s, a, b) {
+      const n = arguments.length;
+      if (typeof s === 'string') return n === 1 ? call(s) : n === 2 ? call(s, a) : call(s, a, b);
+      return n === 1 ? s[m]() : n === 2 ? s[m](a) : s[m](a, b);
+    };
+  };
+  const __s_slice = __sm(String.prototype.slice, 'slice'),
+    __s_trim = __sm(String.prototype.trim, 'trim'),
+    __s_indexOf = __sm(String.prototype.indexOf, 'indexOf'),
+    __s_replace = __sm(String.prototype.replace, 'replace'),
+    __s_split = __sm(String.prototype.split, 'split');
   const N = globalThis.__pt_native;
   if (typeof N !== 'function') return;
   const SKIP = __SKIP__;
@@ -1974,13 +2062,13 @@ const NATURALIZE_TEMPLATE: &str = r#"(() => {
   const TRACE = __BRAND_TRACE__;
   const trace = (what) => {
     try {
-      const st = String(new Error().stack || '').split('\n').slice(2, 7).map((x) => x.trim().replace(/https?:\/\/[^ )]*\//, '')).join(' < ');
+      const st = __s_slice(__s_split(String(new Error().stack || ''), '\n'), 2, 7).map((x) => __s_replace(__s_trim(x), /https?:\/\/[^ )]*\//, '')).join(' < ');
       console.error('[brand] ' + what + ' | ' + st);
     } catch (e) {}
   };
   const illegal = (label, t) => {
     if (TRACE) {
-      let who = ''; try { who = t === null ? 'null' : typeof t !== 'object' && typeof t !== 'function' ? typeof t : (Object.prototype.toString.call(t) + ' ' + Object.getOwnPropertyNames(t).slice(0, 5).join(',')); } catch (e) {}
+      let who = ''; try { who = t === null ? 'null' : typeof t !== 'object' && typeof t !== 'function' ? typeof t : (Object.prototype.toString.call(t) + ' ' + __s_slice(Object.getOwnPropertyNames(t), 0, 5).join(',')); } catch (e) {}
       trace(label + ' this=' + who);
     }
     return __pt_mkErr(TypeError, 'Illegal invocation');
@@ -2037,7 +2125,7 @@ const NATURALIZE_TEMPLATE: &str = r#"(() => {
   // check where due. `guard` is the interface constructor, or null when the
   // owner is not an interface prototype.
   const LENGTHS = __METHOD_LENGTHS__;
-  const fewArgs = (what, need, got) => (TRACE && trace('args ' + what + ' need ' + need + ' got ' + got), __pt_mkErr(TypeError, 'Failed to execute \'' + what.slice(what.indexOf('.') + 1) + '\' on \'' + what.slice(0, what.indexOf('.')) + '\': ' + need + ' argument' + (need === 1 ? '' : 's') + ' required, but only ' + got + ' present.'));
+  const fewArgs = (what, need, got) => (TRACE && trace('args ' + what + ' need ' + need + ' got ' + got), __pt_mkErr(TypeError, 'Failed to execute \'' + __s_slice(what, __s_indexOf(what, '.') + 1) + '\' on \'' + __s_slice(what, 0, __s_indexOf(what, '.')) + '\': ' + need + ' argument' + (need === 1 ? '' : 's') + ' required, but only ' + got + ' present.'));
   const asMethod = (fn, key, guard) => {
     const name = keyName(key);
     const P = guard && guard.prototype;
@@ -2106,7 +2194,7 @@ const NATURALIZE_TEMPLATE: &str = r#"(() => {
       for (const kind of ['get ', 'set ']) {
         const f = kind === 'get ' ? get : set;
         if (typeof f !== 'function') continue;
-        const wantG = guard && (!EXC.has(label + '#' + kind.trim()) || (kind === 'get ' && PROMISE_GETTERS.has(label)));
+        const wantG = guard && (!EXC.has(label + '#' + __s_trim(kind)) || (kind === 'get ' && PROMISE_GETTERS.has(label)));
         if ((wantG || !isStrict(f)) && d.configurable) {
           const w = asAccessor(f, key, kind, wantG ? guard : null);
           const S = stubs(); if (S && S.has(f)) S.add(w);
@@ -2257,7 +2345,7 @@ const NATURALIZE_TEMPLATE: &str = r#"(() => {
     for (const k of keysOf(proto)) fix(proto, k, guard);
   };
   for (const name of Object.getOwnPropertyNames(globalThis)) {
-    if (name.slice(0, 4) === '__pt') continue;
+    if (__s_slice(name, 0, 4) === '__pt') continue;
     if (SKIP && SKIP.test(name)) continue;
     const d = desc(globalThis, name);
     if (!d) continue;
@@ -2288,6 +2376,19 @@ const NATURALIZE_TEMPLATE: &str = r#"(() => {
 
 pub fn late_interfaces_script() -> String {
     r##"(() => {
+  // String methods taken before any page script. A page may replace them
+  // (Klarna replaces `trim`); the engine must not call the page's copies.
+  // Other receivers keep their own method, errors included.
+  const __sm = (f, m) => {
+    const call = Function.prototype.call.bind(f);
+    return function (s, a, b) {
+      const n = arguments.length;
+      if (typeof s === 'string') return n === 1 ? call(s) : n === 2 ? call(s, a) : call(s, a, b);
+      return n === 1 ? s[m]() : n === 2 ? s[m](a) : s[m](a, b);
+    };
+  };
+  const __s_toLowerCase = __sm(String.prototype.toLowerCase, 'toLowerCase'),
+    __s_trim = __sm(String.prototype.trim, 'trim');
   const native = (f) => (globalThis.__pt_native ? __pt_native(f) : f);
   const named = (name, f) => {
     try { Object.defineProperty(f, 'name', { value: name, configurable: true }); } catch (e) {}
@@ -2345,7 +2446,7 @@ pub fn late_interfaces_script() -> String {
     // URL. fontconfig substitutes do not count: the browser matches the font
     // files' own names, and `Arial` is not found on a machine without it.
     const m = /local\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*))\s*\)/i.exec(o.source || '');
-    const name = m ? String(m[1] || m[2] || m[3] || '').trim() : null;
+    const name = m ? __s_trim(String(m[1] || m[2] || m[3] || '')) : null;
     const have = !!(name && typeof globalThis.__pt_localFont === 'function' && __pt_localFont(name));
     o.status = 'loading';
     o.promise = have
@@ -2377,7 +2478,7 @@ pub fn late_interfaces_script() -> String {
         throw __pt_mkErr(TypeError, "Failed to execute 'parseFromString' on 'DOMParser': " +
           '2 arguments required, but only ' + arguments.length + ' present.');
       }
-      const kind = String(type).toLowerCase();
+      const kind = __s_toLowerCase(String(type));
       if (!/^(text\/html|text\/xml|application\/xml|application\/xhtml\+xml|image\/svg\+xml)$/.test(kind)) {
         throw __pt_mkErr(TypeError, "Failed to execute 'parseFromString' on 'DOMParser': " +
           "The provided value '" + type + "' is not a valid enum value of type SupportedType.");
@@ -2547,6 +2648,23 @@ pub fn shape_fixes_script() -> String {
 }
 
 const SHAPE_FIXES: &str = r#"(() => {
+  // String methods taken before any page script. A page may replace them
+  // (Klarna replaces `trim`); the engine must not call the page's copies.
+  // Other receivers keep their own method, errors included.
+  const __sm = (f, m) => {
+    const call = Function.prototype.call.bind(f);
+    return function (s, a, b) {
+      const n = arguments.length;
+      if (typeof s === 'string') return n === 1 ? call(s) : n === 2 ? call(s, a) : call(s, a, b);
+      return n === 1 ? s[m]() : n === 2 ? s[m](a) : s[m](a, b);
+    };
+  };
+  const __s_charCodeAt = __sm(String.prototype.charCodeAt, 'charCodeAt'),
+    __s_slice = __sm(String.prototype.slice, 'slice'),
+    __s_includes = __sm(String.prototype.includes, 'includes'),
+    __s_split = __sm(String.prototype.split, 'split'),
+    __s_replace = __sm(String.prototype.replace, 'replace'),
+    __s_toLowerCase = __sm(String.prototype.toLowerCase, 'toLowerCase');
   const redo = (o, k) => { try { const d = Object.getOwnPropertyDescriptor(o, k); if (d && d.configurable) { delete o[k]; Object.defineProperty(o, k, d); } } catch (e) {} };
   try { for (const k of ['Suspending', 'promising', 'SuspendError']) redo(globalThis.WebAssembly, k); } catch (e) {}
   for (const [alias, orig] of [['webkitURL', 'URL'], ['webkitMediaStream', 'MediaStream'], ['WebKitMutationObserver', 'MutationObserver'],
@@ -2605,7 +2723,7 @@ const SHAPE_FIXES: &str = r#"(() => {
           if (arguments.length < 2) throw __pt_mkErr(TypeError, "Failed to construct 'CSSUnitValue': 2 arguments required, but only " + arguments.length + ' present.');
           const v = Number(value); const u = String(unit);
           if (!isFinite(v)) throw __pt_mkErr(TypeError, "Failed to construct 'CSSUnitValue': The provided double value is non-finite.");
-          if (!UNITS.includes(u)) throw __pt_mkErr(TypeError, "Failed to construct 'CSSUnitValue': Invalid unit: " + u);
+          if (!__s_includes(UNITS, u)) throw __pt_mkErr(TypeError, "Failed to construct 'CSSUnitValue': Invalid unit: " + u);
           STATE.set(this, { value: v, unit: u });
         };
         const oldP = U && U.prototype;
@@ -2794,7 +2912,7 @@ const SHAPE_FIXES: &str = r#"(() => {
         get: natn(function () {
           const v = this.getAttribute && this.getAttribute('tabindex');
           if (v != null && /^\s*[-+]?\d+/.test(v)) return parseInt(v, 10) | 0;
-          const t = String(this.localName || '').toLowerCase();
+          const t = __s_toLowerCase(String(this.localName || ''));
           return FOCUSABLE.has(t) || (this.hasAttribute && this.hasAttribute('contenteditable')) ? 0 : -1;
         }, 'get tabIndex'),
         set: natn(function (v) { if (this.setAttribute) this.setAttribute('tabindex', String(Number(v) | 0)); }, 'set tabIndex'),
@@ -2883,7 +3001,7 @@ const SHAPE_FIXES: &str = r#"(() => {
           if (d && !d.configurable) continue;
           const sm0 = /^([ecw-]*):(.*)$/.exec(spec); if (!sm0) continue;
           const flags = sm0[1], kind = sm0[2];
-          const enumerable = flags.includes('e'), configurable = flags.includes('c'), writable = flags.includes('w');
+          const enumerable = __s_includes(flags, 'e'), configurable = __s_includes(flags, 'c'), writable = __s_includes(flags, 'w');
           if (kind[0] === 'f') {
             const m = /^f..(.)\/(.*)\/(\d+)$/.exec(kind);
             const fname = m ? m[2] : k, len = m ? +m[3] : 0, ctor = !!m && m[1] === 'P';
@@ -2914,7 +3032,7 @@ const SHAPE_FIXES: &str = r#"(() => {
     const nat = (f) => (globalThis.__pt_native ? __pt_native(f) : f);
     const isStrictF = (f) => { try { void f.caller; return false; } catch (e) { return true; } };
     const isNativeF = globalThis.__pt_isNative ? __pt_isNative : ((f) => { try { return /\[native code\]/.test(Function.prototype.toString.call(f)); } catch (e) { return false; } });
-    const resolve = (path) => { let o = globalThis; for (const part of path.split('.')) { if (o === null || o === undefined) return null; o = part === '__proto__' ? Object.getPrototypeOf(o) : o[part]; } return o; };
+    const resolve = (path) => { let o = globalThis; for (const part of __s_split(path, '.')) { if (o === null || o === undefined) return null; o = part === '__proto__' ? Object.getPrototypeOf(o) : o[part]; } return o; };
     const fixFn = (f, key, sig, kindName) => {
       // sig = "Nsp/name/len": native, strict, no prototype.
       const m = /^(.)(.)(.)\/(.*)\/(\d+)$/.exec(sig); if (!m) return f;
@@ -2922,7 +3040,7 @@ const SHAPE_FIXES: &str = r#"(() => {
       let g = f;
       if ((wantNoProto && Object.prototype.hasOwnProperty.call(g, 'prototype')) || (wantStrict && !isStrictF(g))) {
         const orig = g;
-        const nk = String(name).replace(/^[gs]et /, '');
+        const nk = __s_replace(String(name), /^[gs]et /, '');
         g = kindName === 'get' ? Object.getOwnPropertyDescriptor({ get [nk]() { return orig.call(this); } }, nk).get
           : kindName === 'set' ? Object.getOwnPropertyDescriptor({ set [nk](v) { return orig.call(this, v); } }, nk).set
           : ({ [key](...a) { return orig.apply(this, a); } })[key];
@@ -2933,7 +3051,7 @@ const SHAPE_FIXES: &str = r#"(() => {
       return g;
     };
     for (const path of Object.keys(PS)) {
-      if (ONLY && !ONLY.has(path.split('.')[0])) continue;
+      if (ONLY && !ONLY.has(__s_split(path, '.')[0])) continue;
       let O; try { O = resolve(path); } catch (e) { continue; }
       if (O === null || (typeof O !== 'object' && typeof O !== 'function')) continue;
       for (const [key, spec] of PS[path]) {
@@ -2942,7 +3060,7 @@ const SHAPE_FIXES: &str = r#"(() => {
           if (!d || !d.configurable) continue;
           const sm = /^([ecw-]*):(.*)$/.exec(spec); if (!sm) continue;
           const flags = sm[1], kind = sm[2];
-          const enumerable = flags.includes('e'), writable = flags.includes('w');
+          const enumerable = __s_includes(flags, 'e'), writable = __s_includes(flags, 'w');
           if (kind[0] === 'f') {
             if (typeof d.value !== 'function') continue;
             const f0 = d.value;
@@ -2951,7 +3069,7 @@ const SHAPE_FIXES: &str = r#"(() => {
               const m0 = /^f...\/(.*)\/(\d+)$/.exec(kind);
               if (m0 && f0.name === m0[1] && f0.length === +m0[2] && isStrictF(f0)) continue;
             }
-            const f = fixFn(d.value, key, kind.slice(1), 'fn');
+            const f = fixFn(d.value, key, __s_slice(kind, 1), 'fn');
             if (f !== d.value || d.enumerable !== enumerable || d.writable !== writable) Object.defineProperty(O, key, { value: f, writable, enumerable, configurable: true });
           } else if (kind[0] === 'a') {
             if (!d.get && !d.set) continue;
@@ -3140,7 +3258,7 @@ const SHAPE_FIXES: &str = r#"(() => {
     const names = GOPN(globalThis);
     const has = new Set(names);
     for (const k of names) {
-      if (SKIP.has(k) || k.charCodeAt(0) < 65 || k.charCodeAt(0) > 90) continue;
+      if (SKIP.has(k) || __s_charCodeAt(k, 0) < 65 || __s_charCodeAt(k, 0) > 90) continue;
       let C; try { C = globalThis[k]; } catch (e) { continue; }
       if (typeof C !== 'function' || !C.prototype || typeof C.prototype !== 'object') continue;
       if (Object.getPrototypeOf(C) !== Function.prototype) continue;
@@ -3174,6 +3292,18 @@ pub fn window_order_script() -> String {
 }
 
 const WINDOW_ORDER_TEMPLATE: &str = r#"(() => {
+  // String methods taken before any page script. A page may replace them
+  // (Klarna replaces `trim`); the engine must not call the page's copies.
+  // Other receivers keep their own method, errors included.
+  const __sm = (f, m) => {
+    const call = Function.prototype.call.bind(f);
+    return function (s, a, b) {
+      const n = arguments.length;
+      if (typeof s === 'string') return n === 1 ? call(s) : n === 2 ? call(s, a) : call(s, a, b);
+      return n === 1 ? s[m]() : n === 2 ? s[m](a) : s[m](a, b);
+    };
+  };
+  const __s_charCodeAt = __sm(String.prototype.charCodeAt, 'charCodeAt');
   // Engine-internal names (`__pt...`, `__...`) must not enumerate on interface
   // prototypes or on window: Chrome's `for...in` over a node does not show them.
   // Found with for...in itself, which the introspection filter leaves alone.
@@ -3182,7 +3312,7 @@ const WINDOW_ORDER_TEMPLATE: &str = r#"(() => {
     const hideOn = (o) => {
       if (!o || (typeof o !== 'object' && typeof o !== 'function')) return;
       let ks = [];
-      try { ks = GOPN(o).filter((k) => k.charCodeAt(0) === 95 && k.charCodeAt(1) === 95); } catch (e) { return; }
+      try { ks = GOPN(o).filter((k) => __s_charCodeAt(k, 0) === 95 && __s_charCodeAt(k, 1) === 95); } catch (e) { return; }
       for (const k of ks) {
         try { const d = GOPD(o, k); if (d && d.enumerable && d.configurable) { d.enumerable = false; Object.defineProperty(o, k, d); } } catch (e) {}
       }
@@ -3574,6 +3704,20 @@ const IFACE_KINDS: &str = r#"{"Image":{"agsec":["alt","crossOrigin","height","lo
 /// exists. Runs last, after stubs, lifts and moves, or the fixes get
 /// overwritten.
 const IFACE_KINDS_TEMPLATE: &str = r#"(() => {
+  // String methods taken before any page script. A page may replace them
+  // (Klarna replaces `trim`); the engine must not call the page's copies.
+  // Other receivers keep their own method, errors included.
+  const __sm = (f, m) => {
+    const call = Function.prototype.call.bind(f);
+    return function (s, a, b) {
+      const n = arguments.length;
+      if (typeof s === 'string') return n === 1 ? call(s) : n === 2 ? call(s, a) : call(s, a, b);
+      return n === 1 ? s[m]() : n === 2 ? s[m](a) : s[m](a, b);
+    };
+  };
+  const __s_indexOf = __sm(String.prototype.indexOf, 'indexOf'),
+    __s_charAt = __sm(String.prototype.charAt, 'charAt'),
+    __s_charCodeAt = __sm(String.prototype.charCodeAt, 'charCodeAt');
   const K = __IFACE_KINDS__;
   const nat = globalThis.__pt_native || ((f) => f);
   const named = (f, n) => {
@@ -3603,14 +3747,14 @@ const IFACE_KINDS_TEMPLATE: &str = r#"(() => {
     if (!P || typeof P !== 'object') continue;
     const groups = K[iface];
     for (const kind of Object.keys(groups)) {
-      const wantE = kind.indexOf('e') >= 0, wantC = kind.indexOf('c') >= 0;
+      const wantE = __s_indexOf(kind, 'e') >= 0, wantC = __s_indexOf(kind, 'c') >= 0;
       for (const name of groups[kind]) {
         let d;
         try { d = Object.getOwnPropertyDescriptor(P, name); } catch (e) { continue; }
         if (!d || !d.configurable) continue;
         try {
-          if (kind.charCodeAt(0) === 97) {
-            const wantSet = kind.charAt(2) === 's';
+          if (__s_charCodeAt(kind, 0) === 97) {
+            const wantSet = __s_charAt(kind, 2) === 's';
             let get = d.get, set = d.set;
             if (!get || (wantSet && !set)) {
               const made = pair(name, d.get ? undefined : d.value);
@@ -3632,7 +3776,7 @@ const IFACE_KINDS_TEMPLATE: &str = r#"(() => {
             // and Chrome's member order, and could not move a non-configurable
             // constant (Node's constants used to come first).
             Object.defineProperty(P, name, {
-              value, writable: kind.indexOf('w') >= 0, enumerable: wantE, configurable: true,
+              value, writable: __s_indexOf(kind, 'w') >= 0, enumerable: wantE, configurable: true,
             });
           }
         } catch (e) {}
@@ -3666,6 +3810,19 @@ pub fn web_surface_script() -> String {
 /// everything the engine puts on `window` is in place and page scripts have
 /// not run yet, so their own globals stay enumerable as they should.
 const WINDOW_SHAPE_TEMPLATE: &str = r#"(() => {
+  // String methods taken before any page script. A page may replace them
+  // (Klarna replaces `trim`); the engine must not call the page's copies.
+  // Other receivers keep their own method, errors included.
+  const __sm = (f, m) => {
+    const call = Function.prototype.call.bind(f);
+    return function (s, a, b) {
+      const n = arguments.length;
+      if (typeof s === 'string') return n === 1 ? call(s) : n === 2 ? call(s, a) : call(s, a, b);
+      return n === 1 ? s[m]() : n === 2 ? s[m](a) : s[m](a, b);
+    };
+  };
+  const __s_lastIndexOf = __sm(String.prototype.lastIndexOf, 'lastIndexOf'),
+    __s_indexOf = __sm(String.prototype.indexOf, 'indexOf');
   // Window chain captured from Chrome 148:
   //   window -> Window.prototype (TEMPORARY, PERSISTENT) -> WindowProperties ->
   //   EventTarget.prototype (addEventListener, dispatchEvent, removeEventListener,
@@ -3760,7 +3917,7 @@ const WINDOW_SHAPE_TEMPLATE: &str = r#"(() => {
       // Chrome's own-member order (`valueOf` first).
       const LOC_ORDER = ['valueOf', 'ancestorOrigins', 'href', 'origin', 'protocol', 'host', 'hostname', 'port', 'pathname', 'search', 'hash', 'assign', 'reload', 'replace', 'toString'];
       const lnames = LOC_ORDER.filter((n) => Object.prototype.hasOwnProperty.call(lproto, n))
-        .concat(Object.getOwnPropertyNames(lproto).filter((n) => LOC_ORDER.indexOf(n) < 0));
+        .concat(Object.getOwnPropertyNames(lproto).filter((n) => __s_indexOf(LOC_ORDER, n) < 0));
       for (const name of lnames) {
         if (name === 'constructor') continue;
         let d = Object.getOwnPropertyDescriptor(lproto, name);
@@ -3843,7 +4000,7 @@ const WINDOW_SHAPE_TEMPLATE: &str = r#"(() => {
 
   const ENUM = new Set(__WINDOW_ENUMERABLE__);
   for (const name of Object.getOwnPropertyNames(globalThis)) {
-    if (name.lastIndexOf('__pt', 0) === 0 || name.lastIndexOf('__out', 0) === 0) continue;
+    if (__s_lastIndexOf(name, '__pt', 0) === 0 || __s_lastIndexOf(name, '__out', 0) === 0) continue;
     let d;
     try { d = Object.getOwnPropertyDescriptor(globalThis, name); } catch (e) { continue; }
     if (!d || !d.configurable) continue;
@@ -3870,6 +4027,20 @@ const CLONE_TEMPLATE: &str = r##"  // ── Structured clone ──────
   // `Uint8Array` arrives as bytes, `Map` as a map, a date as a date. JSON would
   // turn bytes into `{0:1,1:2}` and dates into strings.
   (() => {
+  // String methods taken before any page script. A page may replace them
+  // (Klarna replaces `trim`); the engine must not call the page's copies.
+  // Other receivers keep their own method, errors included.
+  const __sm = (f, m) => {
+    const call = Function.prototype.call.bind(f);
+    return function (s, a, b) {
+      const n = arguments.length;
+      if (typeof s === 'string') return n === 1 ? call(s) : n === 2 ? call(s, a) : call(s, a, b);
+      return n === 1 ? s[m]() : n === 2 ? s[m](a) : s[m](a, b);
+    };
+  };
+  const __s_indexOf = __sm(String.prototype.indexOf, 'indexOf'),
+    __s_slice = __sm(String.prototype.slice, 'slice'),
+    __s_charCodeAt = __sm(String.prototype.charCodeAt, 'charCodeAt');
     const TA = ['Int8Array', 'Uint8Array', 'Uint8ClampedArray', 'Int16Array', 'Uint16Array',
                 'Int32Array', 'Uint32Array', 'Float32Array', 'Float64Array',
                 'BigInt64Array', 'BigUint64Array', 'DataView'];
@@ -3883,7 +4054,7 @@ const CLONE_TEMPLATE: &str = r##"  // ── Structured clone ──────
     const unb64 = (text) => {
       const s = globalThis.atob ? atob(text) : text;
       const out = new Uint8Array(s.length);
-      for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i) & 255;
+      for (let i = 0; i < s.length; i++) out[i] = __s_charCodeAt(s, i) & 255;
       return out;
     };
     const bytesOf = (v) => (v instanceof ArrayBuffer
@@ -3938,8 +4109,8 @@ const CLONE_TEMPLATE: &str = r##"  // ── Structured clone ──────
         return { $: 'err', n: String(v.name || 'Error'), m: String(v.message || ''), k: String(v.stack || '') };
       }
       if (tag === '[object ArrayBuffer]') return { $: 'ab', b: b64(new Uint8Array(v)) };
-      const kind = tag.slice(8, -1);
-      if (TA.indexOf(kind) >= 0) {
+      const kind = __s_slice(tag, 8, -1);
+      if (__s_indexOf(TA, kind) >= 0) {
         return { $: 'ta', k: kind, b: b64(bytesOf(v)), o: 0, n: kind === 'DataView' ? v.byteLength : v.length };
       }
       if (tag === '[object Map]') {
@@ -4313,6 +4484,24 @@ const OPFS_TEMPLATE: &str = r##"  // ── Origin Private File System ───
 "##;
 
 const WEB_BODIES_TEMPLATE: &str = r##"(() => {
+  // String methods taken before any page script. A page may replace them
+  // (Klarna replaces `trim`); the engine must not call the page's copies.
+  // Other receivers keep their own method, errors included.
+  const __sm = (f, m) => {
+    const call = Function.prototype.call.bind(f);
+    return function (s, a, b) {
+      const n = arguments.length;
+      if (typeof s === 'string') return n === 1 ? call(s) : n === 2 ? call(s, a) : call(s, a, b);
+      return n === 1 ? s[m]() : n === 2 ? s[m](a) : s[m](a, b);
+    };
+  };
+  const __s_lastIndexOf = __sm(String.prototype.lastIndexOf, 'lastIndexOf'),
+    __s_replace = __sm(String.prototype.replace, 'replace'),
+    __s_split = __sm(String.prototype.split, 'split'),
+    __s_trim = __sm(String.prototype.trim, 'trim'),
+    __s_indexOf = __sm(String.prototype.indexOf, 'indexOf'),
+    __s_toLowerCase = __sm(String.prototype.toLowerCase, 'toLowerCase'),
+    __s_includes = __sm(String.prototype.includes, 'includes');
 __CLONE__
 __OPFS__
   const native = globalThis.__pt_native || ((f) => f);
@@ -4441,9 +4630,9 @@ __OPFS__
     let names = null;
     try { names = typeof globalThis.__pt_ttNames === 'function' ? __pt_ttNames() : null; } catch (e) {}
     if (names) {
-      const low = names.map((x) => x.toLowerCase());
-      if (!low.includes(n.toLowerCase()) && !low.includes('*')) throw __pt_mkErr(TypeError, "Failed to execute 'createPolicy' on 'TrustedTypePolicyFactory': Policy \"" + n + "\" disallowed.");
-      if (createdNames.has(n) && !low.includes("'allow-duplicates'")) throw __pt_mkErr(TypeError, "Failed to execute 'createPolicy' on 'TrustedTypePolicyFactory': Policy with name \"" + n + "\" already exists.");
+      const low = names.map((x) => __s_toLowerCase(x));
+      if (!__s_includes(low, __s_toLowerCase(n)) && !__s_includes(low, '*')) throw __pt_mkErr(TypeError, "Failed to execute 'createPolicy' on 'TrustedTypePolicyFactory': Policy \"" + n + "\" disallowed.");
+      if (createdNames.has(n) && !__s_includes(low, "'allow-duplicates'")) throw __pt_mkErr(TypeError, "Failed to execute 'createPolicy' on 'TrustedTypePolicyFactory': Policy with name \"" + n + "\" already exists.");
     } else if (n === 'default' && defaultPolicy) {
       throw __pt_mkErr(TypeError, "Failed to execute 'createPolicy' on 'TrustedTypePolicyFactory': Policy with name \"default\" already exists.");
     }
@@ -4472,10 +4661,10 @@ __OPFS__
                  'script:innerText': 'TrustedScript', 'script:textContent': 'TrustedScript',
                  'iframe:srcdoc': 'TrustedHTML', '*:innerHTML': 'TrustedHTML', '*:outerHTML': 'TrustedHTML' };
   meth(TTF, 'getAttributeType', function (tag, attr) {
-    return ATTR[String(tag).toLowerCase() + ':' + String(attr).toLowerCase()] || null;
+    return ATTR[__s_toLowerCase(String(tag)) + ':' + __s_toLowerCase(String(attr))] || null;
   });
   meth(TTF, 'getPropertyType', function (tag, prop) {
-    const t = String(tag).toLowerCase(), p = String(prop);
+    const t = __s_toLowerCase(String(tag)), p = String(prop);
     return PROP[t + ':' + p] || PROP['*:' + p] || null;
   });
   meth(TTF, 'getTypeMapping', function () { return {}; });
@@ -4691,7 +4880,7 @@ __OPFS__
         const C = globalThis[name]; if (typeof C !== 'function') return;
         const G = function () { if (crossSite()) throw dx(msg, kind); return Reflect.construct(C, arguments, new.target || G); };
         G.prototype = C.prototype; Object.defineProperty(G, 'name', { value: name, configurable: true }); Object.defineProperty(G, 'length', { value: C.length, configurable: true });
-        for (const k of Object.getOwnPropertyNames(C)) { if (['length', 'name', 'prototype'].indexOf(k) >= 0) continue; try { Object.defineProperty(G, k, Object.getOwnPropertyDescriptor(C, k)); } catch (e) {} }
+        for (const k of Object.getOwnPropertyNames(C)) { if (__s_indexOf(['length', 'name', 'prototype'], k) >= 0) continue; try { Object.defineProperty(G, k, Object.getOwnPropertyDescriptor(C, k)); } catch (e) {} }
         try { Object.defineProperty(C.prototype, 'constructor', { value: G, writable: true, configurable: true }); } catch (e) {}
         Object.defineProperty(globalThis, name, { value: native(G), writable: true, enumerable: false, configurable: true });
       } catch (e) {}
@@ -4883,7 +5072,7 @@ __OPFS__
   // mechanism itself (XHR and its layers, Storage) would otherwise read as
   // page functions.
   for (const name of Object.getOwnPropertyNames(globalThis)) {
-    if (name.lastIndexOf('__pt', 0) === 0) continue;
+    if (__s_lastIndexOf(name, '__pt', 0) === 0) continue;
     let v;
     try { v = globalThis[name]; } catch (e) { continue; }
     if (typeof v === 'function') native(v);
@@ -4943,8 +5132,8 @@ __OPFS__
         const t = String(font);
         const m = /(?:\d+(?:\.\d+)?(?:px|pt|em|rem|%)|x?x-(?:small|large)|small|medium|large|larger|smaller)\s+(.+)$/.exec(t);
         if (!m) return '';
-        const first = m[1].split(',')[0].trim();
-        return first.replace(/^["']|["']$/g, '');
+        const first = __s_trim(__s_split(m[1], ',')[0]);
+        return __s_replace(first, /^["']|["']$/g, '');
       };
       meth(P, 'load', function (font) {
         if (!parses(font)) {
@@ -5176,7 +5365,7 @@ __OPFS__
       'Image', 'Audio', 'Option',
     ]);
     for (const name of Object.getOwnPropertyNames(globalThis)) {
-      if (LANGUAGE.has(name) || name.lastIndexOf('__pt', 0) === 0) continue;
+      if (LANGUAGE.has(name) || __s_lastIndexOf(name, '__pt', 0) === 0) continue;
       let C;
       try { C = globalThis[name]; } catch (e) { continue; }
       if (typeof C !== 'function' || !C.prototype || typeof C.prototype !== 'object') continue;
@@ -5231,6 +5420,26 @@ const IFACE_PROTO_MOVES: &str = r#"{"Blob":{"toString":[]},"FormData":{"toString
 /// and a graph walk reads them on its first step. Runs after every layer has
 /// declared its interfaces — half of them do not exist earlier.
 const IFACE_STATICS_TEMPLATE: &str = r#"(() => {
+  // String methods taken before any page script. A page may replace them
+  // (Klarna replaces `trim`); the engine must not call the page's copies.
+  // Other receivers keep their own method, errors included.
+  const __sm = (f, m) => {
+    const call = Function.prototype.call.bind(f);
+    return function (s, a, b) {
+      const n = arguments.length;
+      if (typeof s === 'string') return n === 1 ? call(s) : n === 2 ? call(s, a) : call(s, a, b);
+      return n === 1 ? s[m]() : n === 2 ? s[m](a) : s[m](a, b);
+    };
+  };
+  const __s_indexOf = __sm(String.prototype.indexOf, 'indexOf'),
+    __s_charAt = __sm(String.prototype.charAt, 'charAt'),
+    __s_trim = __sm(String.prototype.trim, 'trim'),
+    __s_toLowerCase = __sm(String.prototype.toLowerCase, 'toLowerCase'),
+    __s_split = __sm(String.prototype.split, 'split'),
+    __s_slice = __sm(String.prototype.slice, 'slice'),
+    __s_charCodeAt = __sm(String.prototype.charCodeAt, 'charCodeAt'),
+    __s_replace = __sm(String.prototype.replace, 'replace'),
+    __s_startsWith = __sm(String.prototype.startsWith, 'startsWith');
   const native = globalThis.__pt_native || ((f) => f);
   // Strict function: interface members have no own `arguments`/`caller`.
   // Method/getter: strict and without `.prototype`, like native ones.
@@ -5297,13 +5506,13 @@ const IFACE_STATICS_TEMPLATE: &str = r#"(() => {
         if (!looksResponse) {
           throw __pt_mkErr(TypeError, head + "An argument must be provided, which must be a Response or Promise<Response> object");
         }
-        const mime = String((r.headers && r.headers.get('content-type')) || '').split(';')[0].trim().toLowerCase();
+        const mime = __s_toLowerCase(__s_trim(__s_split(String((r.headers && r.headers.get('content-type')) || ''), ';')[0]));
         if (mime !== 'application/wasm') throw __pt_mkErr(TypeError, head + "Incorrect response MIME type. Expected 'application/wasm'.");
         if (!r.ok) throw __pt_mkErr(TypeError, head + 'HTTP status code is not ok');
         if (r.bodyUsed) throw __pt_mkErr(TypeError, head + 'Response already read');
         return r.arrayBuffer();
       });
-      const traceRej = (what) => (e) => { if (globalThis.__pt_encTrace) { try { (globalThis.__pt_parentConsole || console).error('[wasm] ' + what + ' rejected: ' + String(e && e.message).slice(0, 120)); } catch (x) {} } throw e; };
+      const traceRej = (what) => (e) => { if (globalThis.__pt_encTrace) { try { (globalThis.__pt_parentConsole || console).error('[wasm] ' + what + ' rejected: ' + __s_slice(String(e && e.message), 0, 120)); } catch (x) {} } throw e; };
       const cs = function compileStreaming(source) { return bytesOf(source, 'compile').then((b) => W.compile(b)).catch(traceRej('compileStreaming')); };
       const is = function instantiateStreaming(source, imports) {
         return bytesOf(source, 'instantiate').then((b) => W.instantiate(b, imports)).catch(traceRej('instantiateStreaming'));
@@ -5316,8 +5525,8 @@ const IFACE_STATICS_TEMPLATE: &str = r#"(() => {
           const wrapped = function (a, b) {
             const desc = a && typeof a === 'object' ? Object.prototype.toString.call(a) + (a.byteLength !== undefined ? '#' + a.byteLength : '') : typeof a;
             let r;
-            try { r = F.call(this, a, b); } catch (e) { try { (globalThis.__pt_parentConsole || console).error('[wasm] ' + k + '(' + desc + ') threw ' + String(e && e.message).slice(0, 100)); } catch (x) {} throw e; }
-            if (r && typeof r.then === 'function') r.then((v) => { try { (globalThis.__pt_parentConsole || console).error('[wasm] ' + k + '(' + desc + ') ok ' + Object.prototype.toString.call(v)); } catch (x) {} }, (e) => { try { (globalThis.__pt_parentConsole || console).error('[wasm] ' + k + '(' + desc + ') rejected ' + String(e && e.message).slice(0, 120)); } catch (x) {} });
+            try { r = F.call(this, a, b); } catch (e) { try { (globalThis.__pt_parentConsole || console).error('[wasm] ' + k + '(' + desc + ') threw ' + __s_slice(String(e && e.message), 0, 100)); } catch (x) {} throw e; }
+            if (r && typeof r.then === 'function') r.then((v) => { try { (globalThis.__pt_parentConsole || console).error('[wasm] ' + k + '(' + desc + ') ok ' + Object.prototype.toString.call(v)); } catch (x) {} }, (e) => { try { (globalThis.__pt_parentConsole || console).error('[wasm] ' + k + '(' + desc + ') rejected ' + __s_slice(String(e && e.message), 0, 120)); } catch (x) {} });
             else { try { (globalThis.__pt_parentConsole || console).error('[wasm] ' + k + '(' + desc + ') = ' + String(r)); } catch (x) {} }
             return r;
           };
@@ -5337,7 +5546,7 @@ const IFACE_STATICS_TEMPLATE: &str = r#"(() => {
   const STATICS = __IFACE_STATICS__;
   for (const iface of Object.keys(STATICS)) {
     const I = globalThis[iface];
-    if (typeof I !== 'function' && !(typeof I === 'object' && I !== null && iface.startsWith('GPU'))) continue;
+    if (typeof I !== 'function' && !(typeof I === 'object' && I !== null && __s_startsWith(iface, 'GPU'))) continue;
     const spec = STATICS[iface];
     const hidden = new Set(spec.h || []);
     const has = (k) => Object.prototype.hasOwnProperty.call(I, k);
@@ -5495,10 +5704,10 @@ const IFACE_STATICS_TEMPLATE: &str = r#"(() => {
         if (typeof init === 'string') {
           // A string like `matrix(a, b, c, d, e, f)` or `matrix3d(...)`.
           const m = /^\s*matrix(3d)?\(([^)]*)\)\s*$/.exec(init);
-          if (!m) { if (String(init).trim()) throw __pt_mkErr(globalThis.DOMException || Error, 
+          if (!m) { if (__s_trim(String(init))) throw __pt_mkErr(globalThis.DOMException || Error, 
             "Failed to construct 'DOMMatrix': Failed to parse '" + init + "'.", 'SyntaxError'); return o; }
-          const n = m[2].split(',').map((x) => parseFloat(x) || 0);
-          if (m[1]) { st.m = n.slice(0, 16); st.d2 = false; }
+          const n = __s_split(m[2], ',').map((x) => parseFloat(x) || 0);
+          if (m[1]) { st.m = __s_slice(n, 0, 16); st.d2 = false; }
           else { st.m = ident(); st.m[0] = n[0]; st.m[1] = n[1]; st.m[4] = n[2];
             st.m[5] = n[3]; st.m[12] = n[4]; st.m[13] = n[5]; st.d2 = true; }
           return o;
@@ -5525,7 +5734,7 @@ const IFACE_STATICS_TEMPLATE: &str = r#"(() => {
         }
         return r;
       };
-      const make = (Cls, m, d2) => { const o = Object.create(Cls.prototype); ST.set(o, { m: m.slice(), d2 }); return o; };
+      const make = (Cls, m, d2) => { const o = Object.create(Cls.prototype); ST.set(o, { m: __s_slice(m), d2 }); return o; };
       const shape = (Cls, writable) => {
         const P = Cls && Cls.prototype;
         if (!P || Object.prototype.hasOwnProperty.call(P, '__ptMatrixShaped')) return;
@@ -5650,7 +5859,7 @@ const IFACE_STATICS_TEMPLATE: &str = r#"(() => {
                 stateOf(o);
                 if (st === 'fromMatrix' && v && typeof v === 'object' && !ArrayBuffer.isView(v) && !Array.isArray(v)) {
                   const src = ST.get(v);
-                  if (src) { ST.set(o, { m: src.m.slice(), d2: src.d2 }); return o; }
+                  if (src) { ST.set(o, { m: __s_slice(src.m), d2: src.d2 }); return o; }
                   const arr = [];
                   for (const k of Object.keys(IDX)) arr[IDX[k]] = v[k] === undefined ? ident()[IDX[k]] : +v[k] || 0;
                   ST.set(o, { m: arr, d2: v.is2D !== false });
@@ -5702,15 +5911,12 @@ const IFACE_STATICS_TEMPLATE: &str = r#"(() => {
     };
 
     // ---- WGSL -> GLSL ES 3.00 ------------------------------------------
-    const wgslNum = (t) => t.replace(/(^|[^\w.])\.(\d)/g, '$10.$2');
-    const wgslTypes = (t) => t
-      .replace(/\bvec2f\b/g, 'vec2').replace(/\bvec3f\b/g, 'vec3').replace(/\bvec4f\b/g, 'vec4')
-      .replace(/\bvec2<f32>/g, 'vec2').replace(/\bvec3<f32>/g, 'vec3').replace(/\bvec4<f32>/g, 'vec4')
-      .replace(/\bf32\b/g, 'float').replace(/\bi32\b/g, 'int').replace(/\bu32\b/g, 'uint');
+    const wgslNum = (t) => __s_replace(t, /(^|[^\w.])\.(\d)/g, '$10.$2');
+    const wgslTypes = (t) => __s_replace(__s_replace(__s_replace(__s_replace(__s_replace(__s_replace(__s_replace(__s_replace(__s_replace(t, /\bvec2f\b/g, 'vec2'), /\bvec3f\b/g, 'vec3'), /\bvec4f\b/g, 'vec4'), /\bvec2<f32>/g, 'vec2'), /\bvec3<f32>/g, 'vec3'), /\bvec4<f32>/g, 'vec4'), /\bf32\b/g, 'float'), /\bi32\b/g, 'int'), /\bu32\b/g, 'uint');
     // Integers inside vector constructors must become floats.
-    const floatLits = (t) => t.replace(/vec([234])\(([^()]*)\)/g, (m, n, args) =>
-      'vec' + n + '(' + args.split(',').map((a) => {
-        const s = a.trim();
+    const floatLits = (t) => __s_replace(t, /vec([234])\(([^()]*)\)/g, (m, n, args) =>
+      'vec' + n + '(' + __s_split(args, ',').map((a) => {
+        const s = __s_trim(a);
         return /^-?\d+$/.test(s) ? s + '.0' : a;
       }).join(',') + ')');
     const entry = (code, kind) => {
@@ -5724,36 +5930,33 @@ const IFACE_STATICS_TEMPLATE: &str = r#"(() => {
         if (code[k] === '(') d++;
         else if (code[k] === ')') d--;
       }
-      const params = code.slice(h.index + h[0].length, k - 1);
-      const rest = /^\s*->\s*([^{]*)\{/.exec(code.slice(k));
+      const params = __s_slice(code, h.index + h[0].length, k - 1);
+      const rest = /^\s*->\s*([^{]*)\{/.exec(__s_slice(code, k));
       if (!rest) return null;
       const m = { 1: h[1], 2: params, 3: rest[1], index: h.index,
-        0: code.slice(h.index, k + rest[0].length) };
+        0: __s_slice(code, h.index, k + rest[0].length) };
       // Body runs to the matching closing brace.
       let depth = 1, i = m.index + m[0].length;
       for (; i < code.length && depth; i++) {
         if (code[i] === '{') depth++;
         else if (code[i] === '}') depth--;
       }
-      return { name: m[1], params: m[2], ret: m[3].trim(), body: code.slice(m.index + m[0].length, i - 1) };
+      return { name: m[1], params: m[2], ret: __s_trim(m[3]), body: __s_slice(code, m.index + m[0].length, i - 1) };
     };
     const translate = (code) => {
       const v = entry(code, 'vertex'), f = entry(code, 'fragment');
       if (!v || !f) return null;
-      const prep = (b) => floatLits(wgslTypes(wgslNum(b)))
-        .replace(/\bvar\s+(\w+)\s*=\s*array<([^,]+),\s*(\d+)>\s*\(/g, '$2 $1[$3] = $2[$3](')
-        .replace(/\blet\s+/g, 'float ')
-        .replace(/\bvar\s+/g, 'float ');
+      const prep = (b) => __s_replace(__s_replace(__s_replace(floatLits(wgslTypes(wgslNum(b))), /\bvar\s+(\w+)\s*=\s*array<([^,]+),\s*(\d+)>\s*\(/g, '$2 $1[$3] = $2[$3]('), /\blet\s+/g, 'float '), /\bvar\s+/g, 'float ');
       let vs = prep(v.body), fs = prep(f.body);
       // The vertex index parameter becomes a GL builtin variable.
       const vi = /@builtin\(vertex_index\)\s*(\w+)/.exec(v.params);
-      if (vi) vs = vs.replace(new RegExp('\\b' + vi[1] + '\\b', 'g'), 'gl_VertexID');
+      if (vi) vs = __s_replace(vs, new RegExp('\\b' + vi[1] + '\\b', 'g'), 'gl_VertexID');
       const ii = /@builtin\(instance_index\)\s*(\w+)/.exec(v.params);
-      if (ii) vs = vs.replace(new RegExp('\\b' + ii[1] + '\\b', 'g'), 'gl_InstanceID');
+      if (ii) vs = __s_replace(vs, new RegExp('\\b' + ii[1] + '\\b', 'g'), 'gl_InstanceID');
       if (!/@builtin\(position\)/.test(v.ret)) return null;
-      vs = vs.replace(/return\s+([^;]+);/g, 'gl_Position = $1;');
+      vs = __s_replace(vs, /return\s+([^;]+);/g, 'gl_Position = $1;');
       if (!/@location\(0\)/.test(f.ret)) return null;
-      fs = fs.replace(/return\s+([^;]+);/g, '__pt_out = $1;');
+      fs = __s_replace(fs, /return\s+([^;]+);/g, '__pt_out = $1;');
       // Untranslated code keeps WGSL markers: a sign of failure.
       if (/[@]|array<|->/.test(vs + fs)) return null;
       return {
@@ -5896,7 +6099,7 @@ const IFACE_STATICS_TEMPLATE: &str = r#"(() => {
       put(EncP, 'copyBufferToBuffer', function copyBufferToBuffer() {});
       put(EncP, 'finish', function finish() {
         const o = mk('GPUCommandBuffer');
-        ST.set(o, { cmds: st(this).cmds.slice() });
+        ST.set(o, { cmds: __s_slice(st(this).cmds) });
         return o;
       });
 
@@ -5974,7 +6177,7 @@ const IFACE_STATICS_TEMPLATE: &str = r#"(() => {
       const BufP = iface('GPUBuffer');
       put(BufP, 'mapAsync', function mapAsync() { return afterFrame(); });
       put(BufP, 'getMappedRange', function getMappedRange(offset, size) {
-        glog('getMappedRange', { offset, size, nz: st(this).bytes && Array.from(st(this).bytes).map((b, i) => (b && (i & 3) !== 3) ? i + ':' + b : '').filter(Boolean).slice(0, 160).join(' ') });
+        glog('getMappedRange', { offset, size, nz: st(this).bytes && __s_slice(Array.from(st(this).bytes).map((b, i) => (b && (i & 3) !== 3) ? i + ':' + b : '').filter(Boolean), 0, 160).join(' ') });
         const s = st(this);
         const o = offset | 0;
         const n = size === undefined ? s.size - o : size | 0;
@@ -6091,8 +6294,8 @@ const IFACE_STATICS_TEMPLATE: &str = r#"(() => {
       try { bin = b.__ptText ? b.__ptText() : ''; } catch (e) { bin = ''; }
       if (!bin) return null;
       let w = 0, h = 0;
-      const at = (i) => bin.charCodeAt(i) & 0xff;
-      if (bin.charCodeAt(0) === 0x89 && bin.slice(1, 4) === 'PNG') {
+      const at = (i) => __s_charCodeAt(bin, i) & 0xff;
+      if (__s_charCodeAt(bin, 0) === 0x89 && __s_slice(bin, 1, 4) === 'PNG') {
         w = (at(16) << 24) | (at(17) << 16) | (at(18) << 8) | at(19);
         h = (at(20) << 24) | (at(21) << 16) | (at(22) << 8) | at(23);
       } else if (at(0) === 0xff && at(1) === 0xd8) {
@@ -6230,17 +6433,17 @@ const IFACE_STATICS_TEMPLATE: &str = r#"(() => {
       // need more than a name.
       const BARE = new Set(['audio/mpeg', 'audio/aac', 'video/mp2t']);
       const fn = function isTypeSupported(type) {
-        const t = String(type == null ? '' : type).trim();
-        const semi = t.indexOf(';');
-        const mime = (semi < 0 ? t : t.slice(0, semi)).trim().toLowerCase();
-        const rest = semi < 0 ? '' : t.slice(semi + 1);
+        const t = __s_trim(String(type == null ? '' : type));
+        const semi = __s_indexOf(t, ';');
+        const mime = __s_toLowerCase(__s_trim(semi < 0 ? t : __s_slice(t, 0, semi)));
+        const rest = semi < 0 ? '' : __s_slice(t, semi + 1);
         const m = /codecs\s*=\s*"?([^"]*)"?/i.exec(rest);
-        const codecs = m ? m[1].split(',').map((c) => c.trim().toLowerCase()).filter(Boolean) : [];
+        const codecs = m ? __s_split(m[1], ',').map((c) => __s_toLowerCase(__s_trim(c))).filter(Boolean) : [];
         const allowed = MSE[mime];
         if (!allowed) return false;
         if (!codecs.length) return BARE.has(mime);
         return codecs.every((c) => allowed.some(
-          (a) => (a.charAt(a.length - 1) === '.' ? c.indexOf(a) === 0 : c === a)));
+          (a) => (__s_charAt(a, a.length - 1) === '.' ? __s_indexOf(c, a) === 0 : c === a)));
       };
       Object.defineProperty(globalThis.MediaSource, 'isTypeSupported', {
         value: globalThis.__pt_native ? __pt_native(fn) : fn,
@@ -6343,7 +6546,7 @@ const IFACE_STATICS_TEMPLATE: &str = r#"(() => {
         if (q === Object.prototype) break;
         let who = '';
         try { who = (q.constructor && q.constructor.name) || ''; } catch (e) {}
-        if (owners.indexOf(who) >= 0) { target = q; break; }
+        if (__s_indexOf(owners, who) >= 0) { target = q; break; }
       }
       // The parent already provides this name, so our copy is redundant. With
       // neither a parent nor an answer, the name exists nowhere in the browser
@@ -6356,6 +6559,19 @@ const IFACE_STATICS_TEMPLATE: &str = r#"(() => {
 })();"#;
 
 const WEB_SURFACE_TEMPLATE: &str = r##"(() => {
+  // String methods taken before any page script. A page may replace them
+  // (Klarna replaces `trim`); the engine must not call the page's copies.
+  // Other receivers keep their own method, errors included.
+  const __sm = (f, m) => {
+    const call = Function.prototype.call.bind(f);
+    return function (s, a, b) {
+      const n = arguments.length;
+      if (typeof s === 'string') return n === 1 ? call(s) : n === 2 ? call(s, a) : call(s, a, b);
+      return n === 1 ? s[m]() : n === 2 ? s[m](a) : s[m](a, b);
+    };
+  };
+  const __s_slice = __sm(String.prototype.slice, 'slice'),
+    __s_charCodeAt = __sm(String.prototype.charCodeAt, 'charCodeAt');
   const T = {"window":{"#0":["TEMPORARY","pageXOffset","pageYOffset","scrollX","scrollY"],"#1":["PERSISTENT"],"#10":["screenLeft","screenTop","screenX","screenY"],"o":["GPUBufferUsage","GPUColorWrite","GPUMapMode","GPUShaderStage","GPUTextureUsage","Temporal","caches","clientInformation","cookieStore","crashReport","customElements","documentPictureInPicture","external","launchQueue","locationbar","menubar","navigation","personalbar","scheduler","scrollbars","sharedStorage","speechSynthesis","statusbar","styleMedia","toolbar","trustedTypes","viewport","visualViewport"],"F":["credentialless","crossOriginIsolated"],"x":["fence","frameElement","onabort","onafterprint","onanimationcancel","onanimationend","onanimationiteration","onanimationstart","onappinstalled","onauxclick","onbeforeinput","onbeforeinstallprompt","onbeforematch","onbeforeprint","onbeforetoggle","onbeforeunload","onbeforexrselect","onblur","oncancel","oncanplay","oncanplaythrough","onchange","onclick","onclose","oncommand","oncontentvisibilityautostatechange","oncontextlost","oncontextmenu","oncontextrestored","oncuechange","ondblclick","ondevicemotion","ondeviceorientation","ondeviceorientationabsolute","ondrag","ondragend","ondragenter","ondragleave","ondragover","ondragstart","ondrop","ondurationchange","onemptied","onended","onerror","onfocus","onformdata","ongamepadconnected","ongamepaddisconnected","ongotpointercapture","onhashchange","oninput","oninvalid","onkeydown","onkeypress","onkeyup","onlanguagechange","onload","onloadeddata","onloadedmetadata","onloadstart","onlostpointercapture","onmessage","onmessageerror","onmousedown","onmouseenter","onmouseleave","onmousemove","onmouseout","onmouseover","onmouseup","onmousewheel","onoffline","ononline","onpagehide","onpagereveal","onpageshow","onpageswap","onpause","onplay","onplaying","onpointercancel","onpointerdown","onpointerenter","onpointerleave","onpointermove","onpointerout","onpointerover","onpointerrawupdate","onpointerup","onpopstate","onprogress","onratechange","onrejectionhandled","onreset","onresize","onscroll","onscrollend","onscrollsnapchange","onscrollsnapchanging","onsearch","onsecuritypolicyviolation","onseeked","onseeking","onselect","onselectionchange","onselectstart","onslotchange","onstalled","onstorage","onsubmit","onsuspend","ontimeupdate","ontoggle","ontransitioncancel","ontransitionend","ontransitionrun","ontransitionstart","onunhandledrejection","onunload","onvolumechange","onwaiting","onwebkitanimationend","onwebkitanimationiteration","onwebkitanimationstart","onwebkittransitionend","onwheel","opener"],"u":["event"],"T":["isSecureContext","offscreenBuffering","originAgentCluster"],"N":["AbsoluteOrientationSensor","AbstractRange","Accelerometer","AnalyserNode","Animation","AnimationEffect","AnimationEvent","AnimationPlaybackEvent","AnimationTimeline","AnimationTrigger","AsyncDisposableStack","Attr","Audio","AudioBuffer","AudioBufferSourceNode","AudioData","AudioDecoder","AudioDestinationNode","AudioEncoder","AudioListener","AudioNode","AudioParam","AudioParamMap","AudioPlaybackStats","AudioProcessingEvent","AudioScheduledSourceNode","AudioSinkInfo","AudioWorklet","AudioWorkletNode","AuthenticatorAssertionResponse","AuthenticatorAttestationResponse","AuthenticatorResponse","BackgroundFetchManager","BackgroundFetchRecord","BackgroundFetchRegistration","BarProp","BaseAudioContext","BatteryManager","BeforeInstallPromptEvent","BeforeUnloadEvent","BiquadFilterNode","BlobEvent","BrowserCaptureMediaStreamTrack","ByteLengthQueuingStrategy","CDATASection","CSPViolationReportBody","CSSAnimation","CSSConditionRule","CSSContainerRule","CSSCounterStyleRule","CSSFontFaceRule","CSSFontFeatureValuesRule","CSSFontPaletteValuesRule","CSSFunctionDeclarations","CSSFunctionDescriptors","CSSFunctionRule","CSSGroupingRule","CSSImageValue","CSSImportRule","CSSKeyframeRule","CSSKeyframesRule","CSSKeywordValue","CSSLayerBlockRule","CSSLayerStatementRule","CSSMarginRule","CSSMathClamp","CSSMathInvert","CSSMathMax","CSSMathMin","CSSMathNegate","CSSMathProduct","CSSMathSum","CSSMathValue","CSSMatrixComponent","CSSMediaRule","CSSNamespaceRule","CSSNestedDeclarations","CSSNumericArray","CSSNumericValue","CSSPageRule","CSSPerspective","CSSPositionTryDescriptors","CSSPositionTryRule","CSSPositionValue","CSSPropertyRule","CSSRotate","CSSRule","CSSRuleList","CSSScale","CSSScopeRule","CSSSkew","CSSSkewX","CSSSkewY","CSSStartingStyleRule","CSSStyleDeclaration","CSSStyleRule","CSSStyleSheet","CSSStyleValue","CSSSupportsRule","CSSTransformComponent","CSSTransformValue","CSSTransition","CSSTranslate","CSSUnitValue","CSSUnparsedValue","CSSVariableReferenceValue","CSSViewTransitionRule","Cache","CacheStorage","CanvasCaptureMediaStreamTrack","CanvasGradient","CanvasPattern","CaptureController","CaretPosition","ChannelMergerNode","ChannelSplitterNode","ChapterInformation","CharacterBoundsUpdateEvent","CharacterData","Clipboard","ClipboardChangeEvent","ClipboardEvent","ClipboardItem","CloseEvent","CloseWatcher","CommandEvent","CompositionEvent","CompressionStream","ConstantSourceNode","ContentVisibilityAutoStateChangeEvent","ConvolverNode","CookieChangeEvent","CookieStore","CookieStoreManager","CountQueuingStrategy","CrashReportContext","CreateMonitor","Credential","CredentialsContainer","CropTarget","CustomElementRegistry","CustomStateSet","DOMError","DOMImplementation","DOMMatrix","DOMMatrixReadOnly","DOMParser","DOMPoint","DOMPointReadOnly","DOMQuad","DOMRect","DOMRectList","DOMRectReadOnly","DOMStringList","DOMStringMap","DOMTokenList","DataTransfer","DataTransferItem","DataTransferItemList","DecompressionStream","DelayNode","DelegatedInkTrailPresenter","DeviceMotionEvent","DeviceMotionEventAcceleration","DeviceMotionEventRotationRate","DeviceOrientationEvent","DevicePosture","DigitalCredential","DisposableStack","DocumentPictureInPicture","DocumentPictureInPictureEvent","DocumentTimeline","DocumentType","DragEvent","DynamicsCompressorNode","EditContext","ElementInternals","EncodedAudioChunk","EncodedVideoChunk","ErrorEvent","EventCounts","EventSource","External","FeaturePolicy","FederatedCredential","Fence","FencedFrameConfig","FetchLaterResult","FileList","FileSystemDirectoryHandle","FileSystemFileHandle","FileSystemHandle","FileSystemObserver","FileSystemWritableFileStream","Float16Array","FontData","FontFace","FontFaceSetLoadEvent","FormDataEvent","FragmentDirective","GPU","GPUAdapter","GPUAdapterInfo","GPUBindGroup","GPUBindGroupLayout","GPUBuffer","GPUCanvasContext","GPUCommandBuffer","GPUCommandEncoder","GPUCompilationInfo","GPUCompilationMessage","GPUComputePassEncoder","GPUComputePipeline","GPUDevice","GPUDeviceLostInfo","GPUError","GPUExternalTexture","GPUInternalError","GPUOutOfMemoryError","GPUPipelineError","GPUPipelineLayout","GPUQuerySet","GPUQueue","GPURenderBundle","GPURenderBundleEncoder","GPURenderPassEncoder","GPURenderPipeline","GPUSampler","GPUShaderModule","GPUSupportedFeatures","GPUSupportedLimits","GPUTexture","GPUTextureView","GPUUncapturedErrorEvent","GPUValidationError","GainNode","Gamepad","GamepadButton","GamepadEvent","GamepadHapticActuator","Geolocation","GeolocationCoordinates","GeolocationPosition","GeolocationPositionError","GravitySensor","Gyroscope","HID","HIDConnectionEvent","HIDDevice","HIDInputReportEvent","HTMLAllCollection","HTMLBaseElement","HTMLCollection","HTMLDListElement","HTMLDataElement","HTMLDirectoryElement","HTMLDocument","HTMLFencedFrameElement","HTMLFontElement","HTMLFormControlsCollection","HTMLFrameElement","HTMLFrameSetElement","HTMLGeolocationElement","HTMLMarqueeElement","HTMLMenuElement","HTMLOptionsCollection","HTMLParamElement","HTMLSelectedContentElement","HTMLTableCaptionElement","HTMLTableColElement","HTMLTrackElement","HashChangeEvent","Highlight","HighlightRegistry","IDBCursor","IDBCursorWithValue","IDBDatabase","IDBFactory","IDBIndex","IDBKeyRange","IDBObjectStore","IDBOpenDBRequest","IDBRecord","IDBRequest","IDBTransaction","IDBVersionChangeEvent","IIRFilterNode","IdentityCredential","IdentityCredentialError","IdentityProvider","IdleDeadline","IdleDetector","ImageBitmap","ImageBitmapRenderingContext","ImageCapture","ImageData","ImageDecoder","ImageTrack","ImageTrackList","Ink","InputDeviceCapabilities","InputDeviceInfo","IntegrityViolationReportBody","InterestEvent","IntersectionObserverEntry","Keyboard","KeyboardLayoutMap","KeyframeEffect","LanguageDetector","LanguageModel","LargestContentfulPaint","LaunchParams","LaunchQueue","LayoutShift","LayoutShiftAttribution","LinearAccelerationSensor","Lock","LockManager","MIDIAccess","MIDIConnectionEvent","MIDIInput","MIDIInputMap","MIDIMessageEvent","MIDIOutput","MIDIOutputMap","MIDIPort","MathMLElement","MediaCapabilities","MediaDeviceInfo","MediaDevices","MediaElementAudioSourceNode","MediaEncryptedEvent","MediaError","MediaKeyMessageEvent","MediaKeySession","MediaKeyStatusMap","MediaKeySystemAccess","MediaKeys","MediaList","MediaMetadata","MediaQueryList","MediaQueryListEvent","MediaRecorder","MediaSession","MediaSource","MediaSourceHandle","MediaStream","MediaStreamAudioDestinationNode","MediaStreamAudioSourceNode","MediaStreamEvent","MediaStreamTrack","MediaStreamTrackAudioStats","MediaStreamTrackEvent","MediaStreamTrackGenerator","MediaStreamTrackProcessor","MediaStreamTrackVideoStats","MutationRecord","NamedNodeMap","NavigateEvent","Navigation","NavigationActivation","NavigationCurrentEntryChangeEvent","NavigationDestination","NavigationHistoryEntry","NavigationPrecommitController","NavigationPreloadManager","NavigationTransition","NavigatorLogin","NavigatorManagedData","NavigatorUAData","NetworkInformation","NodeList","NotRestoredReasonDetails","NotRestoredReasons","Notification","OTPCredential","Observable","OfflineAudioCompletionEvent","OffscreenCanvasRenderingContext2D","Option","OrientationSensor","Origin","OscillatorNode","OverconstrainedError","PageRevealEvent","PageSwapEvent","PageTransitionEvent","PannerNode","PasswordCredential","Path2D","PaymentAddress","PaymentManager","PaymentMethodChangeEvent","PaymentRequest","PaymentRequestUpdateEvent","PaymentResponse","PerformanceElementTiming","PerformanceEntry","PerformanceEventTiming","PerformanceLongAnimationFrameTiming","PerformanceLongTaskTiming","PerformanceMark","PerformanceMeasure","PerformanceNavigationTiming","PerformanceObserverEntryList","PerformancePaintTiming","PerformanceResourceTiming","PerformanceScriptTiming","PerformanceServerTiming","PerformanceTimingConfidence","PeriodicSyncManager","PeriodicWave","PermissionStatus","Permissions","PictureInPictureEvent","PictureInPictureWindow","PopStateEvent","Presentation","PresentationAvailability","PresentationConnection","PresentationConnectionAvailableEvent","PresentationConnectionCloseEvent","PresentationConnectionList","PresentationReceiver","PresentationRequest","PressureObserver","PressureRecord","ProcessingInstruction","Profiler","ProgressEvent","PromiseRejectionEvent","ProtectedAudience","PublicKeyCredential","PushManager","PushSubscription","PushSubscriptionOptions","QuotaExceededError","RTCCertificate","RTCDTMFSender","RTCDTMFToneChangeEvent","RTCDataChannel","RTCDataChannelEvent","RTCDtlsTransport","RTCEncodedAudioFrame","RTCEncodedVideoFrame","RTCError","RTCErrorEvent","RTCIceCandidate","RTCIceTransport","RTCPeerConnectionIceErrorEvent","RTCPeerConnectionIceEvent","RTCRtpReceiver","RTCRtpScriptTransform","RTCRtpSender","RTCRtpTransceiver","RTCSctpTransport","RTCSessionDescription","RTCStatsReport","RTCTrackEvent","RadioNodeList","Range","ReadableByteStreamController","ReadableStreamBYOBReader","ReadableStreamBYOBRequest","ReadableStreamDefaultController","ReadableStreamDefaultReader","RelativeOrientationSensor","RemotePlayback","ReportBody","ReportingObserver","ResizeObserverEntry","ResizeObserverSize","RestrictionTarget","SVGAElement","SVGAngle","SVGAnimateElement","SVGAnimateMotionElement","SVGAnimateTransformElement","SVGAnimatedAngle","SVGAnimatedBoolean","SVGAnimatedEnumeration","SVGAnimatedInteger","SVGAnimatedLength","SVGAnimatedLengthList","SVGAnimatedNumber","SVGAnimatedNumberList","SVGAnimatedPreserveAspectRatio","SVGAnimatedRect","SVGAnimatedString","SVGAnimatedTransformList","SVGAnimationElement","SVGCircleElement","SVGClipPathElement","SVGComponentTransferFunctionElement","SVGDefsElement","SVGDescElement","SVGElement","SVGEllipseElement","SVGFEBlendElement","SVGFEColorMatrixElement","SVGFEComponentTransferElement","SVGFECompositeElement","SVGFEConvolveMatrixElement","SVGFEDiffuseLightingElement","SVGFEDisplacementMapElement","SVGFEDistantLightElement","SVGFEDropShadowElement","SVGFEFloodElement","SVGFEFuncAElement","SVGFEFuncBElement","SVGFEFuncGElement","SVGFEFuncRElement","SVGFEGaussianBlurElement","SVGFEImageElement","SVGFEMergeElement","SVGFEMergeNodeElement","SVGFEMorphologyElement","SVGFEOffsetElement","SVGFEPointLightElement","SVGFESpecularLightingElement","SVGFESpotLightElement","SVGFETileElement","SVGFETurbulenceElement","SVGFilterElement","SVGForeignObjectElement","SVGGElement","SVGGeometryElement","SVGGradientElement","SVGGraphicsElement","SVGImageElement","SVGLength","SVGLengthList","SVGLineElement","SVGLinearGradientElement","SVGMPathElement","SVGMarkerElement","SVGMaskElement","SVGMatrix","SVGMetadataElement","SVGNumber","SVGNumberList","SVGPathElement","SVGPatternElement","SVGPoint","SVGPointList","SVGPolygonElement","SVGPolylineElement","SVGPreserveAspectRatio","SVGRadialGradientElement","SVGRect","SVGRectElement","SVGSVGElement","SVGScriptElement","SVGSetElement","SVGStopElement","SVGStringList","SVGStyleElement","SVGSwitchElement","SVGSymbolElement","SVGTSpanElement","SVGTextContentElement","SVGTextElement","SVGTextPathElement","SVGTextPositioningElement","SVGTitleElement","SVGTransform","SVGTransformList","SVGUnitTypes","SVGUseElement","SVGViewElement","Sanitizer","Scheduler","Scheduling","ScreenDetailed","ScreenDetails","ScreenOrientation","ScriptProcessorNode","ScrollTimeline","SecurityPolicyViolationEvent","Selection","Sensor","SensorErrorEvent","Serial","SerialPort","ServiceWorker","ServiceWorkerContainer","ServiceWorkerRegistration","SharedStorage","SharedStorageAppendMethod","SharedStorageClearMethod","SharedStorageDeleteMethod","SharedStorageModifierMethod","SharedStorageSetMethod","SharedStorageWorklet","SnapEvent","SourceBuffer","SourceBufferList","SpeechGrammar","SpeechGrammarList","SpeechRecognition","SpeechRecognitionErrorEvent","SpeechRecognitionEvent","SpeechRecognitionPhrase","SpeechSynthesis","SpeechSynthesisErrorEvent","SpeechSynthesisEvent","SpeechSynthesisUtterance","SpeechSynthesisVoice","StaticRange","StereoPannerNode","Storage","StorageBucket","StorageBucketManager","StorageEvent","StorageManager","StylePropertyMap","StylePropertyMapReadOnly","StyleSheet","StyleSheetList","SubmitEvent","Subscriber","Summarizer","SuppressedError","SyncManager","TaskAttributionTiming","TaskController","TaskPriorityChangeEvent","TaskSignal","TextDecoderStream","TextEncoderStream","TextEvent","TextFormat","TextFormatUpdateEvent","TextMetrics","TextTrack","TextTrackCue","TextTrackCueList","TextTrackList","TextUpdateEvent","TimeRanges","TimelineTrigger","TimelineTriggerRange","TimelineTriggerRangeList","ToggleEvent","Touch","TouchEvent","TouchList","TrackEvent","TransformStreamDefaultController","TransitionEvent","Translator","TrustedHTML","TrustedScript","TrustedScriptURL","TrustedTypePolicy","TrustedTypePolicyFactory","URLPattern","USB","USBAlternateInterface","USBConfiguration","USBConnectionEvent","USBDevice","USBEndpoint","USBInTransferResult","USBInterface","USBIsochronousInTransferPacket","USBIsochronousInTransferResult","USBIsochronousOutTransferPacket","USBIsochronousOutTransferResult","USBOutTransferResult","UserActivation","VTTCue","ValidityState","VideoColorSpace","VideoDecoder","VideoEncoder","VideoFrame","VideoPlaybackQuality","ViewTimeline","ViewTransition","ViewTransitionTypeSet","Viewport","VirtualKeyboard","VirtualKeyboardGeometryChangeEvent","VisibilityStateEntry","VisualViewport","WGSLLanguageFeatures","WakeLock","WakeLockSentinel","WaveShaperNode","WebGLContextEvent","WebGLObject","WebGLQuery","WebGLSampler","WebGLShaderPrecisionFormat","WebGLSync","WebGLTransformFeedback","WebKitCSSMatrix","WebKitMutationObserver","WebSocketError","WebSocketStream","WebTransport","WebTransportBidirectionalStream","WebTransportDatagramDuplexStream","WebTransportError","WheelEvent","Window","WindowControlsOverlay","WindowControlsOverlayGeometryChangeEvent","Worklet","WritableStreamDefaultController","WritableStreamDefaultWriter","XMLDocument","XMLHttpRequestEventTarget","XMLHttpRequestUpload","XMLSerializer","XPathEvaluator","XPathExpression","XPathResult","XRAnchor","XRAnchorSet","XRBoundedReferenceSpace","XRCPUDepthInformation","XRCamera","XRCompositionLayer","XRCubeLayer","XRCylinderLayer","XRDOMOverlayState","XRDepthInformation","XREquirectLayer","XRFrame","XRHand","XRHitTestResult","XRHitTestSource","XRInputSource","XRInputSourceArray","XRInputSourceEvent","XRInputSourcesChangeEvent","XRJointPose","XRJointSpace","XRLayer","XRLayerEvent","XRLightEstimate","XRLightProbe","XRPlane","XRPlaneSet","XRPose","XRProjectionLayer","XRQuadLayer","XRRay","XRReferenceSpace","XRReferenceSpaceEvent","XRRenderState","XRRigidTransform","XRSession","XRSessionEvent","XRSpace","XRSubImage","XRSystem","XRTransientInputHitTestResult","XRTransientInputHitTestSource","XRView","XRViewerPose","XRViewport","XRVisibilityMaskChangeEvent","XRWebGLBinding","XRWebGLDepthInformation","XRWebGLLayer","XRWebGLSubImage","XSLTProcessor","alert","blur","captureEvents","close","confirm","createImageBitmap","fetchLater","find","focus","getScreenDetails","getSelection","moveBy","moveTo","open","postMessage","print","prompt","queryLocalFonts","releaseEvents","resizeBy","resizeTo","scroll","scrollBy","scrollTo","showDirectoryPicker","showOpenFilePicker","showSaveFilePicker","stop","webkitCancelAnimationFrame","webkitMediaStream","webkitRequestAnimationFrame","webkitRequestFileSystem","webkitResolveLocalFileSystemURL","webkitSpeechGrammar","webkitSpeechGrammarList","webkitSpeechRecognition","webkitSpeechRecognitionError","webkitSpeechRecognitionEvent","webkitURL","when"]},"document":{"#1":["DOCUMENT_POSITION_DISCONNECTED","childElementCount"],"#2":["DOCUMENT_POSITION_PRECEDING"],"#4":["DOCUMENT_POSITION_FOLLOWING"],"#5":["ENTITY_REFERENCE_NODE"],"#6":["ENTITY_NODE"],"#8":["DOCUMENT_POSITION_CONTAINS"],"#12":["NOTATION_NODE"],"#16":["DOCUMENT_POSITION_CONTAINED_BY"],"#32":["DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC"],"o":["applets","children","customElementRegistry","doctype","featurePolicy","firstElementChild","fonts","fragmentDirective","implementation","lastElementChild","scrollingElement","timeline"],"F":["fullscreen","prerendering","wasDiscarded","webkitHidden","webkitIsFullScreen","xmlStandalone"],"x":["activeViewTransition","fullscreenElement","nodeValue","onabort","onanimationcancel","onanimationend","onanimationiteration","onanimationstart","onauxclick","onbeforecopy","onbeforecut","onbeforeinput","onbeforematch","onbeforepaste","onbeforetoggle","onbeforexrselect","onblur","oncancel","oncanplay","oncanplaythrough","onchange","onclick","onclose","oncommand","oncontentvisibilityautostatechange","oncontextlost","oncontextmenu","oncontextrestored","oncopy","oncuechange","oncut","ondblclick","ondrag","ondragend","ondragenter","ondragleave","ondragover","ondragstart","ondrop","ondurationchange","onemptied","onended","onerror","onfocus","onformdata","onfreeze","onfullscreenchange","onfullscreenerror","ongotpointercapture","oninput","oninvalid","onkeydown","onkeypress","onkeyup","onload","onloadeddata","onloadedmetadata","onloadstart","onlostpointercapture","onmousedown","onmouseenter","onmouseleave","onmousemove","onmouseout","onmouseover","onmouseup","onmousewheel","onpaste","onpause","onplay","onplaying","onpointercancel","onpointerdown","onpointerenter","onpointerleave","onpointerlockchange","onpointerlockerror","onpointermove","onpointerout","onpointerover","onpointerrawupdate","onpointerup","onprerenderingchange","onprogress","onratechange","onreadystatechange","onreset","onresize","onresume","onscroll","onscrollend","onscrollsnapchange","onscrollsnapchanging","onsearch","onsecuritypolicyviolation","onseeked","onseeking","onselect","onselectionchange","onselectstart","onslotchange","onstalled","onsubmit","onsuspend","ontimeupdate","ontoggle","ontransitioncancel","ontransitionend","ontransitionrun","ontransitionstart","onvisibilitychange","onvolumechange","onwaiting","onwebkitanimationend","onwebkitanimationiteration","onwebkitanimationstart","onwebkitfullscreenchange","onwebkitfullscreenerror","onwebkittransitionend","onwheel","parentElement","pictureInPictureElement","pointerLockElement","rootElement","webkitCurrentFullScreenElement","webkitFullscreenElement","xmlEncoding","xmlVersion"],"u":["all"],"T":["fullscreenEnabled","pictureInPictureEnabled","webkitFullscreenEnabled"],"N":["adoptNode","append","ariaNotify","browsingTopics","captureEvents","caretPositionFromPoint","caretRangeFromPoint","clear","compareDocumentPosition","createAttribute","createAttributeNS","createCDATASection","createExpression","createNSResolver","createProcessingInstruction","createRange","evaluate","execCommand","exitFullscreen","exitPictureInPicture","exitPointerLock","getAnimations","getElementsByName","getElementsByTagNameNS","getSelection","hasFocus","hasPrivateToken","hasRedemptionRecord","hasStorageAccess","hasUnpartitionedCookieAccess","importNode","isDefaultNamespace","isEqualNode","isSameNode","lookupNamespaceURI","lookupPrefix","moveBefore","normalize","prepend","queryCommandEnabled","queryCommandIndeterm","queryCommandState","queryCommandSupported","queryCommandValue","releaseEvents","replaceChildren","requestStorageAccess","requestStorageAccessFor","startViewTransition","webkitCancelFullScreen","webkitExitFullscreen","when"]},"navigator":{"o":["clipboard","credentials","devicePosture","geolocation","gpu","hid","ink","keyboard","locks","login","managed","mediaCapabilities","mediaSession","presentation","protectedAudience","scheduling","serial","storageBuckets","usb","virtualKeyboard","wakeLock","webkitPersistentStorage","webkitTemporaryStorage","windowControlsOverlay","xr"],"F":["deprecatedRunAdAuctionEnforcesKAnonymity"],"N":["adAuctionComponents","canLoadAdAuctionFencedFrame","clearOriginJoinedAdInterestGroups","createAuctionNonce","deprecatedReplaceInURN","deprecatedURNToURL","getGamepads","getInstalledRelatedApps","getInterestGroupAdAuctionData","getUserMedia","javaEnabled","joinAdInterestGroup","leaveAdInterestGroup","registerProtocolHandler","requestMIDIAccess","requestMediaKeySystemAccess","runAdAuction","unregisterProtocolHandler","updateAdInterestGroups","webkitGetUserMedia"]},"location":{"o":["ancestorOrigins"],"N":["valueOf"]},"screen":{"x":["onchange"],"N":["addEventListener","dispatchEvent","removeEventListener","when"]}};
   const native = globalThis.__pt_native || ((f) => f);
   // A stub must be a strict function: a sloppy one has own `arguments` and
@@ -6385,7 +6601,7 @@ const WEB_SURFACE_TEMPLATE: &str = r##"(() => {
     if (cat === 'F') return false;
     if (cat === 'D') return Array;
     if (cat === 'p') { const p = Promise.resolve(); p.catch(() => {}); return p; }
-    if (cat.charCodeAt(0) === 35) return Number(cat.slice(1));  // '#12' → 12
+    if (__s_charCodeAt(cat, 0) === 35) return Number(__s_slice(cat, 1));  // '#12' → 12
     return undefined;
   };
   // Pages see SharedArrayBuffer only under cross-origin isolation, and we
@@ -6447,6 +6663,19 @@ const WEB_SURFACE_TEMPLATE: &str = r##"(() => {
 /// string is built exactly as V8 would, including calling the page's own
 /// `Error.prepareStackTrace` with the same list minus our frames.
 const STACK_TEMPLATE: &str = r##"(() => {
+  // String methods taken before any page script. A page may replace them
+  // (Klarna replaces `trim`); the engine must not call the page's copies.
+  // Other receivers keep their own method, errors included.
+  const __sm = (f, m) => {
+    const call = Function.prototype.call.bind(f);
+    return function (s, a, b) {
+      const n = arguments.length;
+      if (typeof s === 'string') return n === 1 ? call(s) : n === 2 ? call(s, a) : call(s, a, b);
+      return n === 1 ? s[m]() : n === 2 ? s[m](a) : s[m](a, b);
+    };
+  };
+  const __s_replace = __sm(String.prototype.replace, 'replace'),
+    __s_slice = __sm(String.prototype.slice, 'slice');
   const ours = (f) => {
     try {
       // URL rather than resource name: an inline script has no name, and
@@ -6521,7 +6750,7 @@ const STACK_TEMPLATE: &str = r##"(() => {
         keep = [];
         for (let i = 0; i < sites.length; i++) if (!hidden[i]) keep.push(swap[i] || sites[i]);
         // Captured with headroom (`__pt_mkErr`): emit no more than the page's limit.
-        try { const lim = Error.stackTraceLimit; if (typeof lim === 'number' && keep.length > lim) keep = keep.slice(0, Math.max(0, Math.floor(lim))); } catch (e) {}
+        try { const lim = Error.stackTraceLimit; if (typeof lim === 'number' && keep.length > lim) keep = __s_slice(keep, 0, Math.max(0, Math.floor(lim))); } catch (e) {}
       } catch (e) {}
     }
     try {
@@ -6536,7 +6765,7 @@ const STACK_TEMPLATE: &str = r##"(() => {
       let msg = m === undefined || m === null || m === '' ? '' : String(m);
       // The browser's binding `TypeError` stack header lacks the
       // "Failed to execute 'x' on 'Y': " prefix; it stays only in `message`.
-      if (name === 'TypeError') msg = msg.replace(/^Failed to (?:execute '[^']*' on '[^']*'|construct '[^']*'): /, '');
+      if (name === 'TypeError') msg = __s_replace(msg, /^Failed to (?:execute '[^']*' on '[^']*'|construct '[^']*'): /, '');
       head = !name ? msg : (!msg ? name : name + ': ' + msg);
     } catch (e) {}
     let out = head;
@@ -6548,6 +6777,22 @@ const STACK_TEMPLATE: &str = r##"(() => {
 })();"##;
 
 const PERFORMANCE_TEMPLATE: &str = r#"(() => {
+  // String methods taken before any page script. A page may replace them
+  // (Klarna replaces `trim`); the engine must not call the page's copies.
+  // Other receivers keep their own method, errors included.
+  const __sm = (f, m) => {
+    const call = Function.prototype.call.bind(f);
+    return function (s, a, b) {
+      const n = arguments.length;
+      if (typeof s === 'string') return n === 1 ? call(s) : n === 2 ? call(s, a) : call(s, a, b);
+      return n === 1 ? s[m]() : n === 2 ? s[m](a) : s[m](a, b);
+    };
+  };
+  const __s_slice = __sm(String.prototype.slice, 'slice'),
+    __s_indexOf = __sm(String.prototype.indexOf, 'indexOf'),
+    __s_toLowerCase = __sm(String.prototype.toLowerCase, 'toLowerCase'),
+    __s_trim = __sm(String.prototype.trim, 'trim'),
+    __s_split = __sm(String.prototype.split, 'split');
   // The browser's time origin is not an integer either: it comes from the
   // same clock as `now()` and carries fractions of a millisecond.
   const originNow = () => {
@@ -6707,7 +6952,7 @@ const PERFORMANCE_TEMPLATE: &str = r#"(() => {
       for (const p of chain) {
         for (const k of Object.getOwnPropertyNames(p)) {
           // Chrome's JSON for marks and measures omits `detail`.
-          if (k === 'constructor' || k === 'toJSON' || k === 'detail' || k.slice(0, 4) === '__pt') continue;
+          if (k === 'constructor' || k === 'toJSON' || k === 'detail' || __s_slice(k, 0, 4) === '__pt') continue;
           const d = Object.getOwnPropertyDescriptor(p, k);
           if (!d || !d.get || k in o) continue;
           try { o[k] = this[k]; } catch (e) {}
@@ -6735,7 +6980,7 @@ const PERFORMANCE_TEMPLATE: &str = r#"(() => {
   // `text/javascript`, JSON `application/json`, SVG and XML their own, other
   // supported types the essence without parameters, unknown ones empty.
   const __ptMinimizeMime = (raw) => {
-    const t = String(raw || '').split(';')[0].trim().toLowerCase();
+    const t = __s_toLowerCase(__s_trim(__s_split(String(raw || ''), ';')[0]));
     if (!t) return '';
     if (/^(application|text)\/(x-)?(java|ecma)script$|^text\/(jscript|livescript|x-javascript1\.\d)$|^text\/javascript1\.\d$/.test(t)) return 'text/javascript';
     if (t === 'application/json' || t === 'text/json' || /\+json$/.test(t)) return 'application/json';
@@ -6803,7 +7048,7 @@ const PERFORMANCE_TEMPLATE: &str = r#"(() => {
         const keys = Object.keys(bag);
         for (const k of keys) __pt_write(o, k, bag[k]);
         const had = ENTRY_ORDER.get(o);
-        ENTRY_ORDER.set(o, had ? had.concat(keys.filter((k) => had.indexOf(k) < 0)) : keys);
+        ENTRY_ORDER.set(o, had ? had.concat(keys.filter((k) => __s_indexOf(had, k) < 0)) : keys);
       };
       // Cross-origin resource without `Timing-Allow-Origin` for our origin: the
       // browser hides sizes, status, protocol and intermediate marks (TAO).
@@ -6813,9 +7058,9 @@ const PERFORMANCE_TEMPLATE: &str = r#"(() => {
           const u = new URL(String(r.name || ''), (globalThis.location && location.href) || undefined);
           const mine = (globalThis.location && location.origin) || 'null';
           if (u.origin === mine) return true;
-          const h = String(r.tao == null ? '' : r.tao).trim();
+          const h = __s_trim(String(r.tao == null ? '' : r.tao));
           if (!h) return false;
-          return h.split(',').map((x) => x.trim()).some((x) => x === '*' || x.toLowerCase() === mine.toLowerCase());
+          return __s_split(h, ',').map((x) => __s_trim(x)).some((x) => x === '*' || __s_toLowerCase(x) === __s_toLowerCase(mine));
         } catch (e) { return true; }
       })();
       put(e, {
@@ -6912,7 +7157,7 @@ const PERFORMANCE_TEMPLATE: &str = r#"(() => {
   const observers = [];
   class PerformanceObserverEntryList {
     constructor(list) { Object.defineProperty(this, '__ptList', { value: list, enumerable: false }); }
-    getEntries() { return this.__ptList.slice(); }
+    getEntries() { return __s_slice(this.__ptList); }
     getEntriesByType(t) { return this.__ptList.filter((e) => e.entryType === String(t)); }
     getEntriesByName(n, t) { return this.__ptList.filter((e) => e.name === String(n) && (!t || e.entryType === String(t))); }
   }
@@ -6928,17 +7173,17 @@ const PERFORMANCE_TEMPLATE: &str = r#"(() => {
       opts = opts || {};
       const types = opts.entryTypes ? Array.from(opts.entryTypes).map(String)
                   : opts.type ? [String(opts.type)] : [];
-      for (const t of types) if (this.__ptTypes.indexOf(t) < 0) this.__ptTypes.push(t);
+      for (const t of types) if (__s_indexOf(this.__ptTypes, t) < 0) this.__ptTypes.push(t);
       if (!this.__ptOn) { this.__ptOn = true; observers.push(this); }
       // `buffered`: what happened before subscribing.
       if (opts.buffered) {
-        const past = entries.filter((e) => this.__ptTypes.indexOf(e.entryType) >= 0);
+        const past = entries.filter((e) => __s_indexOf(this.__ptTypes, e.entryType) >= 0);
         if (past.length) { this.__ptQueue.push(...past); __ptFlush(this); }
       }
     }
     disconnect() {
       this.__ptOn = false; __pt_write(this.__ptQueue, 'length', 0);
-      const i = observers.indexOf(this); if (i >= 0) observers.splice(i, 1);
+      const i = __s_indexOf(observers, this); if (i >= 0) observers.splice(i, 1);
     }
     takeRecords() { return this.__ptQueue.splice(0); }
   }
@@ -6960,8 +7205,8 @@ const PERFORMANCE_TEMPLATE: &str = r#"(() => {
     });
   };
   const __ptNotify = (fresh) => {
-    for (const obs of observers.slice()) {
-      const mine = fresh.filter((e) => obs.__ptTypes.indexOf(e.entryType) >= 0);
+    for (const obs of __s_slice(observers)) {
+      const mine = fresh.filter((e) => __s_indexOf(obs.__ptTypes, e.entryType) >= 0);
       if (mine.length) { obs.__ptQueue.push(...mine); __ptFlush(obs); }
     }
   };
@@ -6989,18 +7234,18 @@ const PERFORMANCE_TEMPLATE: &str = r#"(() => {
             // <script>'s text; our lines count from the document markup start.
             const m = globalThis.document && document.__ptMarkup;
             if (typeof m === 'string' && String(loc[0]) === String(document.URL)) {
-              const lineOf = (idx) => { let n = 0; for (let k = m.indexOf('\n'); k >= 0 && k < idx; k = m.indexOf('\n', k + 1)) n++; return n; };
+              const lineOf = (idx) => { let n = 0; for (let k = __s_indexOf(m, '\n'); k >= 0 && k < idx; k = __s_indexOf(m, '\n', k + 1)) n++; return n; };
               let best = null;
               for (const el of Array.from(document.scripts || [])) {
                 const t = el.textContent; if (!t || el.getAttribute('src')) continue;
-                const idx = m.indexOf(t); if (idx < 0) continue;
+                const idx = __s_indexOf(m, t); if (idx < 0) continue;
                 const ln = lineOf(idx);
                 if (ln <= loc[1] && (!best || ln >= best.ln)) best = { idx, ln };
               }
               if (best) {
                 let abs;
                 if (loc[1] === best.ln) abs = best.idx + loc[2];
-                else { let off = 0, line = 0; while (line < loc[1]) { const nl = m.indexOf('\n', off); if (nl < 0) break; off = nl + 1; line++; } abs = off + loc[2]; }
+                else { let off = 0, line = 0; while (line < loc[1]) { const nl = __s_indexOf(m, '\n', off); if (nl < 0) break; off = nl + 1; line++; } abs = off + loc[2]; }
                 pos = abs - best.idx;
               }
             }
@@ -7031,7 +7276,7 @@ const PERFORMANCE_TEMPLATE: &str = r#"(() => {
     now() { return nowMs(); }
     // By start time, as in Chrome (resource entries arrive after they
     // started; the sort is stable).
-    getEntries() { return __ptByStart(entries.slice()); }
+    getEntries() { return __ptByStart(__s_slice(entries)); }
     getEntriesByType(type) { return __ptByStart(entries.filter((e) => e.entryType === String(type))); }
     getEntriesByName(name, type) {
       return __ptByStart(entries.filter((e) => e.name === String(name) && (!type || e.entryType === String(type))));
@@ -7121,6 +7366,21 @@ const PERFORMANCE_TEMPLATE: &str = r#"(() => {
 /// Results are genuine, so a page that digests a known input and checks the answer
 /// sees what Chrome would.
 const CRYPTO_TEMPLATE: &str = r#"(() => {
+  // String methods taken before any page script. A page may replace them
+  // (Klarna replaces `trim`); the engine must not call the page's copies.
+  // Other receivers keep their own method, errors included.
+  const __sm = (f, m) => {
+    const call = Function.prototype.call.bind(f);
+    return function (s, a, b) {
+      const n = arguments.length;
+      if (typeof s === 'string') return n === 1 ? call(s) : n === 2 ? call(s, a) : call(s, a, b);
+      return n === 1 ? s[m]() : n === 2 ? s[m](a) : s[m](a, b);
+    };
+  };
+  const __s_slice = __sm(String.prototype.slice, 'slice'),
+    __s_padStart = __sm(String.prototype.padStart, 'padStart'),
+    __s_toLowerCase = __sm(String.prototype.toLowerCase, 'toLowerCase'),
+    __s_toUpperCase = __sm(String.prototype.toUpperCase, 'toUpperCase');
   const N = globalThis;
   const u8 = (d) => {
     if (d instanceof Uint8Array) return d;
@@ -7129,10 +7389,10 @@ const CRYPTO_TEMPLATE: &str = r#"(() => {
     return new Uint8Array(0);
   };
   // WebCrypto hands back ArrayBuffers, not views.
-  const buf = (a) => a.buffer.slice(a.byteOffset, a.byteOffset + a.byteLength);
+  const buf = (a) => __s_slice(a.buffer, a.byteOffset, a.byteOffset + a.byteLength);
   const fail = (name, msg) => { const e = new Error(msg || name); e.name = name; return Promise.reject(e); };
-  const nameOf = (a) => String(typeof a === 'string' ? a : (a && a.name) || '').toUpperCase();
-  const hashOf = (a) => { const h = a && a.hash; return String(typeof h === 'string' ? h : (h && h.name) || 'SHA-256').toUpperCase(); };
+  const nameOf = (a) => __s_toUpperCase(String(typeof a === 'string' ? a : (a && a.name) || ''));
+  const hashOf = (a) => { const h = a && a.hash; return __s_toUpperCase(String(typeof h === 'string' ? h : (h && h.name) || 'SHA-256')); };
   const norm = (a) => {
     const o = { name: nameOf(a) };
     if (a && typeof a === 'object') {
@@ -7158,7 +7418,7 @@ const CRYPTO_TEMPLATE: &str = r#"(() => {
 
   const mkKey = (raw, algorithm, extractable, usages) => {
     const k = new CryptoKey();
-    KEYS.set(k, { raw, algorithm, extractable: !!extractable, usages: (usages || []).slice(), type: 'secret' });
+    KEYS.set(k, { raw, algorithm, extractable: !!extractable, usages: __s_slice(usages || []), type: 'secret' });
     return k;
   };
   const raw = (k) => { const r = KEYS.get(k); return r ? r.raw : null; };
@@ -7169,13 +7429,13 @@ const CRYPTO_TEMPLATE: &str = r#"(() => {
       return out ? Promise.resolve(buf(out)) : fail('NotSupportedError', 'Unrecognized digest algorithm');
     }
     importKey(format, keyData, algorithm, extractable, usages) {
-      if (String(format).toLowerCase() !== 'raw') return fail('NotSupportedError', 'Only raw import is supported');
-      return Promise.resolve(mkKey(u8(keyData).slice(), norm(algorithm), extractable, usages));
+      if (__s_toLowerCase(String(format)) !== 'raw') return fail('NotSupportedError', 'Only raw import is supported');
+      return Promise.resolve(mkKey(__s_slice(u8(keyData)), norm(algorithm), extractable, usages));
     }
     exportKey(format, key) {
       const r = KEYS.get(key);
       if (!r) return fail('InvalidAccessError', 'Not a CryptoKey');
-      if (String(format).toLowerCase() !== 'raw') return fail('NotSupportedError', 'Only raw export is supported');
+      if (__s_toLowerCase(String(format)) !== 'raw') return fail('NotSupportedError', 'Only raw export is supported');
       if (!r.extractable) return fail('InvalidAccessError', 'Key is not extractable');
       return Promise.resolve(buf(r.raw));
     }
@@ -7248,8 +7508,8 @@ const CRYPTO_TEMPLATE: &str = r#"(() => {
     randomUUID() {
       const b = __pt_randomBytes(16);
       b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
-      const h = Array.from(b).map((x) => x.toString(16).padStart(2, '0')).join('');
-      return h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' + h.slice(16, 20) + '-' + h.slice(20);
+      const h = Array.from(b).map((x) => __s_padStart(x.toString(16), 2, '0')).join('');
+      return __s_slice(h, 0, 8) + '-' + __s_slice(h, 8, 12) + '-' + __s_slice(h, 12, 16) + '-' + __s_slice(h, 16, 20) + '-' + __s_slice(h, 20);
     }
   }
   Object.defineProperty(Crypto.prototype, 'subtle', {
@@ -7267,6 +7527,28 @@ const CRYPTO_TEMPLATE: &str = r#"(() => {
 })();"#;
 
 const FETCH_TEMPLATE: &str = r#"(() => {
+  // String methods taken before any page script. A page may replace them
+  // (Klarna replaces `trim`); the engine must not call the page's copies.
+  // Other receivers keep their own method, errors included.
+  const __sm = (f, m) => {
+    const call = Function.prototype.call.bind(f);
+    return function (s, a, b) {
+      const n = arguments.length;
+      if (typeof s === 'string') return n === 1 ? call(s) : n === 2 ? call(s, a) : call(s, a, b);
+      return n === 1 ? s[m]() : n === 2 ? s[m](a) : s[m](a, b);
+    };
+  };
+  const __s_indexOf = __sm(String.prototype.indexOf, 'indexOf'),
+    __s_replace = __sm(String.prototype.replace, 'replace'),
+    __s_slice = __sm(String.prototype.slice, 'slice'),
+    __s_toLowerCase = __sm(String.prototype.toLowerCase, 'toLowerCase'),
+    __s_lastIndexOf = __sm(String.prototype.lastIndexOf, 'lastIndexOf'),
+    __s_toUpperCase = __sm(String.prototype.toUpperCase, 'toUpperCase'),
+    __s_charCodeAt = __sm(String.prototype.charCodeAt, 'charCodeAt'),
+    __s_codePointAt = __sm(String.prototype.codePointAt, 'codePointAt'),
+    __s_padStart = __sm(String.prototype.padStart, 'padStart'),
+    __s_trim = __sm(String.prototype.trim, 'trim'),
+    __s_split = __sm(String.prototype.split, 'split');
   let fid = 1;
   const pending = new Map(); // id -> {resolve, reject, url}
   const queue = [];          // [{id, url, method, headers, body}]
@@ -7286,19 +7568,19 @@ const FETCH_TEMPLATE: &str = r#"(() => {
   // lives on `URL.createObjectURL` (see the URL shim); this reads it.
   const localResponse = (url) => {
     const s = String(url);
-    if (s.slice(0, 5) === 'blob:') {
+    if (__s_slice(s, 0, 5) === 'blob:') {
       const b = globalThis.__pt_blobs && globalThis.__pt_blobs.get(s);
       if (!b) return null;
       const body = typeof b.__ptText === 'function' ? b.__ptText() : String(b);
       return { body, type: b.type || '' };
     }
-    if (s.slice(0, 5) === 'data:') {
-      const comma = s.indexOf(',');
+    if (__s_slice(s, 0, 5) === 'data:') {
+      const comma = __s_indexOf(s, ',');
       if (comma < 0) return null;
-      const meta = s.slice(5, comma), payload = s.slice(comma + 1);
+      const meta = __s_slice(s, 5, comma), payload = __s_slice(s, comma + 1);
       try {
         return { body: /;base64/i.test(meta) ? globalThis.atob(payload) : decodeURIComponent(payload),
-                 type: meta.split(';')[0] || 'text/plain' };
+                 type: __s_split(meta, ';')[0] || 'text/plain' };
       } catch (e) { return null; }
     }
     return null;
@@ -7321,7 +7603,7 @@ const FETCH_TEMPLATE: &str = r#"(() => {
     }
     const id = fid++;
     // Implementation trace (`NOKK_TRACE_ENC=1`): the challenge's fetch requests.
-    if (globalThis.__pt_encTrace) { try { (globalThis.__pt_parentConsole || console).error('[fetch] ' + Math.round(performance.now()) + 'ms #' + id + ' ' + (opts.method || 'GET') + ' ' + String(url).slice(0, 120) + ' opts=' + JSON.stringify({ mode: opts.mode, credentials: opts.credentials, cache: opts.cache, redirect: opts.redirect, headers: headerObj(opts.headers), signal: !!opts.signal, keepalive: opts.keepalive })); } catch (e) {} }
+    if (globalThis.__pt_encTrace) { try { (globalThis.__pt_parentConsole || console).error('[fetch] ' + Math.round(performance.now()) + 'ms #' + id + ' ' + (opts.method || 'GET') + ' ' + __s_slice(String(url), 0, 120) + ' opts=' + JSON.stringify({ mode: opts.mode, credentials: opts.credentials, cache: opts.cache, redirect: opts.redirect, headers: headerObj(opts.headers), signal: !!opts.signal, keepalive: opts.keepalive })); } catch (e) {} }
     // The browser turns `cache` into headers: no-cache -> max-age=0,
     // no-store/reload -> no-cache + Pragma. The challenge server sees them.
     const hdrs = headerObj(opts.headers);
@@ -7348,7 +7630,7 @@ const FETCH_TEMPLATE: &str = r#"(() => {
     }
     const req = {
       id, url: String(url),
-      method: (opts.method || 'GET').toUpperCase(),
+      method: __s_toUpperCase(opts.method || 'GET'),
       headers: hdrs,
       // A blob worker's requests carry no referrer.
       noReferrer: !!globalThis.__ptNoReferrer,
@@ -7408,30 +7690,30 @@ const FETCH_TEMPLATE: &str = r#"(() => {
   // protobuf). `body` is then lossy text, as `text()` would decode it.
   globalThis.__pt_fetchResolve = (id, status, statusText, headers, body, finalUrl, bytes64) => {
     const p = pending.get(id); if (!p) return; pending.delete(id);
-    if (globalThis.__pt_encTrace) { try { (globalThis.__pt_parentConsole || console).error('[fetch] ' + Math.round(performance.now()) + 'ms #' + id + ' resp ' + status + ' len=' + (body == null ? 0 : (body.byteLength || body.length || 0)) + ' ' + String(p.url).slice(-60) + ' hdrs=' + JSON.stringify(headers).slice(0, 300) + ((body && (body.byteLength || body.length || 0) < 500) ? ' body=' + JSON.stringify(typeof body === 'string' ? body : new TextDecoder().decode(body)).slice(0, 400) : '')); } catch (e) {} }
-    const lower = {}; for (const k in headers) lower[k.toLowerCase()] = headers[k];
+    if (globalThis.__pt_encTrace) { try { (globalThis.__pt_parentConsole || console).error('[fetch] ' + Math.round(performance.now()) + 'ms #' + id + ' resp ' + status + ' len=' + (body == null ? 0 : (body.byteLength || body.length || 0)) + ' ' + __s_slice(String(p.url), -60) + ' hdrs=' + __s_slice(JSON.stringify(headers), 0, 300) + ((body && (body.byteLength || body.length || 0) < 500) ? ' body=' + __s_slice(JSON.stringify(typeof body === 'string' ? body : new TextDecoder().decode(body)), 0, 400) : '')); } catch (e) {} }
+    const lower = {}; for (const k in headers) lower[__s_toLowerCase(k)] = headers[k];
     const resp = {
       ok: status >= 200 && status < 300, status, statusText: statusText || '',
       url: finalUrl || p.url, redirected: false, type: 'basic', bodyUsed: false, _body: body,
-      _bytes: bytes64 ? Uint8Array.from(globalThis.atob(bytes64), (c) => c.charCodeAt(0)) : null,
+      _bytes: bytes64 ? Uint8Array.from(globalThis.atob(bytes64), (c) => __s_charCodeAt(c, 0)) : null,
       // A real Headers: pages iterate `[...r.headers]` and `for...of`.
       headers: (typeof globalThis.Headers === 'function' ? (() => { try { return new Headers(lower); } catch (e) { return null; } })() : null) || {
-        get: (k) => (k.toLowerCase() in lower ? lower[k.toLowerCase()] : null),
-        has: (k) => k.toLowerCase() in lower,
+        get: (k) => (__s_toLowerCase(k) in lower ? lower[__s_toLowerCase(k)] : null),
+        has: (k) => __s_toLowerCase(k) in lower,
         forEach: (f) => { for (const k in lower) f(lower[k], k); },
         entries: () => Object.entries(lower),
         keys: () => Object.keys(lower),
       },
       text() { this.bodyUsed = true; return Promise.resolve(this._body); },
       json() { this.bodyUsed = true; return Promise.resolve(__ptJSON.parse(this._body)); },
-      arrayBuffer() { this.bodyUsed = true; return Promise.resolve(this._bytes ? this._bytes.slice().buffer : new TextEncoder().encode(this._body).buffer); },
+      arrayBuffer() { this.bodyUsed = true; return Promise.resolve(this._bytes ? __s_slice(this._bytes).buffer : new TextEncoder().encode(this._body).buffer); },
       clone() { return Object.assign({}, this); },
     };
     p.resolve(resp);
   };
   globalThis.__pt_fetchReject = (id, msg) => {
     const p = pending.get(id); if (!p) return; pending.delete(id);
-    if (globalThis.__pt_encTrace) { try { (globalThis.__pt_parentConsole || console).error('[fetch] ' + Math.round(performance.now()) + 'ms #' + id + ' FAIL ' + String(msg).slice(0, 80) + ' ' + String(p.url).slice(-60)); } catch (e) {} }
+    if (globalThis.__pt_encTrace) { try { (globalThis.__pt_parentConsole || console).error('[fetch] ' + Math.round(performance.now()) + 'ms #' + id + ' FAIL ' + __s_slice(String(msg), 0, 80) + ' ' + __s_slice(String(p.url), -60)); } catch (e) {} }
     // Chrome says exactly `Failed to fetch` and nothing else, whatever went
     // wrong underneath. Ours used to append the transport's own words — and a
     // page that stringifies the error sends them onward: Cloudflare's worker
@@ -7482,7 +7764,7 @@ const FETCH_TEMPLATE: &str = r#"(() => {
         const outer = wasOwn ? globalThis.event : undefined;
         if (typeof importScripts === 'undefined') { try { globalThis.event = ev; } catch (x) {} }
         try {
-          for (const e of l.slice()) {
+          for (const e of __s_slice(l)) {
             if (e.once) t.removeEventListener(type, e.fn);
             try { typeof e.fn === 'function' ? e.fn.call(t, ev) : (e.fn.handleEvent && e.fn.handleEvent(ev)); } catch (x) {}
           }
@@ -7613,7 +7895,7 @@ const FETCH_TEMPLATE: &str = r#"(() => {
 
     meth('open', function (method, url) {
       const b = this.__ptX;
-      b.method = String(method).toUpperCase(); b.url = String(url);
+      b.method = __s_toUpperCase(String(method)); b.url = String(url);
       setState(this, 1);
     });
     meth('setRequestHeader', function (k, v) { this.__ptX.headers[k] = String(v); });
@@ -7626,7 +7908,7 @@ const FETCH_TEMPLATE: &str = r#"(() => {
       return Object.entries(this.__ptX.respHeaders).map(([k, v]) => k + ': ' + v + '\r\n').join('');
     });
     meth('getResponseHeader', function (k) {
-      const v = this.__ptX.respHeaders[String(k).toLowerCase()];
+      const v = this.__ptX.respHeaders[__s_toLowerCase(String(k))];
       return v === undefined ? null : v;
     });
     meth('abort', function () {
@@ -7642,7 +7924,7 @@ const FETCH_TEMPLATE: &str = r#"(() => {
       // The browser sets the content type itself when the page did not: a
       // string goes as `text/plain;charset=UTF-8`, a form with its own type.
       const headers = Object.assign({}, b.headers, { 'x-pt-kind': 'xhr' });
-      if (body != null && !Object.keys(headers).some((k) => k.toLowerCase() === 'content-type')) {
+      if (body != null && !Object.keys(headers).some((k) => __s_toLowerCase(k) === 'content-type')) {
         if (typeof body === 'string') headers['Content-Type'] = 'text/plain;charset=UTF-8';
         else if (globalThis.URLSearchParams && body instanceof URLSearchParams) {
           headers['Content-Type'] = 'application/x-www-form-urlencoded;charset=UTF-8';
@@ -7656,7 +7938,7 @@ const FETCH_TEMPLATE: &str = r#"(() => {
       // body and response sizes); invisible to the page.
       const encTrace = !!globalThis.__pt_encTrace;
       const bodyLen = body == null ? 0 : (typeof body === 'string' ? body.length : (body.byteLength || body.size || 0));
-      if (encTrace) { try { (globalThis.__pt_parentConsole || console).error('[xhr] ' + Math.round(performance.now()) + 'ms ' + b.method + ' ' + String(b.url).slice(0, 110) + ' body=' + bodyLen); } catch (e) {} }
+      if (encTrace) { try { (globalThis.__pt_parentConsole || console).error('[xhr] ' + Math.round(performance.now()) + 'ms ' + b.method + ' ' + __s_slice(String(b.url), 0, 110) + ' body=' + bodyLen); } catch (e) {} }
       fetch(b.url, { method: b.method, headers, body })
         .then(async (r) => {
           if (b.aborted) return;
@@ -7665,7 +7947,7 @@ const FETCH_TEMPLATE: &str = r#"(() => {
           setState(self, 2); setState(self, 3);
           if (b.responseType === 'arraybuffer') { b.response = await r.arrayBuffer(); b.responseText = ''; }
           else b.responseText = await r.text();
-          if (encTrace) { try { (globalThis.__pt_parentConsole || console).error('[xhr] ' + Math.round(performance.now()) + 'ms resp ' + r.status + ' ' + String(b.url).slice(-40) + ' body=' + bodyLen + ' resp=' + b.responseText.length); } catch (e) {} }
+          if (encTrace) { try { (globalThis.__pt_parentConsole || console).error('[xhr] ' + Math.round(performance.now()) + 'ms resp ' + r.status + ' ' + __s_slice(String(b.url), -40) + ' body=' + bodyLen + ' resp=' + b.responseText.length); } catch (e) {} }
           if (b.responseType !== 'arraybuffer') {
             try { b.response = b.responseType === 'json' ? __ptJSON.parse(b.responseText || 'null') : b.responseText; }
             catch (e) { b.response = null; }
@@ -7698,21 +7980,21 @@ const FETCH_TEMPLATE: &str = r#"(() => {
         if (globalThis.__pt_encTrace && s.length > 4) {
           try {
             let nz = 0, sum = 0;
-            for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); if (c) { nz++; sum = (sum * 31 + c) >>> 0; } }
-            let host = '?'; try { host = String(globalThis.location && globalThis.location.host).slice(0, 18); } catch (e) {}
-            (globalThis.__pt_parentConsole || console).error('[enc] ' + Math.round(performance.now()) + 'ms ' + host + ' len=' + s.length + ' nz=' + nz + ' sum=' + sum + ' ' + (s.length < 200 ? JSON.stringify(s.slice(0, 80)) : JSON.stringify(s.slice(0, 40))));
+            for (let i = 0; i < s.length; i++) { const c = __s_charCodeAt(s, i); if (c) { nz++; sum = (sum * 31 + c) >>> 0; } }
+            let host = '?'; try { host = __s_slice(String(globalThis.location && globalThis.location.host), 0, 18); } catch (e) {}
+            (globalThis.__pt_parentConsole || console).error('[enc] ' + Math.round(performance.now()) + 'ms ' + host + ' len=' + s.length + ' nz=' + nz + ' sum=' + sum + ' ' + (s.length < 200 ? JSON.stringify(__s_slice(s, 0, 80)) : JSON.stringify(__s_slice(s, 0, 40))));
             // Length ranges `lo-hi,lo-hi` in the flag value dump the whole chunk.
-            const dump = String(globalThis.__pt_encTrace).split(',').some((r) => { const m = /^(\d+)-(\d+)$/.exec(r.trim()); return m && s.length >= +m[1] && s.length <= +m[2]; });
+            const dump = __s_split(String(globalThis.__pt_encTrace), ',').some((r) => { const m = /^(\d+)-(\d+)$/.exec(__s_trim(r)); return m && s.length >= +m[1] && s.length <= +m[2]; });
             // The console truncates lines past 600 chars: dump in 500-char JSON slices.
-            if (dump) { const j = JSON.stringify(s).replace(/[^\x21-\x7e]/g, (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')), k = Math.ceil(j.length / 500); for (let i = 0; i < k; i++) (globalThis.__pt_parentConsole || console).error('[encdump] len=' + s.length + ' part=' + i + '/' + k + ' ' + j.slice(i * 500, (i + 1) * 500)); }
+            if (dump) { const j = __s_replace(JSON.stringify(s), /[^\x21-\x7e]/g, (c) => '\\u' + __s_padStart(__s_charCodeAt(c, 0).toString(16), 4, '0')), k = Math.ceil(j.length / 500); for (let i = 0; i < k; i++) (globalThis.__pt_parentConsole || console).error('[encdump] len=' + s.length + ' part=' + i + '/' + k + ' ' + __s_slice(j, i * 500, (i + 1) * 500)); }
           } catch (e) {}
         }
         const out = [];
         for (let i = 0; i < s.length; i++) {
-          let cp = s.charCodeAt(i);
+          let cp = __s_charCodeAt(s, i);
           // A surrogate pair is one character; the browser replaces a lone surrogate.
           if (cp >= 0xd800 && cp <= 0xdbff) {
-            const next = s.charCodeAt(i + 1);
+            const next = __s_charCodeAt(s, i + 1);
             if (next >= 0xdc00 && next <= 0xdfff) { cp = 0x10000 + ((cp - 0xd800) << 10) + (next - 0xdc00); i++; }
             else cp = 0xfffd;
           } else if (cp >= 0xdc00 && cp <= 0xdfff) cp = 0xfffd;
@@ -7732,7 +8014,7 @@ const FETCH_TEMPLATE: &str = r#"(() => {
         // Only whole characters are written: the browser never leaves half in the buffer.
         let written = 0, read = 0, i = 0;
         while (i < s.length) {
-          const cp = s.codePointAt(i);
+          const cp = __s_codePointAt(s, i);
           const size = cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
           if (written + size > target.length) break;
           for (let k = 0; k < size; k++) target[written + k] = bytes[written + k];
@@ -7761,14 +8043,14 @@ const FETCH_TEMPLATE: &str = r#"(() => {
         }
         return out;
       }
-      const s = String(input).replace(/[ \t\n\f\r]/g, '');
-      const body = s.replace(/=+$/, '');
+      const s = __s_replace(String(input), /[ \t\n\f\r]/g, '');
+      const body = __s_replace(s, /=+$/, '');
       if (body.length % 4 === 1 || /[^A-Za-z0-9+/]/.test(body)) {
         throw __pt_mkErr(globalThis.DOMException || Error, "Failed to execute 'atob' on 'Window': The string to be decoded is not correctly encoded.", 'InvalidCharacterError');
       }
       let out = '', bits = 0, acc = 0;
       for (const ch of body) {
-        acc = (acc << 6) | B64.indexOf(ch);
+        acc = (acc << 6) | __s_indexOf(B64, ch);
         bits += 6;
         if (bits >= 8) { bits -= 8; out += String.fromCharCode((acc >> bits) & 0xff); }
       }
@@ -7780,7 +8062,7 @@ const FETCH_TEMPLATE: &str = r#"(() => {
       const s = String(input);
       let out = '';
       for (let i = 0; i < s.length; i += 3) {
-        const c0 = s.charCodeAt(i), c1 = s.charCodeAt(i + 1), c2 = s.charCodeAt(i + 2);
+        const c0 = __s_charCodeAt(s, i), c1 = __s_charCodeAt(s, i + 1), c2 = __s_charCodeAt(s, i + 2);
         if (c0 > 255 || c1 > 255 || c2 > 255) {
           throw __pt_mkErr(globalThis.DOMException || Error, "Failed to execute 'btoa' on 'Window': The string to be encoded contains characters outside of the Latin1 range.", 'InvalidCharacterError');
         }
@@ -7803,7 +8085,7 @@ const FETCH_TEMPLATE: &str = r#"(() => {
   if (!globalThis.structuredClone) {
     const ERR_NAMES = new Set(['Error', 'EvalError', 'RangeError', 'ReferenceError', 'SyntaxError', 'TypeError', 'URIError']);
     const JS_UNCLONEABLE = new Set(['WeakMap', 'WeakSet', 'WeakRef', 'FinalizationRegistry', 'Promise', 'Generator', 'AsyncGenerator', 'Module']);
-    const tagOf = (x) => { try { return Object.prototype.toString.call(x).slice(8, -1); } catch (e) { return 'Object'; } };
+    const tagOf = (x) => { try { return __s_slice(Object.prototype.toString.call(x), 8, -1); } catch (e) { return 'Object'; } };
     const cloneErr = (what) => {
       const m = "Failed to execute 'structuredClone' on 'Window': " + what + ' could not be cloned.';
       return typeof DOMException === 'function' ? __pt_mkErr(DOMException, m, 'DataCloneError') : new Error(m);
@@ -7835,7 +8117,7 @@ const FETCH_TEMPLATE: &str = r#"(() => {
           case 'BigInt': return keep(Object(BigInt.prototype.valueOf.call(x)));
           case 'Date': return keep(new Date(Date.prototype.getTime.call(x)));
           case 'RegExp': return keep(new RegExp(x.source, x.flags));
-          case 'ArrayBuffer': return keep(x.slice(0));
+          case 'ArrayBuffer': return keep(__s_slice(x, 0));
           case 'Map': { const m = keep(new Map()); for (const [k, val] of Map.prototype.entries.call(x)) m.set(walk(k), walk(val)); return m; }
           case 'Set': { const st = keep(new Set()); for (const val of Set.prototype.values.call(x)) st.add(walk(val)); return st; }
           case 'Error': {
@@ -7879,7 +8161,7 @@ const FETCH_TEMPLATE: &str = r#"(() => {
     const __AbortSignal = globalThis.AbortSignal = globalThis.AbortSignal || class AbortSignal {
       constructor() { __pt_write(this, 'aborted', false); __pt_write(this, 'reason', undefined); this.onabort = null; this._ls = []; }
       addEventListener(t, fn) { if (t === 'abort' && typeof fn === 'function') this._ls.push(fn); }
-      removeEventListener(t, fn) { const i = this._ls.indexOf(fn); if (i >= 0) this._ls.splice(i, 1); }
+      removeEventListener(t, fn) { const i = __s_indexOf(this._ls, fn); if (i >= 0) this._ls.splice(i, 1); }
       dispatchEvent() { return true; }
       throwIfAborted() { if (this.aborted) throw this.reason; }
       static abort(reason) { const s = new __AbortSignal(); __pt_write(s, 'aborted', true); __pt_write(s, 'reason', reason); return s; }
@@ -7893,7 +8175,7 @@ const FETCH_TEMPLATE: &str = r#"(() => {
         __pt_write(s, 'reason', reason === undefined ? new Error('signal is aborted without reason') : reason);
         const ev = { type: 'abort', target: s, currentTarget: s };
         try { if (typeof s.onabort === 'function') s.onabort(ev); } catch (e) {}
-        for (const fn of s._ls.slice()) { try { fn(ev); } catch (e) {} }
+        for (const fn of __s_slice(s._ls)) { try { fn(ev); } catch (e) {} }
       }
     };
   }
@@ -7952,7 +8234,7 @@ const FETCH_TEMPLATE: &str = r#"(() => {
         this.start();
       }
       removeEventListener(type, fn) {
-        const l = this.__pt.listeners, i = l.indexOf(fn);
+        const l = this.__pt.listeners, i = __s_indexOf(l, fn);
         if (i >= 0) l.splice(i, 1);
       }
       dispatchEvent() { return true; }
@@ -7982,7 +8264,7 @@ const FETCH_TEMPLATE: &str = r#"(() => {
       __ptDeliver(ev) {
         const st = this.__pt;
         try { if (typeof st.onmessage === 'function') st.onmessage.call(this, ev); } catch (e) {}
-        for (const fn of st.listeners.slice()) { try { fn.call(this, ev); } catch (e) {} }
+        for (const fn of __s_slice(st.listeners)) { try { fn.call(this, ev); } catch (e) {} }
       }
     };
     globalThis.MessageChannel = class MessageChannel {
@@ -8009,13 +8291,13 @@ const FETCH_TEMPLATE: &str = r#"(() => {
         }
       }
       append(k, v) {
-        const key = String(k).toLowerCase(), cur = this.__h.get(key);
+        const key = __s_toLowerCase(String(k)), cur = this.__h.get(key);
         this.__h.set(key, cur === undefined ? String(v) : cur + ', ' + String(v));
       }
-      set(k, v) { this.__h.set(String(k).toLowerCase(), String(v)); }
-      get(k) { const v = this.__h.get(String(k).toLowerCase()); return v === undefined ? null : v; }
-      has(k) { return this.__h.has(String(k).toLowerCase()); }
-      delete(k) { this.__h.delete(String(k).toLowerCase()); }
+      set(k, v) { this.__h.set(__s_toLowerCase(String(k)), String(v)); }
+      get(k) { const v = this.__h.get(__s_toLowerCase(String(k))); return v === undefined ? null : v; }
+      has(k) { return this.__h.has(__s_toLowerCase(String(k))); }
+      delete(k) { this.__h.delete(__s_toLowerCase(String(k))); }
       forEach(fn, thisArg) { for (const [k, v] of this.__h) fn.call(thisArg, v, k, this); }
       keys() { return this.__h.keys(); }
       values() { return this.__h.values(); }
@@ -8028,7 +8310,7 @@ const FETCH_TEMPLATE: &str = r#"(() => {
       constructor(input, init) {
         init = init || {};
         __pt_write(this, 'url', String(input && input.url !== undefined ? input.url : input));
-        __pt_write(this, 'method', String(init.method || (input && input.method) || 'GET').toUpperCase());
+        __pt_write(this, 'method', __s_toUpperCase(String(init.method || (input && input.method) || 'GET')));
         __pt_write(this, 'headers', new globalThis.Headers(init.headers || (input && input.headers)));
         __pt_write(this, 'credentials', init.credentials || 'same-origin');
         __pt_write(this, 'mode', init.mode || 'cors');
@@ -8078,8 +8360,8 @@ const FETCH_TEMPLATE: &str = r#"(() => {
         // (stringifying it to "0,97,115..." broke WebAssembly.instantiateStreaming).
         let raw = body == null ? '' : body;
         try {
-          if (raw instanceof ArrayBuffer) raw = new Uint8Array(raw.slice(0));
-          else if (ArrayBuffer.isView(raw)) raw = new Uint8Array(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
+          if (raw instanceof ArrayBuffer) raw = new Uint8Array(__s_slice(raw, 0));
+          else if (ArrayBuffer.isView(raw)) raw = new Uint8Array(__s_slice(raw.buffer, raw.byteOffset, raw.byteOffset + raw.byteLength));
           else if (typeof raw !== 'string' && !(globalThis.Blob && raw instanceof Blob) && !(globalThis.FormData && raw instanceof FormData) && !(globalThis.URLSearchParams && raw instanceof URLSearchParams) && !(globalThis.ReadableStream && raw instanceof ReadableStream)) raw = String(raw);
         } catch (e) { raw = String(raw); }
         Object.defineProperty(this, '__body', { value: raw, enumerable: false });
@@ -8097,8 +8379,8 @@ const FETCH_TEMPLATE: &str = r#"(() => {
       }
       text() { return this.__ptBytes().then((u) => new TextDecoder().decode(u)); }
       json() { return this.text().then(JSON.parse); }
-      arrayBuffer() { return this.__ptBytes().then((u) => u.buffer.slice(u.byteOffset, u.byteOffset + u.byteLength)); }
-      bytes() { return this.__ptBytes().then((u) => u.slice()); }
+      arrayBuffer() { return this.__ptBytes().then((u) => __s_slice(u.buffer, u.byteOffset, u.byteOffset + u.byteLength)); }
+      bytes() { return this.__ptBytes().then((u) => __s_slice(u)); }
       blob() { return this.__ptBytes().then((u) => new Blob([u], { type: String(this.headers.get('content-type') || '') })); }
     };
   }
@@ -8254,12 +8536,12 @@ const FETCH_TEMPLATE: &str = r#"(() => {
           setTimeout(() => {
             const ev = { type: 'message', data, origin: (globalThis.location && location.origin) || '', lastEventId: '', source: null, ports: [], isTrusted: true, target: p, currentTarget: p };
             try { if (typeof p.onmessage === 'function') p.onmessage(ev); } catch (e) {}
-            for (const fn of p.__pt.listeners.slice()) { try { fn.call(p, ev); } catch (e) {} }
+            for (const fn of __s_slice(p.__pt.listeners)) { try { fn.call(p, ev); } catch (e) {} }
           }, 5);
         }
       }
       addEventListener(t, fn) { if (t === 'message' && typeof fn === 'function') this.__pt.listeners.push(fn); }
-      removeEventListener(t, fn) { const l = this.__pt.listeners, i = l.indexOf(fn); if (i >= 0) l.splice(i, 1); }
+      removeEventListener(t, fn) { const l = this.__pt.listeners, i = __s_indexOf(l, fn); if (i >= 0) l.splice(i, 1); }
       dispatchEvent() { return true; }
       close() { this.__pt.closed = true; const r = __bcRooms.get(this.name); if (r) r.delete(this); }
     };
@@ -8267,14 +8549,14 @@ const FETCH_TEMPLATE: &str = r#"(() => {
 
   if (!globalThis.CSS) {
     globalThis.CSS = {
-      escape: (s) => String(s).replace(/[^a-zA-Z0-9_\u00a0-\uffff-]/g, (c) => '\\' + c),
+      escape: (s) => __s_replace(String(s), /[^a-zA-Z0-9_\u00a0-\uffff-]/g, (c) => '\\' + c),
       // Answering `true` to everything would be its own giveaway; a real engine
       // rejects nonsense. This accepts a well-formed declaration and no more.
       supports: (a, b) => {
         // Property names are checked against the engine's list: the browser
         // answers `false` for made-up ones, and "anything with a colon" is a
         // tell. Custom properties (`--x`) are always accepted.
-        const known = (n) => (String(n).lastIndexOf('--', 0) === 0
+        const known = (n) => (__s_lastIndexOf(String(n), '--', 0) === 0
           || (globalThis.__pt_cssKnown ? __pt_cssKnown(n) : /^[-a-zA-Z]+$/.test(n)));
         if (b !== undefined) return /^[-a-zA-Z]+$/.test(String(a)) && String(b).length > 0 && known(a);
         const m = /^\s*(--[-a-zA-Z0-9_]+|[-a-zA-Z]+)\s*:\s*([^;]+?)\s*$/.exec(String(a));
@@ -8407,7 +8689,7 @@ const FETCH_TEMPLATE: &str = r#"(() => {
     }, evt);
     const on = st['on' + type];
     try { if (typeof on === 'function') on.call(sock, evt); } catch (e) {}
-    for (const fn of (st.listeners.get(type) || []).slice()) {
+    for (const fn of __s_slice(st.listeners.get(type) || [])) {
       try { fn.call(sock, evt); } catch (e) {}
     }
   };
@@ -8452,9 +8734,9 @@ const FETCH_TEMPLATE: &str = r#"(() => {
       const base = globalThis.location ? String(location.href) : 'https://localhost/';
       let abs;
       try { abs = new globalThis.URL(String(url), base).href; } catch (e) { abs = String(url); }
-      const scheme = String((/^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(abs) || [])[1] || '').toLowerCase();
-      if (scheme === 'http') abs = 'ws' + abs.slice(4);
-      else if (scheme === 'https') abs = 'wss' + abs.slice(5);
+      const scheme = __s_toLowerCase(String((/^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(abs) || [])[1] || ''));
+      if (scheme === 'http') abs = 'ws' + __s_slice(abs, 4);
+      else if (scheme === 'https') abs = 'wss' + __s_slice(abs, 5);
       else if (scheme !== 'ws' && scheme !== 'wss') {
         throw new SyntaxError("Failed to construct 'WebSocket': The URL's scheme must be either 'ws' or 'wss'. '" + scheme + ":' is not allowed.");
       }
@@ -8463,7 +8745,7 @@ const FETCH_TEMPLATE: &str = r#"(() => {
       wsState.set(this, {
         id, url: abs, protocol: '', extensions: '', binaryType: 'blob',
         bufferedAmount: 0, readyState: 0, listeners: new Map(),
-        origin: abs.replace(/^ws/, 'http').replace(/^([a-z]+:\/\/[^/]*).*$/, '$1'),
+        origin: __s_replace(__s_replace(abs, /^ws/, 'http'), /^([a-z]+:\/\/[^/]*).*$/, '$1'),
         onopen: null, onmessage: null, onclose: null, onerror: null,
       });
       wsLive.set(id, this);
@@ -8499,7 +8781,7 @@ const FETCH_TEMPLATE: &str = r#"(() => {
     }
     removeEventListener(type, fn) {
       const l = wsState.get(this).listeners.get(String(type)); if (!l) return;
-      const i = l.indexOf(fn); if (i >= 0) l.splice(i, 1);
+      const i = __s_indexOf(l, fn); if (i >= 0) l.splice(i, 1);
     }
     dispatchEvent(evt) { wsFire(this, evt && evt.type, evt); return true; }
   };
@@ -8549,6 +8831,31 @@ const RTC_CHROME: &str = include_str!("rtc_chrome.json");
 // template exists to reproduce.
 #[allow(clippy::invisible_characters)]
 const FINGERPRINT_TEMPLATE: &str = r#"(() => {
+  // String methods taken before any page script. A page may replace them
+  // (Klarna replaces `trim`); the engine must not call the page's copies.
+  // Other receivers keep their own method, errors included.
+  const __sm = (f, m) => {
+    const call = Function.prototype.call.bind(f);
+    return function (s, a, b) {
+      const n = arguments.length;
+      if (typeof s === 'string') return n === 1 ? call(s) : n === 2 ? call(s, a) : call(s, a, b);
+      return n === 1 ? s[m]() : n === 2 ? s[m](a) : s[m](a, b);
+    };
+  };
+  const __s_lastIndexOf = __sm(String.prototype.lastIndexOf, 'lastIndexOf'),
+    __s_slice = __sm(String.prototype.slice, 'slice'),
+    __s_indexOf = __sm(String.prototype.indexOf, 'indexOf'),
+    __s_startsWith = __sm(String.prototype.startsWith, 'startsWith'),
+    __s_replace = __sm(String.prototype.replace, 'replace'),
+    __s_toLowerCase = __sm(String.prototype.toLowerCase, 'toLowerCase'),
+    __s_search = __sm(String.prototype.search, 'search'),
+    __s_trim = __sm(String.prototype.trim, 'trim'),
+    __s_endsWith = __sm(String.prototype.endsWith, 'endsWith'),
+    __s_split = __sm(String.prototype.split, 'split'),
+    __s_toUpperCase = __sm(String.prototype.toUpperCase, 'toUpperCase'),
+    __s_padStart = __sm(String.prototype.padStart, 'padStart'),
+    __s_codePointAt = __sm(String.prototype.codePointAt, 'codePointAt'),
+    __s_charCodeAt = __sm(String.prototype.charCodeAt, 'charCodeAt');
   // Interface object shape: a strict function has exactly `length, name,
   // prototype` (no `arguments`/`caller`, which browser interfaces lack) and,
   // unlike a class, throws "Illegal constructor" when called without `new` too.
@@ -8727,9 +9034,9 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
   // All CSS named colors, captured from Chrome: pages name colors far more
   // often than they use hex codes.
   const CSS_NAMES = Object.create(null);
-  for (const pair of 'aliceblue:f0f8ff,antiquewhite:faebd7,aqua:00ffff,aquamarine:7fffd4,azure:f0ffff,beige:f5f5dc,bisque:ffe4c4,black:000000,blanchedalmond:ffebcd,blue:0000ff,blueviolet:8a2be2,brown:a52a2a,burlywood:deb887,cadetblue:5f9ea0,chartreuse:7fff00,chocolate:d2691e,coral:ff7f50,cornflowerblue:6495ed,cornsilk:fff8dc,crimson:dc143c,cyan:00ffff,darkblue:00008b,darkcyan:008b8b,darkgoldenrod:b8860b,darkgray:a9a9a9,darkgreen:006400,darkgrey:a9a9a9,darkkhaki:bdb76b,darkmagenta:8b008b,darkolivegreen:556b2f,darkorange:ff8c00,darkorchid:9932cc,darkred:8b0000,darksalmon:e9967a,darkseagreen:8fbc8f,darkslateblue:483d8b,darkslategray:2f4f4f,darkslategrey:2f4f4f,darkturquoise:00ced1,darkviolet:9400d3,deeppink:ff1493,deepskyblue:00bfff,dimgray:696969,dimgrey:696969,dodgerblue:1e90ff,firebrick:b22222,floralwhite:fffaf0,forestgreen:228b22,fuchsia:ff00ff,gainsboro:dcdcdc,ghostwhite:f8f8ff,gold:ffd700,goldenrod:daa520,gray:808080,green:008000,greenyellow:adff2f,grey:808080,honeydew:f0fff0,hotpink:ff69b4,indianred:cd5c5c,indigo:4b0082,ivory:fffff0,khaki:f0e68c,lavender:e6e6fa,lavenderblush:fff0f5,lawngreen:7cfc00,lemonchiffon:fffacd,lightblue:add8e6,lightcoral:f08080,lightcyan:e0ffff,lightgoldenrodyellow:fafad2,lightgray:d3d3d3,lightgreen:90ee90,lightgrey:d3d3d3,lightpink:ffb6c1,lightsalmon:ffa07a,lightseagreen:20b2aa,lightskyblue:87cefa,lightslategray:778899,lightslategrey:778899,lightsteelblue:b0c4de,lightyellow:ffffe0,lime:00ff00,limegreen:32cd32,linen:faf0e6,magenta:ff00ff,maroon:800000,mediumaquamarine:66cdaa,mediumblue:0000cd,mediumorchid:ba55d3,mediumpurple:9370db,mediumseagreen:3cb371,mediumslateblue:7b68ee,mediumspringgreen:00fa9a,mediumturquoise:48d1cc,mediumvioletred:c71585,midnightblue:191970,mintcream:f5fffa,mistyrose:ffe4e1,moccasin:ffe4b5,navajowhite:ffdead,navy:000080,oldlace:fdf5e6,olive:808000,olivedrab:6b8e23,orange:ffa500,orangered:ff4500,orchid:da70d6,palegoldenrod:eee8aa,palegreen:98fb98,paleturquoise:afeeee,palevioletred:db7093,papayawhip:ffefd5,peachpuff:ffdab9,peru:cd853f,pink:ffc0cb,plum:dda0dd,powderblue:b0e0e6,purple:800080,rebeccapurple:663399,red:ff0000,rosybrown:bc8f8f,royalblue:4169e1,saddlebrown:8b4513,salmon:fa8072,sandybrown:f4a460,seagreen:2e8b57,seashell:fff5ee,sienna:a0522d,silver:c0c0c0,skyblue:87ceeb,slateblue:6a5acd,slategray:708090,slategrey:708090,snow:fffafa,springgreen:00ff7f,steelblue:4682b4,tan:d2b48c,teal:008080,thistle:d8bfd8,tomato:ff6347,turquoise:40e0d0,violet:ee82ee,wheat:f5deb3,white:ffffff,whitesmoke:f5f5f5,yellow:ffff00,yellowgreen:9acd32'.split(',')) {
-    const i = pair.indexOf(':');
-    CSS_NAMES[pair.slice(0, i)] = pair.slice(i + 1);
+  for (const pair of __s_split('aliceblue:f0f8ff,antiquewhite:faebd7,aqua:00ffff,aquamarine:7fffd4,azure:f0ffff,beige:f5f5dc,bisque:ffe4c4,black:000000,blanchedalmond:ffebcd,blue:0000ff,blueviolet:8a2be2,brown:a52a2a,burlywood:deb887,cadetblue:5f9ea0,chartreuse:7fff00,chocolate:d2691e,coral:ff7f50,cornflowerblue:6495ed,cornsilk:fff8dc,crimson:dc143c,cyan:00ffff,darkblue:00008b,darkcyan:008b8b,darkgoldenrod:b8860b,darkgray:a9a9a9,darkgreen:006400,darkgrey:a9a9a9,darkkhaki:bdb76b,darkmagenta:8b008b,darkolivegreen:556b2f,darkorange:ff8c00,darkorchid:9932cc,darkred:8b0000,darksalmon:e9967a,darkseagreen:8fbc8f,darkslateblue:483d8b,darkslategray:2f4f4f,darkslategrey:2f4f4f,darkturquoise:00ced1,darkviolet:9400d3,deeppink:ff1493,deepskyblue:00bfff,dimgray:696969,dimgrey:696969,dodgerblue:1e90ff,firebrick:b22222,floralwhite:fffaf0,forestgreen:228b22,fuchsia:ff00ff,gainsboro:dcdcdc,ghostwhite:f8f8ff,gold:ffd700,goldenrod:daa520,gray:808080,green:008000,greenyellow:adff2f,grey:808080,honeydew:f0fff0,hotpink:ff69b4,indianred:cd5c5c,indigo:4b0082,ivory:fffff0,khaki:f0e68c,lavender:e6e6fa,lavenderblush:fff0f5,lawngreen:7cfc00,lemonchiffon:fffacd,lightblue:add8e6,lightcoral:f08080,lightcyan:e0ffff,lightgoldenrodyellow:fafad2,lightgray:d3d3d3,lightgreen:90ee90,lightgrey:d3d3d3,lightpink:ffb6c1,lightsalmon:ffa07a,lightseagreen:20b2aa,lightskyblue:87cefa,lightslategray:778899,lightslategrey:778899,lightsteelblue:b0c4de,lightyellow:ffffe0,lime:00ff00,limegreen:32cd32,linen:faf0e6,magenta:ff00ff,maroon:800000,mediumaquamarine:66cdaa,mediumblue:0000cd,mediumorchid:ba55d3,mediumpurple:9370db,mediumseagreen:3cb371,mediumslateblue:7b68ee,mediumspringgreen:00fa9a,mediumturquoise:48d1cc,mediumvioletred:c71585,midnightblue:191970,mintcream:f5fffa,mistyrose:ffe4e1,moccasin:ffe4b5,navajowhite:ffdead,navy:000080,oldlace:fdf5e6,olive:808000,olivedrab:6b8e23,orange:ffa500,orangered:ff4500,orchid:da70d6,palegoldenrod:eee8aa,palegreen:98fb98,paleturquoise:afeeee,palevioletred:db7093,papayawhip:ffefd5,peachpuff:ffdab9,peru:cd853f,pink:ffc0cb,plum:dda0dd,powderblue:b0e0e6,purple:800080,rebeccapurple:663399,red:ff0000,rosybrown:bc8f8f,royalblue:4169e1,saddlebrown:8b4513,salmon:fa8072,sandybrown:f4a460,seagreen:2e8b57,seashell:fff5ee,sienna:a0522d,silver:c0c0c0,skyblue:87ceeb,slateblue:6a5acd,slategray:708090,slategrey:708090,snow:fffafa,springgreen:00ff7f,steelblue:4682b4,tan:d2b48c,teal:008080,thistle:d8bfd8,tomato:ff6347,turquoise:40e0d0,violet:ee82ee,wheat:f5deb3,white:ffffff,whitesmoke:f5f5f5,yellow:ffff00,yellowgreen:9acd32', ',')) {
+    const i = __s_indexOf(pair, ':');
+    CSS_NAMES[__s_slice(pair, 0, i)] = __s_slice(pair, i + 1);
   }
   const hue2rgb = (h, s2, l) => {
     h = ((h % 360) + 360) % 360;
@@ -8762,7 +9069,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
   };
   // Parses one numeric argument: percentages, fractions, angles and the keyword `none`.
   const num = (t, scale, isHue) => {
-    t = String(t).trim();
+    t = __s_trim(String(t));
     if (t === 'none') return 0;
     if (/%$/.test(t)) return (parseFloat(t) || 0) / 100 * (scale === undefined ? 1 : scale);
     let v = parseFloat(t) || 0;
@@ -8774,10 +9081,10 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
     return v;
   };
   const splitArgs = (t) => {
-    const slash = t.indexOf('/');
-    const head = (slash < 0 ? t : t.slice(0, slash)).trim();
-    const alpha = slash < 0 ? null : t.slice(slash + 1).trim();
-    return [head.split(/[\s,]+/).filter(Boolean), alpha];
+    const slash = __s_indexOf(t, '/');
+    const head = __s_trim(slash < 0 ? t : __s_slice(t, 0, slash));
+    const alpha = slash < 0 ? null : __s_trim(__s_slice(t, slash + 1));
+    return [__s_split(head, /[\s,]+/).filter(Boolean), alpha];
   };
   // Color to four bytes. Anything the browser parses we parse; unparsable
   // input is a refusal, not black: the browser then leaves `fillStyle` unchanged.
@@ -8785,7 +9092,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
     // A gradient or pattern is not a color; stringifying the object would call
     // its toString (visible to the page).
     if (c !== null && (typeof c === 'object' || typeof c === 'function')) return null;
-    let t = String(c == null ? '' : c).trim().toLowerCase();
+    let t = __s_toLowerCase(__s_trim(String(c == null ? '' : c)));
     if (!t) return null;
     if (t === 'transparent') return [0, 0, 0, 0];
     if (t === 'currentcolor') return [0, 0, 0, 255];
@@ -8796,9 +9103,9 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
       const dup = (x) => parseInt(x + x, 16);
       if (h.length === 3) return [dup(h[0]), dup(h[1]), dup(h[2]), 255];
       if (h.length === 4) return [dup(h[0]), dup(h[1]), dup(h[2]), dup(h[3])];
-      if (h.length === 6) return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16), 255];
-      if (h.length === 8) return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16),
-        parseInt(h.slice(4, 6), 16), parseInt(h.slice(6, 8), 16)];
+      if (h.length === 6) return [parseInt(__s_slice(h, 0, 2), 16), parseInt(__s_slice(h, 2, 4), 16), parseInt(__s_slice(h, 4, 6), 16), 255];
+      if (h.length === 8) return [parseInt(__s_slice(h, 0, 2), 16), parseInt(__s_slice(h, 2, 4), 16),
+        parseInt(__s_slice(h, 4, 6), 16), parseInt(__s_slice(h, 6, 8), 16)];
       return null;
     }
     m = /^([a-z-]+)\(([^]*)\)$/.exec(t);
@@ -8808,12 +9115,12 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
     const unit = (v) => Math.max(0, Math.min(255, Math.round(v * 255)));
     if (fn === 'color-mix') {
       // Mixing in sRGB: the only form seen on pages.
-      const body = m[2].replace(/^in\s+[a-z0-9-]+\s*,?/, '');
-      const parts = body.split(',').map((x) => x.trim()).filter(Boolean);
+      const body = __s_replace(m[2], /^in\s+[a-z0-9-]+\s*,?/, '');
+      const parts = __s_split(body, ',').map((x) => __s_trim(x)).filter(Boolean);
       if (parts.length !== 2) return null;
       const one = (x) => {
         const pm = /\s([0-9.]+)%$/.exec(x);
-        return { col: parseColorRaw(pm ? x.slice(0, pm.index) : x), w: pm ? parseFloat(pm[1]) / 100 : null };
+        return { col: parseColorRaw(pm ? __s_slice(x, 0, pm.index) : x), w: pm ? parseFloat(pm[1]) / 100 : null };
       };
       const A = one(parts[0]), B = one(parts[1]);
       if (!A.col || !B.col) return null;
@@ -8894,8 +9201,8 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
   try {
     Object.defineProperty(globalThis, '__pt_cssColour', {
       value: (v) => {
-        const t = String(v == null ? '' : v).trim();
-        const low = t.toLowerCase();
+        const t = __s_trim(String(v == null ? '' : v));
+        const low = __s_toLowerCase(t);
         if (!low) return null;
         if (/^(color|lab|lch|oklab|oklch|color-mix|var|calc|attr|light-dark)\(/.test(low)) return null;
         if (low === 'transparent') return 'rgba(0, 0, 0, 0)';
@@ -8906,10 +9213,10 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
         const m = /^(?:rgba?|hsla?|hwb)\(([^]*)\)$/.exec(low);
         if (m) {
           const body = m[1];
-          const slash = body.lastIndexOf('/');
+          const slash = __s_lastIndexOf(body, '/');
           let txt = null;
-          if (slash >= 0) txt = body.slice(slash + 1).trim();
-          else { const parts = body.split(','); if (parts.length === 4) txt = parts[3].trim(); }
+          if (slash >= 0) txt = __s_trim(__s_slice(body, slash + 1));
+          else { const parts = __s_split(body, ','); if (parts.length === 4) txt = __s_trim(parts[3]); }
           if (txt != null && txt !== '') {
             const val = /%$/.test(txt) ? parseFloat(txt) / 100 : parseFloat(txt);
             if (!Number.isNaN(val)) a = val;
@@ -8929,7 +9236,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
     if (!rgba) return '#000000';
     if (rgba.css) return rgba.css;
     if (rgba[3] >= 255) {
-      const h = (v) => (v | 0).toString(16).padStart(2, '0');
+      const h = (v) => __s_padStart((v | 0).toString(16), 2, '0');
       return '#' + h(rgba[0]) + h(rgba[1]) + h(rgba[2]);
     }
     // Alpha is written as the shortest fraction mapping back to the same byte:
@@ -8962,7 +9269,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
   ];
   // Conversion between spaces goes through linear light, not codes.
   const convertSpace = (rgb, from, to) => {
-    if (from === to) return rgb.slice();
+    if (from === to) return __s_slice(rgb);
     const lin = rgb.map(SRGB_TO_LIN);
     const out = applyM(from === 'display-p3' ? P3_TO_SRGB : SRGB_TO_P3, lin[0], lin[1], lin[2]);
     return out.map(LIN_TO_SRGB);
@@ -8970,11 +9277,11 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
   // `color(<space> r g b / a)` and all the usual notations as numbers from 0
   // to 1 in the named space.
   const parseColorFloat = (c) => {
-    const t = String(c == null ? '#000000' : c).trim().toLowerCase();
+    const t = __s_toLowerCase(__s_trim(String(c == null ? '#000000' : c)));
     const m = /^color\(\s*([a-z0-9-]+)\s+([^)\/]+?)(?:\s*\/\s*([^)]+))?\s*\)$/.exec(t);
     if (m) {
-      const parts = m[2].trim().split(/\s+/).map((x) => (x === 'none' ? 0 : parseFloat(x) || 0));
-      const a = m[3] === undefined ? 1 : (/%$/.test(m[3].trim())
+      const parts = __s_split(__s_trim(m[2]), /\s+/).map((x) => (x === 'none' ? 0 : parseFloat(x) || 0));
+      const a = m[3] === undefined ? 1 : (/%$/.test(__s_trim(m[3]))
         ? parseFloat(m[3]) / 100 : parseFloat(m[3]));
       const space = m[1] === 'display-p3' ? 'display-p3' : 'srgb';
       return { rgb: [parts[0] || 0, parts[1] || 0, parts[2] || 0],
@@ -9198,9 +9505,9 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
   };
   const cshow = (v) => {
     if (typeof v === 'number') return String(v);
-    if (typeof v === 'string') return JSON.stringify(v.length > 60 ? v.slice(0, 60) + '…' : v);
+    if (typeof v === 'string') return JSON.stringify(v.length > 60 ? __s_slice(v, 0, 60) + '…' : v);
     if (v == null || typeof v !== 'object') return String(v);
-    try { return '<' + (Object.prototype.toString.call(v).slice(8, -1)) + (v.width ? ' ' + v.width + 'x' + v.height : '') + '>'; } catch (e) { return '<obj>'; }
+    try { return '<' + (__s_slice(Object.prototype.toString.call(v), 8, -1)) + (v.width ? ' ' + v.width + 'x' + v.height : '') + '>'; } catch (e) { return '<obj>'; }
   };
   // WebIDL binding as in Chrome: each argument is converted exactly once, in
   // order, before calling the implementation; conversion errors carry the
@@ -9386,7 +9693,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
             // The browser silently rejects an invalid enum value and keeps the
             // previous one.
             const allowed = CTX2D_ENUMS[name];
-            if (allowed && allowed.indexOf(String(v)) < 0) return;
+            if (allowed && __s_indexOf(allowed, String(v)) < 0) return;
             // Colors are stored parsed and reserialized, not as the page's
             // string: the browser returns `#rrggbb`, translucent as `rgba(...)`,
             // and keeps the old value for unrecognized input.
@@ -9473,7 +9780,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
       const g = __pt_ctxImpl(src.__ptC2d || src.__ptGl1 || src.__ptGl2);
       if (g && typeof g.__ptTainted === 'function') return g.__ptTainted();
       const raw = String(src.currentSrc || src.src || '');
-      if (!raw || raw.slice(0, 5) === 'data:' || raw.slice(0, 5) === 'blob:') return false;
+      if (!raw || __s_slice(raw, 0, 5) === 'data:' || __s_slice(raw, 0, 5) === 'blob:') return false;
       const u = new URL(raw, location.href);
       if (u.origin === location.origin) return false;
       const ok = globalThis.__pt_imageCorsOk && __pt_imageCorsOk(u.href);
@@ -9546,7 +9853,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
       'destination-in','destination-out','destination-atop','lighter','copy','xor','multiply',
       'screen','overlay','darken','lighten','color-dodge','color-burn','hard-light','soft-light',
       'difference','exclusion','hue','saturation','color','luminosity'];
-    const modeOf = (ctx) => Math.max(0, GCO.indexOf(String(ctx.globalCompositeOperation)));
+    const modeOf = (ctx) => Math.max(0, __s_indexOf(GCO, String(ctx.globalCompositeOperation)));
     const shadowOf = function (ctx) {
       const col = parseColorRaw(ctx.shadowColor);
       if (!col || !col[3]) return null;
@@ -9642,7 +9949,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
     const fontFamily = (f) => {
       const t = String(f);
       const m = /(?:\d+(?:\.\d+)?)(?:px|pt|em|%)\s*(?:\/\s*\S+\s*)?(.*)$/.exec(t);
-      return (m ? m[1] : t).trim();
+      return __s_trim(m ? m[1] : t);
     };
     // Stroke cap and join codes as in Skia: butt/round/square, miter/round/bevel.
     const capCode = (c) => c === 'round' ? 1 : c === 'square' ? 2 : 0;
@@ -9856,7 +10163,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
         const t = CTX_IMPL.get(this) || this;
         const style = {};
         for (const k of SAVED) style[k] = t[k];
-        mStack.push({ m: M.slice(), style });
+        mStack.push({ m: __s_slice(M), style });
       },
       restore() {
         note('restore');
@@ -9980,7 +10287,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
               const v = st[k];
               if (v === undefined) continue;
               const sv = String(v);
-              if (ok.indexOf(sv) < 0) throw __pt_mkErr(TypeError, head + "Failed to read the '" + k + "' property from 'ImageDataSettings': The provided value '" + sv + "' is not a valid enum value of type " + T + '.');
+              if (__s_indexOf(ok, sv) < 0) throw __pt_mkErr(TypeError, head + "Failed to read the '" + k + "' property from 'ImageDataSettings': The provided value '" + sv + "' is not a valid enum value of type " + T + '.');
             }
           }
         }
@@ -10110,7 +10417,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
   const GL1_METHODS = 'activeTexture,attachShader,bindAttribLocation,bindRenderbuffer,blendColor,blendEquation,blendEquationSeparate,blendFunc,blendFuncSeparate,bufferData,bufferSubData,checkFramebufferStatus,compileShader,compressedTexImage2D,compressedTexSubImage2D,copyTexImage2D,copyTexSubImage2D,createBuffer,createFramebuffer,createProgram,createRenderbuffer,createShader,createTexture,cullFace,deleteBuffer,deleteFramebuffer,deleteProgram,deleteRenderbuffer,deleteShader,deleteTexture,depthFunc,depthMask,depthRange,detachShader,disable,enable,finish,flush,framebufferRenderbuffer,framebufferTexture2D,frontFace,generateMipmap,getActiveAttrib,getActiveUniform,getAttachedShaders,getAttribLocation,getBufferParameter,getContextAttributes,getError,getExtension,getFramebufferAttachmentParameter,getParameter,getProgramInfoLog,getProgramParameter,getRenderbufferParameter,getShaderInfoLog,getShaderParameter,getShaderPrecisionFormat,getShaderSource,getSupportedExtensions,getTexParameter,getUniform,getUniformLocation,getVertexAttrib,getVertexAttribOffset,hint,isBuffer,isContextLost,isEnabled,isFramebuffer,isProgram,isRenderbuffer,isShader,isTexture,lineWidth,linkProgram,pixelStorei,polygonOffset,readPixels,renderbufferStorage,sampleCoverage,shaderSource,stencilFunc,stencilFuncSeparate,stencilMask,stencilMaskSeparate,stencilOp,stencilOpSeparate,texImage2D,texParameterf,texParameteri,texSubImage2D,useProgram,validateProgram,bindBuffer,bindFramebuffer,bindTexture,clear,clearColor,clearDepth,clearStencil,colorMask,disableVertexAttribArray,drawArrays,drawElements,enableVertexAttribArray,scissor,uniform1f,uniform1fv,uniform1i,uniform1iv,uniform2f,uniform2fv,uniform2i,uniform2iv,uniform3f,uniform3fv,uniform3i,uniform3iv,uniform4f,uniform4fv,uniform4i,uniform4iv,uniformMatrix2fv,uniformMatrix3fv,uniformMatrix4fv,vertexAttrib1f,vertexAttrib1fv,vertexAttrib2f,vertexAttrib2fv,vertexAttrib3f,vertexAttrib3fv,vertexAttrib4f,vertexAttrib4fv,vertexAttribPointer,viewport,drawingBufferStorage,makeXRCompatible';
   const GL2_CONSTS = 'DEPTH_BUFFER_BIT=256,STENCIL_BUFFER_BIT=1024,COLOR_BUFFER_BIT=16384,POINTS=0,LINES=1,LINE_LOOP=2,LINE_STRIP=3,TRIANGLES=4,TRIANGLE_STRIP=5,TRIANGLE_FAN=6,ZERO=0,ONE=1,SRC_COLOR=768,ONE_MINUS_SRC_COLOR=769,SRC_ALPHA=770,ONE_MINUS_SRC_ALPHA=771,DST_ALPHA=772,ONE_MINUS_DST_ALPHA=773,DST_COLOR=774,ONE_MINUS_DST_COLOR=775,SRC_ALPHA_SATURATE=776,FUNC_ADD=32774,BLEND_EQUATION=32777,BLEND_EQUATION_RGB=32777,BLEND_EQUATION_ALPHA=34877,FUNC_SUBTRACT=32778,FUNC_REVERSE_SUBTRACT=32779,BLEND_DST_RGB=32968,BLEND_SRC_RGB=32969,BLEND_DST_ALPHA=32970,BLEND_SRC_ALPHA=32971,CONSTANT_COLOR=32769,ONE_MINUS_CONSTANT_COLOR=32770,CONSTANT_ALPHA=32771,ONE_MINUS_CONSTANT_ALPHA=32772,BLEND_COLOR=32773,ARRAY_BUFFER=34962,ELEMENT_ARRAY_BUFFER=34963,ARRAY_BUFFER_BINDING=34964,ELEMENT_ARRAY_BUFFER_BINDING=34965,STREAM_DRAW=35040,STATIC_DRAW=35044,DYNAMIC_DRAW=35048,BUFFER_SIZE=34660,BUFFER_USAGE=34661,CURRENT_VERTEX_ATTRIB=34342,FRONT=1028,BACK=1029,FRONT_AND_BACK=1032,TEXTURE_2D=3553,CULL_FACE=2884,BLEND=3042,DITHER=3024,STENCIL_TEST=2960,DEPTH_TEST=2929,SCISSOR_TEST=3089,POLYGON_OFFSET_FILL=32823,SAMPLE_ALPHA_TO_COVERAGE=32926,SAMPLE_COVERAGE=32928,NO_ERROR=0,INVALID_ENUM=1280,INVALID_VALUE=1281,INVALID_OPERATION=1282,OUT_OF_MEMORY=1285,CW=2304,CCW=2305,LINE_WIDTH=2849,ALIASED_POINT_SIZE_RANGE=33901,ALIASED_LINE_WIDTH_RANGE=33902,CULL_FACE_MODE=2885,FRONT_FACE=2886,DEPTH_RANGE=2928,DEPTH_WRITEMASK=2930,DEPTH_CLEAR_VALUE=2931,DEPTH_FUNC=2932,STENCIL_CLEAR_VALUE=2961,STENCIL_FUNC=2962,STENCIL_FAIL=2964,STENCIL_PASS_DEPTH_FAIL=2965,STENCIL_PASS_DEPTH_PASS=2966,STENCIL_REF=2967,STENCIL_VALUE_MASK=2963,STENCIL_WRITEMASK=2968,STENCIL_BACK_FUNC=34816,STENCIL_BACK_FAIL=34817,STENCIL_BACK_PASS_DEPTH_FAIL=34818,STENCIL_BACK_PASS_DEPTH_PASS=34819,STENCIL_BACK_REF=36003,STENCIL_BACK_VALUE_MASK=36004,STENCIL_BACK_WRITEMASK=36005,VIEWPORT=2978,SCISSOR_BOX=3088,COLOR_CLEAR_VALUE=3106,COLOR_WRITEMASK=3107,UNPACK_ALIGNMENT=3317,PACK_ALIGNMENT=3333,MAX_TEXTURE_SIZE=3379,MAX_VIEWPORT_DIMS=3386,SUBPIXEL_BITS=3408,RED_BITS=3410,GREEN_BITS=3411,BLUE_BITS=3412,ALPHA_BITS=3413,DEPTH_BITS=3414,STENCIL_BITS=3415,POLYGON_OFFSET_UNITS=10752,POLYGON_OFFSET_FACTOR=32824,TEXTURE_BINDING_2D=32873,SAMPLE_BUFFERS=32936,SAMPLES=32937,SAMPLE_COVERAGE_VALUE=32938,SAMPLE_COVERAGE_INVERT=32939,COMPRESSED_TEXTURE_FORMATS=34467,DONT_CARE=4352,FASTEST=4353,NICEST=4354,GENERATE_MIPMAP_HINT=33170,BYTE=5120,UNSIGNED_BYTE=5121,SHORT=5122,UNSIGNED_SHORT=5123,INT=5124,UNSIGNED_INT=5125,FLOAT=5126,DEPTH_COMPONENT=6402,ALPHA=6406,RGB=6407,RGBA=6408,LUMINANCE=6409,LUMINANCE_ALPHA=6410,UNSIGNED_SHORT_4_4_4_4=32819,UNSIGNED_SHORT_5_5_5_1=32820,UNSIGNED_SHORT_5_6_5=33635,FRAGMENT_SHADER=35632,VERTEX_SHADER=35633,MAX_VERTEX_ATTRIBS=34921,MAX_VERTEX_UNIFORM_VECTORS=36347,MAX_VARYING_VECTORS=36348,MAX_COMBINED_TEXTURE_IMAGE_UNITS=35661,MAX_VERTEX_TEXTURE_IMAGE_UNITS=35660,MAX_TEXTURE_IMAGE_UNITS=34930,MAX_FRAGMENT_UNIFORM_VECTORS=36349,SHADER_TYPE=35663,DELETE_STATUS=35712,LINK_STATUS=35714,VALIDATE_STATUS=35715,ATTACHED_SHADERS=35717,ACTIVE_UNIFORMS=35718,ACTIVE_ATTRIBUTES=35721,SHADING_LANGUAGE_VERSION=35724,CURRENT_PROGRAM=35725,NEVER=512,LESS=513,EQUAL=514,LEQUAL=515,GREATER=516,NOTEQUAL=517,GEQUAL=518,ALWAYS=519,KEEP=7680,REPLACE=7681,INCR=7682,DECR=7683,INVERT=5386,INCR_WRAP=34055,DECR_WRAP=34056,VENDOR=7936,RENDERER=7937,VERSION=7938,NEAREST=9728,LINEAR=9729,NEAREST_MIPMAP_NEAREST=9984,LINEAR_MIPMAP_NEAREST=9985,NEAREST_MIPMAP_LINEAR=9986,LINEAR_MIPMAP_LINEAR=9987,TEXTURE_MAG_FILTER=10240,TEXTURE_MIN_FILTER=10241,TEXTURE_WRAP_S=10242,TEXTURE_WRAP_T=10243,TEXTURE=5890,TEXTURE_CUBE_MAP=34067,TEXTURE_BINDING_CUBE_MAP=34068,TEXTURE_CUBE_MAP_POSITIVE_X=34069,TEXTURE_CUBE_MAP_NEGATIVE_X=34070,TEXTURE_CUBE_MAP_POSITIVE_Y=34071,TEXTURE_CUBE_MAP_NEGATIVE_Y=34072,TEXTURE_CUBE_MAP_POSITIVE_Z=34073,TEXTURE_CUBE_MAP_NEGATIVE_Z=34074,MAX_CUBE_MAP_TEXTURE_SIZE=34076,TEXTURE0=33984,TEXTURE1=33985,TEXTURE2=33986,TEXTURE3=33987,TEXTURE4=33988,TEXTURE5=33989,TEXTURE6=33990,TEXTURE7=33991,TEXTURE8=33992,TEXTURE9=33993,TEXTURE10=33994,TEXTURE11=33995,TEXTURE12=33996,TEXTURE13=33997,TEXTURE14=33998,TEXTURE15=33999,TEXTURE16=34000,TEXTURE17=34001,TEXTURE18=34002,TEXTURE19=34003,TEXTURE20=34004,TEXTURE21=34005,TEXTURE22=34006,TEXTURE23=34007,TEXTURE24=34008,TEXTURE25=34009,TEXTURE26=34010,TEXTURE27=34011,TEXTURE28=34012,TEXTURE29=34013,TEXTURE30=34014,TEXTURE31=34015,ACTIVE_TEXTURE=34016,REPEAT=10497,CLAMP_TO_EDGE=33071,MIRRORED_REPEAT=33648,FLOAT_VEC2=35664,FLOAT_VEC3=35665,FLOAT_VEC4=35666,INT_VEC2=35667,INT_VEC3=35668,INT_VEC4=35669,BOOL=35670,BOOL_VEC2=35671,BOOL_VEC3=35672,BOOL_VEC4=35673,FLOAT_MAT2=35674,FLOAT_MAT3=35675,FLOAT_MAT4=35676,SAMPLER_2D=35678,SAMPLER_CUBE=35680,VERTEX_ATTRIB_ARRAY_ENABLED=34338,VERTEX_ATTRIB_ARRAY_SIZE=34339,VERTEX_ATTRIB_ARRAY_STRIDE=34340,VERTEX_ATTRIB_ARRAY_TYPE=34341,VERTEX_ATTRIB_ARRAY_NORMALIZED=34922,VERTEX_ATTRIB_ARRAY_POINTER=34373,VERTEX_ATTRIB_ARRAY_BUFFER_BINDING=34975,IMPLEMENTATION_COLOR_READ_TYPE=35738,IMPLEMENTATION_COLOR_READ_FORMAT=35739,COMPILE_STATUS=35713,LOW_FLOAT=36336,MEDIUM_FLOAT=36337,HIGH_FLOAT=36338,LOW_INT=36339,MEDIUM_INT=36340,HIGH_INT=36341,FRAMEBUFFER=36160,RENDERBUFFER=36161,RGBA4=32854,RGB5_A1=32855,RGB565=36194,DEPTH_COMPONENT16=33189,STENCIL_INDEX8=36168,DEPTH_STENCIL=34041,RENDERBUFFER_WIDTH=36162,RENDERBUFFER_HEIGHT=36163,RENDERBUFFER_INTERNAL_FORMAT=36164,RENDERBUFFER_RED_SIZE=36176,RENDERBUFFER_GREEN_SIZE=36177,RENDERBUFFER_BLUE_SIZE=36178,RENDERBUFFER_ALPHA_SIZE=36179,RENDERBUFFER_DEPTH_SIZE=36180,RENDERBUFFER_STENCIL_SIZE=36181,FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE=36048,FRAMEBUFFER_ATTACHMENT_OBJECT_NAME=36049,FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL=36050,FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE=36051,COLOR_ATTACHMENT0=36064,DEPTH_ATTACHMENT=36096,STENCIL_ATTACHMENT=36128,DEPTH_STENCIL_ATTACHMENT=33306,NONE=0,FRAMEBUFFER_COMPLETE=36053,FRAMEBUFFER_INCOMPLETE_ATTACHMENT=36054,FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT=36055,FRAMEBUFFER_INCOMPLETE_DIMENSIONS=36057,FRAMEBUFFER_UNSUPPORTED=36061,FRAMEBUFFER_BINDING=36006,RENDERBUFFER_BINDING=36007,MAX_RENDERBUFFER_SIZE=34024,INVALID_FRAMEBUFFER_OPERATION=1286,UNPACK_FLIP_Y_WEBGL=37440,UNPACK_PREMULTIPLY_ALPHA_WEBGL=37441,CONTEXT_LOST_WEBGL=37442,UNPACK_COLORSPACE_CONVERSION_WEBGL=37443,BROWSER_DEFAULT_WEBGL=37444,READ_BUFFER=3074,UNPACK_ROW_LENGTH=3314,UNPACK_SKIP_ROWS=3315,UNPACK_SKIP_PIXELS=3316,PACK_ROW_LENGTH=3330,PACK_SKIP_ROWS=3331,PACK_SKIP_PIXELS=3332,COLOR=6144,DEPTH=6145,STENCIL=6146,RED=6403,RGB8=32849,RGBA8=32856,RGB10_A2=32857,TEXTURE_BINDING_3D=32874,UNPACK_SKIP_IMAGES=32877,UNPACK_IMAGE_HEIGHT=32878,TEXTURE_3D=32879,TEXTURE_WRAP_R=32882,MAX_3D_TEXTURE_SIZE=32883,UNSIGNED_INT_2_10_10_10_REV=33640,MAX_ELEMENTS_VERTICES=33000,MAX_ELEMENTS_INDICES=33001,TEXTURE_MIN_LOD=33082,TEXTURE_MAX_LOD=33083,TEXTURE_BASE_LEVEL=33084,TEXTURE_MAX_LEVEL=33085,MIN=32775,MAX=32776,DEPTH_COMPONENT24=33190,MAX_TEXTURE_LOD_BIAS=34045,TEXTURE_COMPARE_MODE=34892,TEXTURE_COMPARE_FUNC=34893,CURRENT_QUERY=34917,QUERY_RESULT=34918,QUERY_RESULT_AVAILABLE=34919,STREAM_READ=35041,STREAM_COPY=35042,STATIC_READ=35045,STATIC_COPY=35046,DYNAMIC_READ=35049,DYNAMIC_COPY=35050,MAX_DRAW_BUFFERS=34852,DRAW_BUFFER0=34853,DRAW_BUFFER1=34854,DRAW_BUFFER2=34855,DRAW_BUFFER3=34856,DRAW_BUFFER4=34857,DRAW_BUFFER5=34858,DRAW_BUFFER6=34859,DRAW_BUFFER7=34860,DRAW_BUFFER8=34861,DRAW_BUFFER9=34862,DRAW_BUFFER10=34863,DRAW_BUFFER11=34864,DRAW_BUFFER12=34865,DRAW_BUFFER13=34866,DRAW_BUFFER14=34867,DRAW_BUFFER15=34868,MAX_FRAGMENT_UNIFORM_COMPONENTS=35657,MAX_VERTEX_UNIFORM_COMPONENTS=35658,SAMPLER_3D=35679,SAMPLER_2D_SHADOW=35682,FRAGMENT_SHADER_DERIVATIVE_HINT=35723,PIXEL_PACK_BUFFER=35051,PIXEL_UNPACK_BUFFER=35052,PIXEL_PACK_BUFFER_BINDING=35053,PIXEL_UNPACK_BUFFER_BINDING=35055,FLOAT_MAT2x3=35685,FLOAT_MAT2x4=35686,FLOAT_MAT3x2=35687,FLOAT_MAT3x4=35688,FLOAT_MAT4x2=35689,FLOAT_MAT4x3=35690,SRGB=35904,SRGB8=35905,SRGB8_ALPHA8=35907,COMPARE_REF_TO_TEXTURE=34894,RGBA32F=34836,RGB32F=34837,RGBA16F=34842,RGB16F=34843,VERTEX_ATTRIB_ARRAY_INTEGER=35069,MAX_ARRAY_TEXTURE_LAYERS=35071,MIN_PROGRAM_TEXEL_OFFSET=35076,MAX_PROGRAM_TEXEL_OFFSET=35077,MAX_VARYING_COMPONENTS=35659,TEXTURE_2D_ARRAY=35866,TEXTURE_BINDING_2D_ARRAY=35869,R11F_G11F_B10F=35898,UNSIGNED_INT_10F_11F_11F_REV=35899,RGB9_E5=35901,UNSIGNED_INT_5_9_9_9_REV=35902,TRANSFORM_FEEDBACK_BUFFER_MODE=35967,MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS=35968,TRANSFORM_FEEDBACK_VARYINGS=35971,TRANSFORM_FEEDBACK_BUFFER_START=35972,TRANSFORM_FEEDBACK_BUFFER_SIZE=35973,TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN=35976,RASTERIZER_DISCARD=35977,MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS=35978,MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS=35979,INTERLEAVED_ATTRIBS=35980,SEPARATE_ATTRIBS=35981,TRANSFORM_FEEDBACK_BUFFER=35982,TRANSFORM_FEEDBACK_BUFFER_BINDING=35983,RGBA32UI=36208,RGB32UI=36209,RGBA16UI=36214,RGB16UI=36215,RGBA8UI=36220,RGB8UI=36221,RGBA32I=36226,RGB32I=36227,RGBA16I=36232,RGB16I=36233,RGBA8I=36238,RGB8I=36239,RED_INTEGER=36244,RGB_INTEGER=36248,RGBA_INTEGER=36249,SAMPLER_2D_ARRAY=36289,SAMPLER_2D_ARRAY_SHADOW=36292,SAMPLER_CUBE_SHADOW=36293,UNSIGNED_INT_VEC2=36294,UNSIGNED_INT_VEC3=36295,UNSIGNED_INT_VEC4=36296,INT_SAMPLER_2D=36298,INT_SAMPLER_3D=36299,INT_SAMPLER_CUBE=36300,INT_SAMPLER_2D_ARRAY=36303,UNSIGNED_INT_SAMPLER_2D=36306,UNSIGNED_INT_SAMPLER_3D=36307,UNSIGNED_INT_SAMPLER_CUBE=36308,UNSIGNED_INT_SAMPLER_2D_ARRAY=36311,DEPTH_COMPONENT32F=36012,DEPTH32F_STENCIL8=36013,FLOAT_32_UNSIGNED_INT_24_8_REV=36269,FRAMEBUFFER_ATTACHMENT_COLOR_ENCODING=33296,FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE=33297,FRAMEBUFFER_ATTACHMENT_RED_SIZE=33298,FRAMEBUFFER_ATTACHMENT_GREEN_SIZE=33299,FRAMEBUFFER_ATTACHMENT_BLUE_SIZE=33300,FRAMEBUFFER_ATTACHMENT_ALPHA_SIZE=33301,FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE=33302,FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE=33303,FRAMEBUFFER_DEFAULT=33304,UNSIGNED_INT_24_8=34042,DEPTH24_STENCIL8=35056,UNSIGNED_NORMALIZED=35863,DRAW_FRAMEBUFFER_BINDING=36006,READ_FRAMEBUFFER=36008,DRAW_FRAMEBUFFER=36009,READ_FRAMEBUFFER_BINDING=36010,RENDERBUFFER_SAMPLES=36011,FRAMEBUFFER_ATTACHMENT_TEXTURE_LAYER=36052,MAX_COLOR_ATTACHMENTS=36063,COLOR_ATTACHMENT1=36065,COLOR_ATTACHMENT2=36066,COLOR_ATTACHMENT3=36067,COLOR_ATTACHMENT4=36068,COLOR_ATTACHMENT5=36069,COLOR_ATTACHMENT6=36070,COLOR_ATTACHMENT7=36071,COLOR_ATTACHMENT8=36072,COLOR_ATTACHMENT9=36073,COLOR_ATTACHMENT10=36074,COLOR_ATTACHMENT11=36075,COLOR_ATTACHMENT12=36076,COLOR_ATTACHMENT13=36077,COLOR_ATTACHMENT14=36078,COLOR_ATTACHMENT15=36079,FRAMEBUFFER_INCOMPLETE_MULTISAMPLE=36182,MAX_SAMPLES=36183,HALF_FLOAT=5131,RG=33319,RG_INTEGER=33320,R8=33321,RG8=33323,R16F=33325,R32F=33326,RG16F=33327,RG32F=33328,R8I=33329,R8UI=33330,R16I=33331,R16UI=33332,R32I=33333,R32UI=33334,RG8I=33335,RG8UI=33336,RG16I=33337,RG16UI=33338,RG32I=33339,RG32UI=33340,VERTEX_ARRAY_BINDING=34229,R8_SNORM=36756,RG8_SNORM=36757,RGB8_SNORM=36758,RGBA8_SNORM=36759,SIGNED_NORMALIZED=36764,COPY_READ_BUFFER=36662,COPY_WRITE_BUFFER=36663,COPY_READ_BUFFER_BINDING=36662,COPY_WRITE_BUFFER_BINDING=36663,UNIFORM_BUFFER=35345,UNIFORM_BUFFER_BINDING=35368,UNIFORM_BUFFER_START=35369,UNIFORM_BUFFER_SIZE=35370,MAX_VERTEX_UNIFORM_BLOCKS=35371,MAX_FRAGMENT_UNIFORM_BLOCKS=35373,MAX_COMBINED_UNIFORM_BLOCKS=35374,MAX_UNIFORM_BUFFER_BINDINGS=35375,MAX_UNIFORM_BLOCK_SIZE=35376,MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS=35377,MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS=35379,UNIFORM_BUFFER_OFFSET_ALIGNMENT=35380,ACTIVE_UNIFORM_BLOCKS=35382,UNIFORM_TYPE=35383,UNIFORM_SIZE=35384,UNIFORM_BLOCK_INDEX=35386,UNIFORM_OFFSET=35387,UNIFORM_ARRAY_STRIDE=35388,UNIFORM_MATRIX_STRIDE=35389,UNIFORM_IS_ROW_MAJOR=35390,UNIFORM_BLOCK_BINDING=35391,UNIFORM_BLOCK_DATA_SIZE=35392,UNIFORM_BLOCK_ACTIVE_UNIFORMS=35394,UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES=35395,UNIFORM_BLOCK_REFERENCED_BY_VERTEX_SHADER=35396,UNIFORM_BLOCK_REFERENCED_BY_FRAGMENT_SHADER=35398,INVALID_INDEX=4294967295,MAX_VERTEX_OUTPUT_COMPONENTS=37154,MAX_FRAGMENT_INPUT_COMPONENTS=37157,MAX_SERVER_WAIT_TIMEOUT=37137,OBJECT_TYPE=37138,SYNC_CONDITION=37139,SYNC_STATUS=37140,SYNC_FLAGS=37141,SYNC_FENCE=37142,SYNC_GPU_COMMANDS_COMPLETE=37143,UNSIGNALED=37144,SIGNALED=37145,ALREADY_SIGNALED=37146,TIMEOUT_EXPIRED=37147,CONDITION_SATISFIED=37148,WAIT_FAILED=37149,SYNC_FLUSH_COMMANDS_BIT=1,VERTEX_ATTRIB_ARRAY_DIVISOR=35070,ANY_SAMPLES_PASSED=35887,ANY_SAMPLES_PASSED_CONSERVATIVE=36202,SAMPLER_BINDING=35097,RGB10_A2UI=36975,INT_2_10_10_10_REV=36255,TRANSFORM_FEEDBACK=36386,TRANSFORM_FEEDBACK_PAUSED=36387,TRANSFORM_FEEDBACK_ACTIVE=36388,TRANSFORM_FEEDBACK_BINDING=36389,TEXTURE_IMMUTABLE_FORMAT=37167,MAX_ELEMENT_INDEX=36203,TEXTURE_IMMUTABLE_LEVELS=33503,TIMEOUT_IGNORED=-1,MAX_CLIENT_WAIT_TIMEOUT_WEBGL=37447';
   const GL2_METHODS = 'activeTexture,attachShader,beginQuery,beginTransformFeedback,bindAttribLocation,bindBufferBase,bindBufferRange,bindRenderbuffer,bindSampler,bindTransformFeedback,bindVertexArray,blendColor,blendEquation,blendEquationSeparate,blendFunc,blendFuncSeparate,blitFramebuffer,bufferData,bufferSubData,checkFramebufferStatus,clientWaitSync,compileShader,compressedTexImage2D,compressedTexImage3D,compressedTexSubImage2D,compressedTexSubImage3D,copyBufferSubData,copyTexImage2D,copyTexSubImage2D,copyTexSubImage3D,createBuffer,createFramebuffer,createProgram,createQuery,createRenderbuffer,createSampler,createShader,createTexture,createTransformFeedback,createVertexArray,cullFace,deleteBuffer,deleteFramebuffer,deleteProgram,deleteQuery,deleteRenderbuffer,deleteSampler,deleteShader,deleteSync,deleteTexture,deleteTransformFeedback,deleteVertexArray,depthFunc,depthMask,depthRange,detachShader,disable,drawArraysInstanced,drawElementsInstanced,drawRangeElements,enable,endQuery,endTransformFeedback,fenceSync,finish,flush,framebufferRenderbuffer,framebufferTexture2D,framebufferTextureLayer,frontFace,generateMipmap,getActiveAttrib,getActiveUniform,getActiveUniformBlockName,getActiveUniformBlockParameter,getActiveUniforms,getAttachedShaders,getAttribLocation,getBufferParameter,getBufferSubData,getContextAttributes,getError,getExtension,getFragDataLocation,getFramebufferAttachmentParameter,getIndexedParameter,getInternalformatParameter,getParameter,getProgramInfoLog,getProgramParameter,getQuery,getQueryParameter,getRenderbufferParameter,getSamplerParameter,getShaderInfoLog,getShaderParameter,getShaderPrecisionFormat,getShaderSource,getSupportedExtensions,getSyncParameter,getTexParameter,getTransformFeedbackVarying,getUniform,getUniformBlockIndex,getUniformIndices,getUniformLocation,getVertexAttrib,getVertexAttribOffset,hint,invalidateFramebuffer,invalidateSubFramebuffer,isBuffer,isContextLost,isEnabled,isFramebuffer,isProgram,isQuery,isRenderbuffer,isSampler,isShader,isSync,isTexture,isTransformFeedback,isVertexArray,lineWidth,linkProgram,pauseTransformFeedback,pixelStorei,polygonOffset,readBuffer,readPixels,renderbufferStorage,renderbufferStorageMultisample,resumeTransformFeedback,sampleCoverage,samplerParameterf,samplerParameteri,shaderSource,stencilFunc,stencilFuncSeparate,stencilMask,stencilMaskSeparate,stencilOp,stencilOpSeparate,texImage2D,texImage3D,texParameterf,texParameteri,texStorage2D,texStorage3D,texSubImage2D,texSubImage3D,transformFeedbackVaryings,uniform1ui,uniform2ui,uniform3ui,uniform4ui,uniformBlockBinding,useProgram,validateProgram,vertexAttribDivisor,vertexAttribI4i,vertexAttribI4ui,vertexAttribIPointer,waitSync,bindBuffer,bindFramebuffer,bindTexture,clear,clearBufferfi,clearBufferfv,clearBufferiv,clearBufferuiv,clearColor,clearDepth,clearStencil,colorMask,disableVertexAttribArray,drawArrays,drawBuffers,drawElements,enableVertexAttribArray,scissor,uniform1f,uniform1fv,uniform1i,uniform1iv,uniform1uiv,uniform2f,uniform2fv,uniform2i,uniform2iv,uniform2uiv,uniform3f,uniform3fv,uniform3i,uniform3iv,uniform3uiv,uniform4f,uniform4fv,uniform4i,uniform4iv,uniform4uiv,uniformMatrix2fv,uniformMatrix2x3fv,uniformMatrix2x4fv,uniformMatrix3fv,uniformMatrix3x2fv,uniformMatrix3x4fv,uniformMatrix4fv,uniformMatrix4x2fv,uniformMatrix4x3fv,vertexAttrib1f,vertexAttrib1fv,vertexAttrib2f,vertexAttrib2fv,vertexAttrib3f,vertexAttrib3fv,vertexAttrib4f,vertexAttrib4fv,vertexAttribI4iv,vertexAttribI4uiv,vertexAttribPointer,viewport,drawingBufferStorage,makeXRCompatible';
-  const GL_ATTRS = 'canvas,drawingBufferWidth,drawingBufferHeight,drawingBufferColorSpace,unpackColorSpace,drawingBufferFormat'.split(',');
+  const GL_ATTRS = __s_split('canvas,drawingBufferWidth,drawingBufferHeight,drawingBufferColorSpace,unpackColorSpace,drawingBufferFormat', ',');
   // WebGL limits and formats captured from Chrome 148 on this machine (a real
   // GPU never reports zeros there). Our own strings (vendor, renderer,
   // versions) stay ours; the table only fills what was missing.
@@ -10201,16 +10508,16 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
       try { Object.defineProperty(P, '__ptPublished', { value: true }); } catch (e) {}
       // Constants are data, not functions, and in Chrome cannot be rewritten
       // or deleted: the descriptor is captured from there.
-      for (const pair of constsStr.split(',')) {
-        const eq = pair.indexOf('=');
+      for (const pair of __s_split(constsStr, ',')) {
+        const eq = __s_indexOf(pair, '=');
         if (eq < 0) continue;
         try {
-          Object.defineProperty(P, pair.slice(0, eq), {
-            value: +pair.slice(eq + 1), writable: false, enumerable: true, configurable: false,
+          Object.defineProperty(P, __s_slice(pair, 0, eq), {
+            value: +__s_slice(pair, eq + 1), writable: false, enumerable: true, configurable: false,
           });
         } catch (e) {}
       }
-      for (const name of methodsStr.split(',')) {
+      for (const name of __s_split(methodsStr, ',')) {
         // As many args as the browser requires: fewer is a refusal naming the
         // method, not a silent `undefined`.
         const need = GL_ARITY[name] | 0;
@@ -10289,15 +10596,15 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
     if (EXT_PROTOS.has(key)) return EXT_PROTOS.get(key);
     const P = {};
     const row = EXT_TABLE[key];
-    const members = row ? row.members : (shape[1] || '').split(',').filter(Boolean).map((k) => {
+    const members = row ? row.members : __s_split(shape[1] || '', ',').filter(Boolean).map((k) => {
       const v = EXT_VALUES[k];
       return typeof v === 'number' ? [k, 'n' + v, 'e--'] : [k, 'f0', 'ewc'];
     }).concat([['Symbol(Symbol.toStringTag)', 's' + shape[0], '--c']]);
     for (const [k, kind, fl] of members) {
       const e = fl[0] === 'e', w = fl[1] === 'w', c = fl[2] === 'c';
       try {
-        if (k === 'Symbol(Symbol.toStringTag)') { Object.defineProperty(P, Symbol.toStringTag, { value: kind.slice(1), writable: w, enumerable: e, configurable: c }); continue; }
-        if (kind[0] === 'n') { Object.defineProperty(P, k, { value: +kind.slice(1), writable: w, enumerable: e, configurable: c }); continue; }
+        if (k === 'Symbol(Symbol.toStringTag)') { Object.defineProperty(P, Symbol.toStringTag, { value: __s_slice(kind, 1), writable: w, enumerable: e, configurable: c }); continue; }
+        if (kind[0] === 'n') { Object.defineProperty(P, k, { value: +__s_slice(kind, 1), writable: w, enumerable: e, configurable: c }); continue; }
         if (kind[0] === 'f') {
           const impl = EXT_METHODS[k];
           const f = ({ [k](...a) {
@@ -10305,7 +10612,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
             if (!owner) throw __pt_mkErr(TypeError, 'Illegal invocation');
             return impl ? Reflect.apply(impl, owner, a) : undefined;
           } })[k];
-          try { Object.defineProperty(f, 'length', { value: +kind.slice(1) || 0, configurable: true }); } catch (x) {}
+          try { Object.defineProperty(f, 'length', { value: +__s_slice(kind, 1) || 0, configurable: true }); } catch (x) {}
           Object.defineProperty(P, k, { value: mask(f, k), writable: w, enumerable: e, configurable: c });
         }
       } catch (x) {}
@@ -10384,9 +10691,9 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
           // are Float32Array, compressed formats Uint32Array, sizes Int32Array,
           // the color mask a plain boolean array.
           if (!Array.isArray(v)) return v;
-          if (typeof v[0] === 'boolean') return v.slice();
-          if (GL_F32.indexOf(p) >= 0) return new Float32Array(v);
-          if (GL_U32.indexOf(p) >= 0) return new Uint32Array(v);
+          if (typeof v[0] === 'boolean') return __s_slice(v);
+          if (__s_indexOf(GL_F32, p) >= 0) return new Float32Array(v);
+          if (__s_indexOf(GL_U32, p) >= 0) return new Uint32Array(v);
           return new Int32Array(v);
         }
         // An unknown enum gives `null`, not zero, as in the browser.
@@ -10422,7 +10729,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
         cache.set(name, o);
         return o;
       },
-      getSupportedExtensions(){ return (ver === 2 ? GL2_SUPPORTED : GL1_SUPPORTED).slice(); },
+      getSupportedExtensions(){ return __s_slice(ver === 2 ? GL2_SUPPORTED : GL1_SUPPORTED); },
       getAttribLocation(){ return 0; },
       getContextAttributes(){
         // Requested values are reflected as in the browser:
@@ -10518,7 +10825,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
         uniform4f(l, a, b, c2, d) { const v = new Float32Array([a, b, c2, d]); US.set(L(l), v); __pt_glUniformF(gid, L(l), v); },
         uniform1i(l, x) { US.set(L(l), new Int32Array([x | 0])); __pt_glUniform1i(gid, L(l), x | 0); },
         uniformMatrix4fv(l, transpose, v) { const a = new Float32Array(v); US.set(L(l), a); __pt_glUniformMatrix4(gid, L(l), transpose ? 1 : 0, a); },
-        getUniform(p, l) { const v = US.get(L(l)); if (!v) return null; return v.length === 1 ? v[0] : v.slice(); },
+        getUniform(p, l) { const v = US.get(L(l)); if (!v) return null; return v.length === 1 ? v[0] : __s_slice(v); },
         clearColor(r, g, b, a) { const q = (v) => Math.max(0, Math.min(255, Math.round((+v || 0) * 255))); clearRGBA = [q(r), q(g), q(b), q(a)]; P[0x0C22] = new Float32Array([+r || 0, +g || 0, +b || 0, +a || 0]); },
         // State read back via getParameter is already float32, as in the
         // browser: 11.2 comes back as 11.199999809265137.
@@ -10885,9 +11192,9 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
       globalThis.__pt_blobFromDataUrl = (url) => {
         let type = 'image/png', body = '';
         try {
-          const head = String(url).slice(5, String(url).indexOf(','));
-          if (head) type = head.replace(';base64', '') || type;
-          const b64 = String(url).slice(String(url).indexOf(',') + 1);
+          const head = __s_slice(String(url), 5, __s_indexOf(String(url), ','));
+          if (head) type = __s_replace(head, ';base64', '') || type;
+          const b64 = __s_slice(String(url), __s_indexOf(String(url), ',') + 1);
           body = /;base64/.test(head) ? atob(b64) : decodeURIComponent(b64);
         } catch (e) { body = ''; }
         return new Blob([body], { type });
@@ -11019,7 +11326,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
       }
     }
     const ownMembers = Object.keys(state).filter(
-      (k) => k.lastIndexOf('__pt', 0) !== 0 && !SHARED.has(k));
+      (k) => __s_lastIndexOf(k, '__pt', 0) !== 0 && !SHARED.has(k));
     // Sources have their own base: OscillatorNode inherits
     // AudioScheduledSourceNode, not AudioNode directly, or `start` is lost.
     const P = iface ? shapeNodeProto(iface, scheduled ? 'AudioScheduledSourceNode' : 'AudioNode', ownMembers) : null;
@@ -11039,7 +11346,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
   // FNV-1a over every node parameter + the edge list: the graph's identity.
   const graphHash = (ctx) => {
     let h = 2166136261 >>> 0;
-    const note = (s) => { s = String(s); for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } };
+    const note = (s) => { s = String(s); for (let i = 0; i < s.length; i++) { h ^= __s_charCodeAt(s, i); h = Math.imul(h, 16777619) >>> 0; } };
     for (const n of ctx.__ptNodes) {
       note(n.__ptKind);
       if (n.type !== undefined) note('t' + n.type);
@@ -11996,7 +12303,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
     const out = [];
     const bytes = new Uint8Array(n);
     (globalThis.crypto && crypto.getRandomValues) ? crypto.getRandomValues(bytes) : bytes.fill(7);
-    for (const b of bytes) out.push(b.toString(16).padStart(2, '0'));
+    for (const b of bytes) out.push(__s_padStart(b.toString(16), 2, '0'));
     return out.join('');
   };
   const b64ish = (n) => {
@@ -12008,7 +12315,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
   const dtlsPrint = () => {
     const bytes = new Uint8Array(32);
     (globalThis.crypto && crypto.getRandomValues) ? crypto.getRandomValues(bytes) : bytes.fill(7);
-    return [...bytes].map((b) => b.toString(16).padStart(2, '0').toUpperCase()).join(':');
+    return [...bytes].map((b) => __s_toUpperCase(__s_padStart(b.toString(16), 2, '0'))).join(':');
   };
 
   // WebRTC as in Chrome 151 (report section cHOXt5): the offer is built from
@@ -12057,7 +12364,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
     const C = globalThis.RTCIceCandidate;
     const o = Object.create(C && C.prototype ? C.prototype : Object.prototype);
     // In object fields Chrome brackets IPv6 (not in the candidate string).
-    const br = (a) => (typeof a === 'string' && a.indexOf(':') >= 0 ? '[' + a + ']' : a);
+    const br = (a) => (typeof a === 'string' && __s_indexOf(a, ':') >= 0 ? '[' + a + ']' : a);
     const bag = { candidate: line, sdpMid: String(mid), sdpMLineIndex: idx, foundation: f.foundation, component: 'rtp', priority: f.priority,
       address: br(f.address), protocol: 'udp', port: f.port, type: f.type, tcpType: null, relatedAddress: f.raddr === undefined ? null : br(f.raddr),
       relatedPort: f.rport === undefined ? null : f.rport, usernameFragment: ufrag };
@@ -12125,22 +12432,22 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
     __ptSection(kind, mid, withCands) {
       const st = this.__pt;
       let sec = RTC_CHROME.sections[kind] || RTC_CHROME.sections.application;
-      sec = sec.split('{UFRAG}').join(st.ufrag).split('{PWD}').join(st.pwd).split('{FP}').join(st.print).replace(/a=mid:\d+/, 'a=mid:' + mid);
+      sec = __s_replace(__s_split(__s_split(__s_split(sec, '{UFRAG}').join(st.ufrag), '{PWD}').join(st.pwd), '{FP}').join(st.print), /a=mid:\d+/, 'a=mid:' + mid);
       if (!withCands) return sec;
       const mine = st.cands.filter((c) => c.idx === mid);
       if (!mine.length) return sec;
       const lines = mine.map((c) => 'a=' + c.sdpLine + '\r\n').join('');
       const s4 = st.srflx4[mid];
-      if (s4) sec = sec.replace(/^m=(\S+) 9 /, 'm=$1 ' + s4.port + ' ').replace('c=IN IP4 0.0.0.0', 'c=IN IP4 ' + s4.ip);
-      const anchor = sec.indexOf('a=rtcp:9 IN IP4 0.0.0.0\r\n');
-      if (anchor >= 0) { const at = anchor + 'a=rtcp:9 IN IP4 0.0.0.0\r\n'.length; return sec.slice(0, at) + lines + sec.slice(at); }
-      const c = sec.indexOf('\r\n', sec.indexOf('c=IN IP4')) + 2;
-      return sec.slice(0, c) + lines + sec.slice(c);
+      if (s4) sec = __s_replace(__s_replace(sec, /^m=(\S+) 9 /, 'm=$1 ' + s4.port + ' '), 'c=IN IP4 0.0.0.0', 'c=IN IP4 ' + s4.ip);
+      const anchor = __s_indexOf(sec, 'a=rtcp:9 IN IP4 0.0.0.0\r\n');
+      if (anchor >= 0) { const at = anchor + 'a=rtcp:9 IN IP4 0.0.0.0\r\n'.length; return __s_slice(sec, 0, at) + lines + __s_slice(sec, at); }
+      const c = __s_indexOf(sec, '\r\n', __s_indexOf(sec, 'c=IN IP4')) + 2;
+      return __s_slice(sec, 0, c) + lines + __s_slice(sec, c);
     }
     __ptSdp(withCands) {
       const st = this.__pt;
       const kinds = st.kinds.length ? st.kinds : this.__ptKinds();
-      const head = RTC_CHROME.head.split('{SID}').join(st.sid).replace(/a=group:BUNDLE[^\r]*/, 'a=group:BUNDLE ' + kinds.map((_, i) => i).join(' '));
+      const head = __s_replace(__s_split(RTC_CHROME.head, '{SID}').join(st.sid), /a=group:BUNDLE[^\r]*/, 'a=group:BUNDLE ' + kinds.map((_, i) => i).join(' '));
       return head + kinds.map((k, i) => this.__ptSection(k, i, withCands)).join('');
     }
     createDataChannel(label, opts) {
@@ -12183,7 +12490,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
       return { sdp, type: 'offer' };
     }
     async createAnswer() {
-      const sdp = this.__ptSdp(false).replace(/a=setup:actpass/g, 'a=setup:active');
+      const sdp = __s_replace(this.__ptSdp(false), /a=setup:actpass/g, 'a=setup:active');
       await new Promise((r) => setTimeout(r, 5));
       return { sdp, type: 'answer' };
     }
@@ -12234,7 +12541,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
         for (const s of (st.config.iceServers || [])) {
           for (const u of [].concat(s && s.urls || s && s.url || [])) {
             const m = /^stuns?:([^:?]+|\[[^\]]+\])(?::(\d+))?/.exec(String(u));
-            if (m) servers.push(m[1].replace(/^\[|\]$/g, '') + ':' + (m[2] || '3478'));
+            if (m) servers.push(__s_replace(m[1], /^\[|\]$/g, '') + ':' + (m[2] || '3478'));
           }
         }
       } catch (e) {}
@@ -12275,7 +12582,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
     getStats() { return Promise.resolve(new Map()); }
     getSenders() { return this.__pt.tx.map((t) => t.sender); }
     getReceivers() { return this.__pt.tx.map((t) => t.receiver); }
-    getTransceivers() { return this.__pt.tx.slice(); }
+    getTransceivers() { return __s_slice(this.__pt.tx); }
     getConfiguration() { return this.__pt.config; }
     setConfiguration(c) { this.__pt.config = c || {}; }
     restartIce() {}
@@ -12410,12 +12717,12 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
       // The observer exposes thresholds and margins, and they are read: a list
       // of numbers and four space-separated sides.
       const t = opts && opts.threshold;
-      const list = t === undefined ? [0] : (Array.isArray(t) ? t.slice() : [Number(t) || 0]);
-      const margin = String((opts && opts.rootMargin) || '0px').trim().split(/\s+/);
+      const list = t === undefined ? [0] : (Array.isArray(t) ? __s_slice(t) : [Number(t) || 0]);
+      const margin = __s_split(__s_trim(String((opts && opts.rootMargin) || '0px')), /\s+/);
       const four = margin.length === 1 ? [margin[0], margin[0], margin[0], margin[0]]
         : margin.length === 2 ? [margin[0], margin[1], margin[0], margin[1]]
         : margin.length === 3 ? [margin[0], margin[1], margin[2], margin[1]]
-        : margin.slice(0, 4);
+        : __s_slice(margin, 0, 4);
       Object.defineProperty(this, '__ptOpts', {
         value: { thresholds: Object.freeze(list), rootMargin: four.join(' '),
                  root: (opts && opts.root) || null, delay: (opts && opts.delay) | 0,
@@ -12496,9 +12803,9 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
     return Object.assign(mql, {
       onchange: null,
       addListener: (f) => { if (f) listeners.push(f); },
-      removeListener: (f) => { const i = listeners.indexOf(f); if (i >= 0) listeners.splice(i, 1); },
+      removeListener: (f) => { const i = __s_indexOf(listeners, f); if (i >= 0) listeners.splice(i, 1); },
       addEventListener: (t, f) => { if (t === 'change' && f) listeners.push(f); },
-      removeEventListener: (t, f) => { const i = listeners.indexOf(f); if (i >= 0) listeners.splice(i, 1); },
+      removeEventListener: (t, f) => { const i = __s_indexOf(listeners, f); if (i >= 0) listeners.splice(i, 1); },
       dispatchEvent: () => false,
     });
   };
@@ -12576,7 +12883,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
     };
     globalThis.TextDecoder = class TextDecoder {
       constructor(label, opts) {
-        const want = String(label === undefined ? 'utf-8' : label).trim().toLowerCase();
+        const want = __s_toLowerCase(__s_trim(String(label === undefined ? 'utf-8' : label)));
         const enc = LABELS[want];
         if (!enc) throw __pt_mkErr(RangeError, "Failed to construct 'TextDecoder': The encoding label provided ('" + label + "') is invalid.");
         Object.defineProperty(this, '__ptEnc', { value: enc, enumerable: false });
@@ -12695,13 +13002,13 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
         Object.defineProperty(this, '__ls', { value: {}, enumerable: false });
       }
       addEventListener(t, fn) { (this.__ls[t] = this.__ls[t] || []).push(fn); }
-      removeEventListener(t, fn) { const l = this.__ls[t]; if (!l) return; const i = l.indexOf(fn); if (i >= 0) l.splice(i, 1); }
+      removeEventListener(t, fn) { const l = this.__ls[t]; if (!l) return; const i = __s_indexOf(l, fn); if (i >= 0) l.splice(i, 1); }
       dispatchEvent() { return true; }
       abort() { __pt_write(this, 'readyState', 2); }
       __ptFire(type) {
         const ev = { type, target: this, currentTarget: this, isTrusted: true };
         try { if (typeof this['on' + type] === 'function') this['on' + type](ev); } catch (e) {}
-        for (const fn of (this.__ls[type] || []).slice()) { try { fn.call(this, ev); } catch (e) {} }
+        for (const fn of __s_slice(this.__ls[type] || [])) { try { fn.call(this, ev); } catch (e) {} }
       }
       __ptRead(blob, make) {
         __pt_write(this, 'readyState', 1);
@@ -12727,7 +13034,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
   if (!globalThis.URLSearchParams) {
     globalThis.URLSearchParams = class URLSearchParams {
       constructor(init) { this.__ptD = [];
-        if (typeof init === 'string') { init.replace(/^[?]/, '').split('&').forEach((p) => { if (!p) return; const i = p.indexOf('='); const k = decodeURIComponent(i < 0 ? p : p.slice(0, i)); const v = i < 0 ? '' : decodeURIComponent(p.slice(i + 1).replace(/[+]/g, ' ')); this.__ptD.push([k, v]); }); }
+        if (typeof init === 'string') { __s_split(__s_replace(init, /^[?]/, ''), '&').forEach((p) => { if (!p) return; const i = __s_indexOf(p, '='); const k = decodeURIComponent(i < 0 ? p : __s_slice(p, 0, i)); const v = i < 0 ? '' : decodeURIComponent(__s_replace(__s_slice(p, i + 1), /[+]/g, ' ')); this.__ptD.push([k, v]); }); }
         else if (init && typeof init === 'object') { for (const k in init) this.__ptD.push([k, String(init[k])]); } }
       get(k) { const e = this.__ptD.find((x) => x[0] === k); return e ? e[1] : null; }
       getAll(k) { return this.__ptD.filter((x) => x[0] === k).map((x) => x[1]); }
@@ -12762,7 +13069,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
       hex[12] = '4';
       hex[16] = ((parseInt(hex[16], 16) & 3) | 8).toString(16);
       const s = hex.join('');
-      return s.slice(0, 8) + '-' + s.slice(8, 12) + '-' + s.slice(12, 16) + '-' + s.slice(16, 20) + '-' + s.slice(20);
+      return __s_slice(s, 0, 8) + '-' + __s_slice(s, 8, 12) + '-' + __s_slice(s, 12, 16) + '-' + __s_slice(s, 16, 20) + '-' + __s_slice(s, 20);
     };
     // URL parsing per the URL standard rules: lowercase scheme and host, drop
     // the default port, collapse `..` in paths, percent-encode spaces,
@@ -12773,7 +13080,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
     const punyEncode = (label) => {
       if (!/[^\x00-\x7f]/.test(label)) return label;
       const base = 36, tmin = 1, tmax = 26, skew = 38, damp = 700, initialBias = 72, initialN = 128;
-      const cps = Array.from(label).map((c) => c.codePointAt(0));
+      const cps = Array.from(label).map((c) => __s_codePointAt(c, 0));
       const basic = cps.filter((c) => c < 128);
       let out = basic.map((c) => String.fromCharCode(c)).join('');
       let h = basic.length;
@@ -12812,27 +13119,27 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
       }
       return 'xn--' + (delim ? out : out);
     };
-    const encHost = (h) => h.split('.').map(punyEncode).join('.');
+    const encHost = (h) => __s_split(h, '.').map(punyEncode).join('.');
     // The browser percent-encodes spaces and non-ASCII in paths; already
     // encoded sequences are left alone.
-    const encPath = (p) => p.replace(/[^\x21-\x7e]|[\\"<>^`{|}]/g, (c) =>
-      Array.from(new TextEncoder().encode(c)).map((b) => '%' + b.toString(16).toUpperCase().padStart(2, '0')).join(''));
+    const encPath = (p) => __s_replace(p, /[^\x21-\x7e]|[\\"<>^`{|}]/g, (c) =>
+      Array.from(new TextEncoder().encode(c)).map((b) => '%' + __s_padStart(__s_toUpperCase(b.toString(16)), 2, '0')).join(''));
     // Query and fragment are percent-encoded too: space, quote, angle
     // brackets, non-ASCII; the fragment also backtick.
-    const pct = (c) => Array.from(new TextEncoder().encode(c)).map((b) => '%' + b.toString(16).toUpperCase().padStart(2, '0')).join('');
-    const encQuery = (q, special) => q.replace(special ? /[^\x21-\x7e]|[#"<>']/g : /[^\x21-\x7e]|[#"<>]/g, pct);
-    const encFrag = (f) => f.replace(/[^\x21-\x7e]|["<>`]/g, pct);
+    const pct = (c) => Array.from(new TextEncoder().encode(c)).map((b) => '%' + __s_padStart(__s_toUpperCase(b.toString(16)), 2, '0')).join('');
+    const encQuery = (q, special) => __s_replace(q, special ? /[^\x21-\x7e]|[#"<>']/g : /[^\x21-\x7e]|[#"<>]/g, pct);
+    const encFrag = (f) => __s_replace(f, /[^\x21-\x7e]|["<>`]/g, pct);
     const normPath = (p) => {
-      const abs = p.startsWith('/');
+      const abs = __s_startsWith(p, '/');
       const out = [];
-      for (const seg of p.split('/')) {
+      for (const seg of __s_split(p, '/')) {
         if (seg === '.' || (seg === '' && out.length && abs)) continue;
         if (seg === '..') { out.pop(); continue; }
         out.push(seg);
       }
       let r = out.join('/');
-      if (abs && !r.startsWith('/')) r = '/' + r;
-      if (/\/(\.|\.\.)$/.test(p) && !r.endsWith('/')) r += '/';
+      if (abs && !__s_startsWith(r, '/')) r = '/' + r;
+      if (/\/(\.|\.\.)$/.test(p) && !__s_endsWith(r, '/')) r += '/';
       return r || (abs ? '/' : '');
     };
     const URL_STATE = new WeakMap();
@@ -12844,15 +13151,15 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
       return p;
     };
     const parseInto = (st, raw, base) => {
-      let s = String(raw).trim();
+      let s = __s_trim(String(raw));
       const m = /^([a-zA-Z][a-zA-Z0-9+.\-]*):/.exec(s);
-      let scheme = m ? m[1].toLowerCase() + ':' : '';
-      if (scheme) s = s.slice(m[0].length);
+      let scheme = m ? __s_toLowerCase(m[1]) + ':' : '';
+      if (scheme) s = __s_slice(s, m[0].length);
       if (!scheme) {
         if (!base) return false;
         const b = URL_STATE.get(base) || base;
         scheme = b.scheme;
-        if (!s.startsWith('//')) {
+        if (!__s_startsWith(s, '//')) {
           // Relative URL: scheme, credentials and host are taken from the base
           // as is. Rebuilding them into a string lost the port, so navigating
           // to `/dest` from a base with a port went nowhere.
@@ -12861,14 +13168,14 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
           st.host = b.host; __pt_write(st, 'port', b.port);
           st.opaque = false;
           let rest = s;
-          const hi = rest.indexOf('#'); st.fragment = hi >= 0 ? encFrag(rest.slice(hi)) : '';
-          if (hi >= 0) rest = rest.slice(0, hi);
-          const qi = rest.indexOf('?'); st.query = qi >= 0 ? encQuery(rest.slice(qi), true) : '';
-          if (qi >= 0) rest = rest.slice(0, qi);
+          const hi = __s_indexOf(rest, '#'); st.fragment = hi >= 0 ? encFrag(__s_slice(rest, hi)) : '';
+          if (hi >= 0) rest = __s_slice(rest, 0, hi);
+          const qi = __s_indexOf(rest, '?'); st.query = qi >= 0 ? encQuery(__s_slice(rest, qi), true) : '';
+          if (qi >= 0) rest = __s_slice(rest, 0, qi);
           let path;
           if (!rest) path = b.path;
-          else if (rest.startsWith('/')) path = rest;
-          else path = b.path.replace(/[^/]*$/, '') + rest;
+          else if (__s_startsWith(rest, '/')) path = rest;
+          else path = __s_replace(b.path, /[^/]*$/, '') + rest;
           if (!rest && !st.query) st.query = st.fragment ? b.query : b.query;
           st.path = encPath(normPath(path || '/'));
           return true;
@@ -12876,55 +13183,55 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
       }
       st.scheme = scheme;
       const special = Object.prototype.hasOwnProperty.call(SPECIAL, scheme);
-      st.opaque = !special && !s.startsWith('//');
+      st.opaque = !special && !__s_startsWith(s, '//');
       if (st.opaque) {
         // `mailto:`, `data:`, `about:`, `blob:`: the whole path, no host.
-        const hi = s.indexOf('#'); const frag = hi >= 0 ? s.slice(hi) : '';
-        if (hi >= 0) s = s.slice(0, hi);
-        const qi = s.indexOf('?'); const q = qi >= 0 ? s.slice(qi) : '';
-        if (qi >= 0) s = s.slice(0, qi);
+        const hi = __s_indexOf(s, '#'); const frag = hi >= 0 ? __s_slice(s, hi) : '';
+        if (hi >= 0) s = __s_slice(s, 0, hi);
+        const qi = __s_indexOf(s, '?'); const q = qi >= 0 ? __s_slice(s, qi) : '';
+        if (qi >= 0) s = __s_slice(s, 0, qi);
         st.host = ''; __pt_write(st, 'port', ''); st.username = ''; st.password = '';
         st.path = s; st.query = q; st.fragment = frag;
         return true;
       }
       // A special scheme tolerates any number of slashes after the colon
       // (`http:/a`, `http:///a`): all are `http://a/`.
-      if (special && scheme !== 'file:') s = s.replace(/^[\/\\]*/, '');
-      else if (s.startsWith('//')) s = s.slice(2);
-      const cut = s.search(/[/?#\\]/);
-      let auth = cut < 0 ? s : s.slice(0, cut);
-      let rest = cut < 0 ? '' : s.slice(cut);
-      const at = auth.lastIndexOf('@');
+      if (special && scheme !== 'file:') s = __s_replace(s, /^[\/\\]*/, '');
+      else if (__s_startsWith(s, '//')) s = __s_slice(s, 2);
+      const cut = __s_search(s, /[/?#\\]/);
+      let auth = cut < 0 ? s : __s_slice(s, 0, cut);
+      let rest = cut < 0 ? '' : __s_slice(s, cut);
+      const at = __s_lastIndexOf(auth, '@');
       if (at >= 0) {
-        const ui = auth.slice(0, at); auth = auth.slice(at + 1);
-        const ci = ui.indexOf(':');
-        st.username = ci < 0 ? ui : ui.slice(0, ci);
-        st.password = ci < 0 ? '' : ui.slice(ci + 1);
+        const ui = __s_slice(auth, 0, at); auth = __s_slice(auth, at + 1);
+        const ci = __s_indexOf(ui, ':');
+        st.username = ci < 0 ? ui : __s_slice(ui, 0, ci);
+        st.password = ci < 0 ? '' : __s_slice(ui, ci + 1);
       } else { st.username = st.username || ''; st.password = st.password || ''; }
       // IPv6 is bracketed, and colons inside are not the port.
       let hostPart = auth, portPart = '';
-      if (auth.startsWith('[')) {
-        const close = auth.indexOf(']');
+      if (__s_startsWith(auth, '[')) {
+        const close = __s_indexOf(auth, ']');
         if (close < 0) return false;
-        hostPart = auth.slice(0, close + 1);
-        const after = auth.slice(close + 1);
-        if (after.startsWith(':')) portPart = after.slice(1);
+        hostPart = __s_slice(auth, 0, close + 1);
+        const after = __s_slice(auth, close + 1);
+        if (__s_startsWith(after, ':')) portPart = __s_slice(after, 1);
       } else {
-        const ci = auth.lastIndexOf(':');
-        if (ci >= 0) { hostPart = auth.slice(0, ci); portPart = auth.slice(ci + 1); }
+        const ci = __s_lastIndexOf(auth, ':');
+        if (ci >= 0) { hostPart = __s_slice(auth, 0, ci); portPart = __s_slice(auth, ci + 1); }
       }
       // A special scheme without a host (`http://`), forbidden host code points
       // or a non-numeric port: not a URL for the browser.
       if (special && scheme !== 'file:' && !hostPart) return false;
-      if (special && /[\x00-\x1f#/<>?@\\^|]/.test(hostPart.replace(/^\[.*\]$/, ''))) return false;
+      if (special && /[\x00-\x1f#/<>?@\\^|]/.test(__s_replace(hostPart, /^\[.*\]$/, ''))) return false;
       if (portPart && (!/^\d+$/.test(portPart) || +portPart > 65535)) return false;
-      st.host = hostPart.startsWith('[') ? hostPart.toLowerCase() : encHost(hostPart.toLowerCase()).replace(/ /g, '%20');
+      st.host = __s_startsWith(hostPart, '[') ? __s_toLowerCase(hostPart) : __s_replace(encHost(__s_toLowerCase(hostPart)), / /g, '%20');
       __pt_write(st, 'port', portPart === SPECIAL[scheme] ? '' : portPart);
-      const hi = rest.indexOf('#'); st.fragment = hi >= 0 ? encFrag(rest.slice(hi)) : '';
-      if (hi >= 0) rest = rest.slice(0, hi);
-      const qi = rest.indexOf('?'); st.query = qi >= 0 ? encQuery(rest.slice(qi), special) : '';
-      if (qi >= 0) rest = rest.slice(0, qi);
-      st.path = encPath(normPath(rest.replace(/\\/g, '/') || '/'));
+      const hi = __s_indexOf(rest, '#'); st.fragment = hi >= 0 ? encFrag(__s_slice(rest, hi)) : '';
+      if (hi >= 0) rest = __s_slice(rest, 0, hi);
+      const qi = __s_indexOf(rest, '?'); st.query = qi >= 0 ? encQuery(__s_slice(rest, qi), special) : '';
+      if (qi >= 0) rest = __s_slice(rest, 0, qi);
+      st.path = encPath(normPath(__s_replace(rest, /\\/g, '/') || '/'));
       return true;
     };
     class URL {
@@ -12948,20 +13255,20 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
         st.params = linkParams(st);
       }
       get protocol() { return URL_STATE.get(this).scheme; }
-      set protocol(v) { const st = URL_STATE.get(this); const t = String(v).replace(/:*$/, '') + ':'; if (/^[a-z][a-z0-9+.\-]*:$/i.test(t)) st.scheme = t.toLowerCase(); }
+      set protocol(v) { const st = URL_STATE.get(this); const t = __s_replace(String(v), /:*$/, '') + ':'; if (/^[a-z][a-z0-9+.\-]*:$/i.test(t)) st.scheme = __s_toLowerCase(t); }
       get username() { return URL_STATE.get(this).username; }
       set username(v) { URL_STATE.get(this).username = String(v); }
       get password() { return URL_STATE.get(this).password; }
       set password(v) { URL_STATE.get(this).password = String(v); }
       get hostname() { return URL_STATE.get(this).host; }
-      set hostname(v) { const st = URL_STATE.get(this); if (!st.opaque) st.host = encHost(String(v).toLowerCase()); }
+      set hostname(v) { const st = URL_STATE.get(this); if (!st.opaque) st.host = encHost(__s_toLowerCase(String(v))); }
       get port() { return URL_STATE.get(this).port; }
-      set port(v) { const st = URL_STATE.get(this); const t = String(v).replace(/[^0-9]/g, ''); __pt_write(st, 'port', t === SPECIAL[st.scheme] ? '' : t); }
+      set port(v) { const st = URL_STATE.get(this); const t = __s_replace(String(v), /[^0-9]/g, ''); __pt_write(st, 'port', t === SPECIAL[st.scheme] ? '' : t); }
       get host() { const st = URL_STATE.get(this); return st.host + (st.port ? ':' + st.port : ''); }
       set host(v) {
         const st = URL_STATE.get(this); const t = String(v);
-        const ci = t.startsWith('[') ? t.indexOf(']') + 1 : t.lastIndexOf(':');
-        if (ci > 0 && t[ci] === ':') { this.hostname = t.slice(0, ci); __pt_write(this, 'port', t.slice(ci + 1)); }
+        const ci = __s_startsWith(t, '[') ? __s_indexOf(t, ']') + 1 : __s_lastIndexOf(t, ':');
+        if (ci > 0 && t[ci] === ':') { this.hostname = __s_slice(t, 0, ci); __pt_write(this, 'port', __s_slice(t, ci + 1)); }
         else this.hostname = t;
       }
       get pathname() { return URL_STATE.get(this).path; }
@@ -13142,7 +13449,7 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
   // name still resolve. The filters themselves are marked native (#1).
   // `__out*` are names of the engine's one-shot probe (`--eval` puts its
   // answer there); the whole family must be hidden, or `__outDone` shows on window.
-  const __ptHidden = (k) => typeof k === 'string' && (k.lastIndexOf('__pt', 0) === 0 || k.lastIndexOf('__out', 0) === 0);
+  const __ptHidden = (k) => typeof k === 'string' && (__s_lastIndexOf(k, '__pt', 0) === 0 || __s_lastIndexOf(k, '__out', 0) === 0);
   for (const k of Object.getOwnPropertyNames(globalThis)) {
     if (__ptHidden(k)) {
       try { Object.defineProperty(globalThis, k, { enumerable: false }); } catch (e) {}

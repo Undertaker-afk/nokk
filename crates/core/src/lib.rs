@@ -1360,18 +1360,7 @@ impl BrowserContext {
     /// current document points to (resolved against `base`), or `None` if there is
     /// no such tag or it only reloads the same page.
     async fn meta_refresh_target(&self, base: &str) -> Option<String> {
-        let js = r#"(() => {
-          const metas = document.getElementsByTagName('meta');
-          for (let k = 0; k < metas.length; k++) {
-            const m = metas[k];
-            if ((m.getAttribute('http-equiv') || '').toLowerCase() !== 'refresh') continue;
-            const c = m.getAttribute('content') || '';
-            const i = c.toLowerCase().indexOf('url=');
-            if (i < 0) continue;
-            return c.slice(i + 4).trim().replace(/^['"]/, '').replace(/['"]$/, '');
-          }
-          return '';
-        })()"#;
+        let js = "typeof __pt_metaRefresh === 'function' ? __pt_metaRefresh() : ''";
         match self.evaluate(js).await {
             Ok(Value::String(s)) if !s.is_empty() => resolve_url(base, &s),
             _ => None,
@@ -10039,6 +10028,38 @@ mod tests {
         }
         assert_eq!(ctx.evaluate("document.title").await.unwrap(), Value::String("async;timer;".into()));
         assert!(t.elapsed() < std::time::Duration::from_secs(8), "took {:?}", t.elapsed());
+    }
+
+    /// The engine's own work (cascade, layout, colors, stack formatting) must not run
+    /// through `String.prototype` methods a page replaced. Klarna's script replaces
+    /// `trim`; our layout called it thousands of times, visibly and 10x slower.
+    #[tokio::test]
+    async fn the_engine_does_not_call_string_methods_a_page_replaced() {
+        let _serial = serial().await;
+        let engine = engine(1, 2);
+        let ctx = engine.new_context().await.unwrap();
+        ctx.load_html("https://example.com/", "<html><head></head><body></body></html>").await.unwrap();
+        let out = probe(&ctx, r#"(() => {
+            const n = {};
+            for (const m of ['trim', 'toLowerCase', 'replace', 'split', 'slice', 'indexOf', 'charCodeAt']) {
+              const f = String.prototype[m];
+              String.prototype[m] = function () { n[m] = (n[m] || 0) + 1; return f.apply(this, arguments); };
+            }
+            const st = document.createElement('style');
+            st.textContent = '.a { margin: 1em 2px; padding: calc(1rem + 2px); color: RGB(1, 2, 3); } div > .b { display: flex; }';
+            document.head.appendChild(st);
+            const d = document.createElement('div');
+            d.innerHTML = '<p class=a style="width: 50%">x</p><span class=b>y</span>';
+            document.body.appendChild(d);
+            void d.offsetWidth;
+            getComputedStyle(d.firstChild).marginTop;
+            d.querySelector('.b').getBoundingClientRect();
+            try { null.x; } catch (e) { void e.stack; }
+            const c = document.createElement('canvas').getContext('2d');
+            c.fillStyle = 'hsl(10, 20%, 30%)';
+            return __ptJSON.stringify({ calls: n });
+        })()"#).await;
+        assert_eq!(out["calls"], serde_json::json!({}), "{out}");
     }
 
     /// A driver that intercepts (Playwright `page.route`) decides every request before it

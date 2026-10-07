@@ -10,6 +10,34 @@
 // [attr=val], *, plus descendant (space) and child (>) combinators and comma
 // lists.
 (() => {
+  // String methods taken before any page script. A page may replace them
+  // (Klarna replaces `trim`); the engine must not call the page's copies.
+  // Other receivers keep their own method, errors included.
+  const __sm = (f, m) => {
+    const call = Function.prototype.call.bind(f);
+    return function (s, a, b) {
+      const n = arguments.length;
+      if (typeof s === 'string') return n === 1 ? call(s) : n === 2 ? call(s, a) : call(s, a, b);
+      return n === 1 ? s[m]() : n === 2 ? s[m](a) : s[m](a, b);
+    };
+  };
+  const __s_slice = __sm(String.prototype.slice, 'slice'),
+    __s_toLowerCase = __sm(String.prototype.toLowerCase, 'toLowerCase'),
+    __s_replace = __sm(String.prototype.replace, 'replace'),
+    __s_trim = __sm(String.prototype.trim, 'trim'),
+    __s_indexOf = __sm(String.prototype.indexOf, 'indexOf'),
+    __s_split = __sm(String.prototype.split, 'split'),
+    __s_charCodeAt = __sm(String.prototype.charCodeAt, 'charCodeAt'),
+    __s_endsWith = __sm(String.prototype.endsWith, 'endsWith'),
+    __s_toUpperCase = __sm(String.prototype.toUpperCase, 'toUpperCase'),
+    __s_lastIndexOf = __sm(String.prototype.lastIndexOf, 'lastIndexOf'),
+    __s_match = __sm(String.prototype.match, 'match'),
+    __s_includes = __sm(String.prototype.includes, 'includes'),
+    __s_charAt = __sm(String.prototype.charAt, 'charAt'),
+    __s_startsWith = __sm(String.prototype.startsWith, 'startsWith'),
+    __s_normalize = __sm(String.prototype.normalize, 'normalize'),
+    __s_search = __sm(String.prototype.search, 'search'),
+    __s_padStart = __sm(String.prototype.padStart, 'padStart');
   // JSON captured before any page code runs. The engine serializes its own
   // queues; using the page's `JSON.stringify` would let a page that wraps it
   // see the emulator's internals.
@@ -29,13 +57,13 @@
   // a finished tree, not a bare element.
   function __attrName(el, n) {
     const s = String(n);
-    return el.__ptNS === undefined || el.__ptNS === 'http://www.w3.org/1999/xhtml' ? s.toLowerCase() : s;
+    return el.__ptNS === undefined || el.__ptNS === 'http://www.w3.org/1999/xhtml' ? __s_toLowerCase(s) : s;
   }
   function __walkTree(node, fn) {
     if (!node) return;
     fn(node);
     const kids = node.__ptKids;
-    if (kids) for (const c of kids.slice()) __walkTree(c, fn);
+    if (kids) for (const c of __s_slice(kids)) __walkTree(c, fn);
     if (node.__ptShadow) __walkTree(node.__ptShadow, fn);
   }
 
@@ -138,7 +166,7 @@
       const label = typeof k === 'symbol' ? '[' + (k.description || '') + ']' : k;
       // A symbol often holds another builtin (the list iterator is
       // Array.prototype.values itself); Chrome keeps its name "values".
-      if (typeof d.value === 'function' && !(typeof k === 'symbol' && d.value.name && d.value.name.charCodeAt(0) !== 91)) d.value = named(d.value, label);
+      if (typeof d.value === 'function' && !(typeof k === 'symbol' && d.value.name && __s_charCodeAt(d.value.name, 0) !== 91)) d.value = named(d.value, label);
       if (typeof d.get === 'function') d.get = named(d.get, 'get ' + label);
       if (typeof d.set === 'function') d.set = named(d.set, 'set ' + label);
       Object.defineProperty(I.prototype, k, d);
@@ -233,7 +261,7 @@
     get [Symbol.toStringTag]() { return 'NamedNodeMap'; },
     get length() { return this.__ptLen | 0; },
     item(i) { return this[i] != null ? this[i] : null; },
-    getNamedItem(n) { const k = String(n).toLowerCase();
+    getNamedItem(n) { const k = __s_toLowerCase(String(n));
       for (let i = 0; i < this.length; i++) if (this[i].name === k) return this[i];
       return null; },
     getNamedItemNS(_ns, n) { return this.getNamedItem(n); },
@@ -263,13 +291,13 @@
     set value(v) { __ptSetA(this.__ptEl, 'class', String(v)); },
     get length() { return this.__ptTokens().length; },
     item(i) { const t = this.__ptTokens(); return i >= 0 && i < t.length ? t[i] : null; },
-    contains(c) { return this.__ptTokens().includes(String(c)); },
+    contains(c) { return __s_includes(this.__ptTokens(), String(c)); },
     add(...cs) { const t = this.__ptTokens();
-      for (const c of cs) if (!t.includes(String(c))) t.push(String(c));
+      for (const c of cs) if (!__s_includes(t, String(c))) t.push(String(c));
       __ptSetA(this.__ptEl, 'class', t.join(' ')); },
     remove(...cs) { const drop = cs.map(String);
-      __ptSetA(this.__ptEl, 'class', this.__ptTokens().filter((c) => !drop.includes(c)).join(' ')); },
-    toggle(c, force) { const t = this.__ptTokens(), has = t.includes(String(c));
+      __ptSetA(this.__ptEl, 'class', this.__ptTokens().filter((c) => !__s_includes(drop, c)).join(' ')); },
+    toggle(c, force) { const t = this.__ptTokens(), has = __s_includes(t, String(c));
       if (force === true || (force === undefined && !has)) {
         if (!has) t.push(String(c));
         __ptSetA(this.__ptEl, 'class', t.join(' '));
@@ -277,7 +305,7 @@
       }
       __ptSetA(this.__ptEl, 'class', t.filter((x) => x !== String(c)).join(' '));
       return false; },
-    replace(from, to) { const t = this.__ptTokens(), i = t.indexOf(String(from));
+    replace(from, to) { const t = this.__ptTokens(), i = __s_indexOf(t, String(from));
       if (i < 0) return false;
       t[i] = String(to); __ptSetA(this.__ptEl, 'class', t.join(' ')); return true; },
     supports() { throw __pt_mkErr(TypeError, "Failed to execute 'supports' on 'DOMTokenList': DOMTokenList has no supported tokens."); },
@@ -295,7 +323,7 @@
       list = Object.create(proto);
       Object.defineProperty(list, '__ptEl', { value: el });
       Object.defineProperty(list, '__ptTokens', {
-        value: () => (__ptGetA(el, 'class') || '').split(/\s+/).filter(Boolean),
+        value: () => __s_split(__ptGetA(el, 'class') || '', /\s+/).filter(Boolean),
       });
       Object.defineProperty(el, '__ptTokenList', { value: list, enumerable: false, writable: true });
     }
@@ -325,11 +353,11 @@
     get lastChild() { return this.__ptKids[this.__ptKids.length - 1] || null; }
     get nextSibling() {
       const p = this.parentNode; if (!p) return null;
-      const i = p.__ptKids.indexOf(this); return p.__ptKids[i + 1] || null;
+      const i = __s_indexOf(p.__ptKids, this); return p.__ptKids[i + 1] || null;
     }
     get previousSibling() {
       const p = this.parentNode; if (!p) return null;
-      const i = p.__ptKids.indexOf(this); return p.__ptKids[i - 1] || null;
+      const i = __s_indexOf(p.__ptKids, this); return p.__ptKids[i - 1] || null;
     }
     hasChildNodes() { return this.__ptKids.length > 0; }
     contains(n) { for (; n; n = n.parentNode) if (n === this) return true; return false; }
@@ -378,7 +406,7 @@
           'The node before which the new node is to be inserted is not a child of this node.');
       }
       if (child.nodeType === DOCUMENT_FRAGMENT_NODE) {
-        for (const c of child.__ptKids.slice()) this.insertBefore(c, ref);
+        for (const c of __s_slice(child.__ptKids)) this.insertBefore(c, ref);
         return child;
       }
       if (child.parentNode) __ptDrop.call(child.parentNode, child);
@@ -388,7 +416,7 @@
         const doc = this.nodeType === 9 ? this : this.__ptDoc;
         if (doc && child.__ptDoc !== doc) __walkTree(child, (n) => { if (n.__ptDoc !== doc) n.__ptDoc = doc; });
       } catch (e) {}
-      const i = (ref === null || ref === undefined) ? -1 : this.__ptKids.indexOf(ref);
+      const i = (ref === null || ref === undefined) ? -1 : __s_indexOf(this.__ptKids, ref);
       if (i < 0) this.__ptKids.push(child); else this.__ptKids.splice(i, 0, child);
       child.__ptParent = this;
       __markDirty();
@@ -405,7 +433,7 @@
     removeChild(child) {
       __needArgs(arguments.length, 1, 'removeChild', 'Node');
       __needNode(child, 1, 'removeChild');
-      const i = this.__ptKids.indexOf(child);
+      const i = __s_indexOf(this.__ptKids, child);
       if (i < 0) {
         throw __pt_mkErr(globalThis.DOMException || Error, 
           "Failed to execute 'removeChild' on 'Node': The node to be removed is not a child of this node.",
@@ -534,7 +562,7 @@
         // After retargeting the shadow host is the target: the at-target phase.
         __ptEvSet(event, 'eventPhase', targets[i] === node ? 2 : phase);
         if (l) {
-          for (const e of l.slice()) {
+          for (const e of __s_slice(l)) {
             if (event.__ptStopImm) break;
             if (phase === 1 && !e.cap) continue;
             if (phase === 3 && e.cap) continue;
@@ -570,7 +598,7 @@
       // At the target, capture listeners first, then the rest (Chrome >= 89).
       const atTarget = (capture) => {
         const l = this.__ptLis && this.__ptLis[event.type]; if (!l) return;
-        for (const e of l.slice()) {
+        for (const e of __s_slice(l)) {
           if (event.__ptStopImm) break;
           if (!!e.cap !== capture) continue;
           __ptEvSet(event, 'currentTarget', this);
@@ -614,7 +642,7 @@
 
   function fireCapture(node, event) {
     const l = node.__ptLis && node.__ptLis[event.type]; if (!l) return;
-    for (const e of l.slice()) { if (!e.cap) continue; if (event.__ptStopImm) break; __ptEvSet(event, 'currentTarget', node); try { e.fn.call(node, event); } catch (x) { __pt_reportError(x, 'capture ' + event.type); } }
+    for (const e of __s_slice(l)) { if (!e.cap) continue; if (event.__ptStopImm) break; __ptEvSet(event, 'currentTarget', node); try { e.fn.call(node, event); } catch (x) { __pt_reportError(x, 'capture ' + event.type); } }
   }
 
   // These three methods live on `EventTarget.prototype`, once for all targets,
@@ -694,7 +722,7 @@
     'utf-16': 'UTF-16LE', 'utf-16le': 'UTF-16LE', 'utf-16be': 'UTF-16BE',
   };
   const __normEncoding = (name) => {
-    const k = String(name).trim().toLowerCase();
+    const k = __s_toLowerCase(__s_trim(String(name)));
     return __ENCODINGS[k] || k;
   };
 
@@ -867,10 +895,10 @@
     getElementById(id) { return firstMatch(this, (e) => __ptGetA(e, 'id') === String(id)); }
     getElementsByTagName(t) { return __collection(__tags(this, t)); }
     getElementsByClassName(c) {
-      const cs = String(c).split(/\s+/).filter(Boolean);
+      const cs = __s_split(String(c), /\s+/).filter(Boolean);
       return __collection(collect(this, (e) => {
-        const own = (e.__ptAttrs.get('class') || '').split(/\s+/);
-        return cs.every((x) => own.indexOf(x) >= 0);
+        const own = __s_split(e.__ptAttrs.get('class') || '', /\s+/);
+        return cs.every((x) => __s_indexOf(own, x) >= 0);
       }));
     }
     querySelector(sel) {
@@ -969,8 +997,8 @@
       // `new MyElement()` passes no tag name; the registry knows it by the
       // class. Real HTMLElement works the same way.
       if (tag === undefined && new.target) tag = __customName(new.target) || 'unknown';
-      this.__ptTag = String(tag).toUpperCase();
-      this.__ptLocal = String(tag).toLowerCase();
+      this.__ptTag = __s_toUpperCase(String(tag));
+      this.__ptLocal = __s_toLowerCase(String(tag));
       this.__ptAttrs = new Map();
     }
     get nodeName() { return this.tagName; }
@@ -1002,7 +1030,7 @@
       this.__ptAttrs.set(name, String(v));
       if (this.__ptUpgraded) {
         const watched = this.constructor && this.constructor.observedAttributes;
-        if (Array.isArray(watched) && watched.indexOf(name) >= 0) {
+        if (Array.isArray(watched) && __s_indexOf(watched, name) >= 0) {
           __customCallback(this, 'attributeChangedCallback',
             [name, old === undefined ? null : old, String(v), null]);
         }
@@ -1060,20 +1088,20 @@
       if (this.__ptImgAt === url) return;                 // same URL: do not load twice
       Object.defineProperty(this, '__ptImgAt', { value: url, configurable: true, enumerable: false });
       Object.defineProperty(this, '__ptImgDone', { value: false, writable: true, configurable: true, enumerable: false });
-      if (url.slice(0, 5) === 'data:' || url.slice(0, 5) === 'blob:') {
+      if (__s_slice(url, 0, 5) === 'data:' || __s_slice(url, 0, 5) === 'blob:') {
         this.__ptImgDone = true;
         // Not an image (`data:,x`, a text blob): Chrome fires `error`.
         let isImage = true;
         try {
-          if (url.slice(0, 5) === 'data:') {
-            const comma = url.indexOf(',');
-            const meta = comma < 0 ? '' : url.slice(5, comma).toLowerCase();
-            const mime = meta.split(';')[0];
-            if (mime && mime.slice(0, 6) !== 'image/') isImage = false;
+          if (__s_slice(url, 0, 5) === 'data:') {
+            const comma = __s_indexOf(url, ',');
+            const meta = comma < 0 ? '' : __s_toLowerCase(__s_slice(url, 5, comma));
+            const mime = __s_split(meta, ';')[0];
+            if (mime && __s_slice(mime, 0, 6) !== 'image/') isImage = false;
             if (!mime) isImage = false;
             if (isImage && mime !== 'image/svg+xml') {
-              const payload = comma < 0 ? '' : url.slice(comma + 1);
-              const head = /;base64/.test(meta) ? globalThis.atob(payload.slice(0, 16)) : decodeURIComponent(payload.slice(0, 24));
+              const payload = comma < 0 ? '' : __s_slice(url, comma + 1);
+              const head = /;base64/.test(meta) ? globalThis.atob(__s_slice(payload, 0, 16)) : decodeURIComponent(__s_slice(payload, 0, 24));
               isImage = /^(\x89PNG|GIF8|\xff\xd8|RIFF|BM|\x00\x00\x01\x00|<svg|<\?xml)/.test(head);
             }
           } else if (globalThis.__pt_blobs) {
@@ -1141,7 +1169,7 @@
     }
 
     __ptLoadLink() {
-      const rel = String(__ptGetA(this, 'rel') || '').toLowerCase();
+      const rel = __s_toLowerCase(String(__ptGetA(this, 'rel') || ''));
       // Kinds that load; others (`alternate`, `canonical`, `dns-prefetch`)
       // make no request.
       if (!/^(stylesheet|preload|prefetch|modulepreload|icon|shortcut icon|apple-touch-icon|manifest|prerender)$/.test(rel)) return;
@@ -1153,12 +1181,12 @@
       Object.defineProperty(this, '__ptLinkAt', { value: url, configurable: true, enumerable: false });
       // A stylesheet in a data URL is still a stylesheet, parsed without the
       // network.
-      if (url.slice(0, 5) === 'data:') {
+      if (__s_slice(url, 0, 5) === 'data:') {
         if (rel === 'stylesheet') {
           try {
-            const comma = url.indexOf(',');
-            const head = url.slice(5, comma);
-            const raw = url.slice(comma + 1);
+            const comma = __s_indexOf(url, ',');
+            const head = __s_slice(url, 5, comma);
+            const raw = __s_slice(url, comma + 1);
             const text = /;base64$/i.test(head) ? atob(raw) : decodeURIComponent(raw);
             Object.defineProperty(this, '__ptSheetText',
               { value: text, writable: true, enumerable: false, configurable: true });
@@ -1168,7 +1196,7 @@
         if (this.__ptFireLoad) __pt_soon(() => this.__ptFireLoad(true));
         return;
       }
-      if (url.slice(0, 5) === 'blob:' || typeof globalThis.__pt_subresource !== 'function') return;
+      if (__s_slice(url, 0, 5) === 'blob:' || typeof globalThis.__pt_subresource !== 'function') return;
       // Resource timing names everything loaded via `<link>` as `link`:
       // preload, icon, stylesheet.
       const kind = rel === 'stylesheet' ? 'stylesheet' : 'link';
@@ -1250,9 +1278,9 @@
     // Form: `method`/`enctype` are enumerated, `elements` are its fields,
     // `submit()` goes to the action URL without an event, `requestSubmit()`
     // after a submit event. The Cloudflare interstitial submits a form.
-    get method() { const m = String(__ptGetA(this, 'method') || '').toLowerCase(); return m === 'post' ? 'post' : m === 'dialog' ? 'dialog' : 'get'; }
+    get method() { const m = __s_toLowerCase(String(__ptGetA(this, 'method') || '')); return m === 'post' ? 'post' : m === 'dialog' ? 'dialog' : 'get'; }
     set method(v) { __ptSetA(this, 'method', v); }
-    get enctype() { const e = String(__ptGetA(this, 'enctype') || '').toLowerCase(); return e === 'multipart/form-data' || e === 'text/plain' ? e : 'application/x-www-form-urlencoded'; }
+    get enctype() { const e = __s_toLowerCase(String(__ptGetA(this, 'enctype') || '')); return e === 'multipart/form-data' || e === 'text/plain' ? e : 'application/x-www-form-urlencoded'; }
     set enctype(v) { __ptSetA(this, 'enctype', v); }
     get elements() {
       const out = [];
@@ -1284,7 +1312,7 @@
       let action = this.action;
       try { if (submitter && __ptHasA(submitter, 'formaction')) action = new URL(__ptGetA(submitter, 'formaction'), (this.ownerDocument || document).baseURI).href; } catch (e) {}
       const pairs = this.__ptFormData(submitter);
-      const enc = (s) => encodeURIComponent(s).replace(/%20/g, '+').replace(/[!'()~]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+      const enc = (s) => __s_replace(__s_replace(encodeURIComponent(s), /%20/g, '+'), /[!'()~]/g, (c) => '%' + __s_toUpperCase(__s_charCodeAt(c, 0).toString(16)));
       const query = pairs.map(([k, v]) => enc(k) + '=' + enc(v)).join('&');
       if (typeof globalThis.__pt_navSubmit !== 'function') return;
       if (method === 'post') { __pt_navSubmit(action, 'POST', query, 'application/x-www-form-urlencoded'); return; }
@@ -1322,7 +1350,7 @@
     // HTMLElement reflections: `dir` (enumerated), `lang`, `title`,
     // `accessKey`. The Cloudflare interstitial sets
     // `document.documentElement.dir`, and the DOM snapshot sees it.
-    get dir() { const v = String(__ptGetA(this, 'dir') || '').toLowerCase(); return v === 'ltr' || v === 'rtl' || v === 'auto' ? v : ''; }
+    get dir() { const v = __s_toLowerCase(String(__ptGetA(this, 'dir') || '')); return v === 'ltr' || v === 'rtl' || v === 'auto' ? v : ''; }
     set dir(v) { __ptSetA(this, 'dir', v); }
     get lang() { return __ptGetA(this, 'lang') || ''; }
     set lang(v) { __ptSetA(this, 'lang', v); }
@@ -1370,7 +1398,7 @@
     // Fields taking part in form validation: `true` on an enabled button or
     // field; pages read it.
     get willValidate() {
-      const t = String(__ptGetA(this, 'type') || '').toLowerCase();
+      const t = __s_toLowerCase(String(__ptGetA(this, 'type') || ''));
       if (this.__ptLocal !== 'input' && this.__ptLocal !== 'textarea' && this.__ptLocal !== 'select') return undefined;
       return !__ptHasA(this, 'disabled') && !__ptHasA(this, 'readonly')
              && t !== 'hidden' && t !== 'button' && t !== 'reset';
@@ -1403,10 +1431,10 @@
     getElementsByTagName(t) { return __collection(__tags(this, t)); }
     getElementsByTagNameNS(ns, local) { return __collection(__tagsNS(this, ns, local)); }
     getElementsByClassName(c) {
-      const cs = String(c).split(/\s+/).filter(Boolean);
+      const cs = __s_split(String(c), /\s+/).filter(Boolean);
       return __collection(collect(this, (e) => {
-        const own = (e.__ptAttrs.get('class') || '').split(/\s+/);
-        return cs.length > 0 && cs.every((x) => own.indexOf(x) >= 0);
+        const own = __s_split(e.__ptAttrs.get('class') || '', /\s+/);
+        return cs.length > 0 && cs.every((x) => __s_indexOf(own, x) >= 0);
       }));
     }
     querySelector(sel) {
@@ -1533,10 +1561,10 @@
             const chain = [];
             for (let p = this; p; p = p.parentNode && p.parentNode.nodeType === 11 && p.parentNode.__ptHost ? (chain.push('#shadow'), p.parentNode.__ptHost) : p.parentNode) {
               if (p.nodeType !== 1) { chain.push('#' + p.nodeType); break; }
-              chain.push(p.localName + (p.id ? '#' + p.id : '') + (p.getAttribute('style') ? '[' + p.getAttribute('style') + ']' : '') + (p.className ? '.' + String(p.className).slice(0, 30) : ''));
+              chain.push(p.localName + (p.id ? '#' + p.id : '') + (p.getAttribute('style') ? '[' + p.getAttribute('style') + ']' : '') + (p.className ? '.' + __s_slice(String(p.className), 0, 30) : ''));
             }
             let cs = ''; try { const c = getComputedStyle(this); cs = [c.display, c.width, c.height, c.visibility, c.position, c.left, c.top].join(','); } catch (e) {}
-            (globalThis.__pt_parentConsole || console).error('[realm] ' + String(this.outerHTML).slice(0, 300) + ' | chain ' + chain.join(' < ') + ' | cs ' + cs + ' | box ' + dw + 'x' + dh + ' | hidden ' + hidden + ' | flat ' + (typeof __pt_inFlatTree === 'function' ? __pt_inFlatTree(this) : '?'));
+            (globalThis.__pt_parentConsole || console).error('[realm] ' + __s_slice(String(this.outerHTML), 0, 300) + ' | chain ' + chain.join(' < ') + ' | cs ' + cs + ' | box ' + dw + 'x' + dh + ' | hidden ' + hidden + ' | flat ' + (typeof __pt_inFlatTree === 'function' ? __pt_inFlatTree(this) : '?'));
           } catch (e) {}
         }
         __ptTellFrame(this, hidden ? null : { cw: dw, ch: dh });
@@ -1549,7 +1577,7 @@
       try {
         const markup = __ptGetA(this, 'srcdoc');
         // Trace NOKK_TRACE_SRCDOC=1: srcdoc frame markup to the parent console.
-        if (globalThis.__pt_srcdocTrace && markup != null) { try { (globalThis.__pt_parentConsole || console).error('[srcdoc] ' + String(markup).slice(0, 4000)); } catch (e) {} }
+        if (globalThis.__pt_srcdocTrace && markup != null) { try { (globalThis.__pt_parentConsole || console).error('[srcdoc] ' + __s_slice(String(markup), 0, 4000)); } catch (e) {} }
         // A srcdoc frame's URL is about:srcdoc.
         if (markup != null && typeof w.__pt_setLocation === 'function') w.__pt_setLocation({ href: 'about:srcdoc', protocol: 'about:', pathname: 'srcdoc', host: '', hostname: '', port: '', search: '', hash: '' });
         if (typeof w.__pt_writeDocument === 'function') w.__pt_writeDocument(markup || '');
@@ -1562,7 +1590,7 @@
     // re-inserted element from running again.
     __ptRunScript() {
       if (this.__ptRan || this.__ptLocal !== 'script') return;
-      const type = String(__ptGetA(this, 'type') || '').toLowerCase().trim();
+      const type = __s_trim(__s_toLowerCase(String(__ptGetA(this, 'type') || '')));
       // Anything that is not classic JS — a JSON island, a template, an importmap
       // — is data the page reads itself, not code to run.
       if (type && !/^(text|application)\/(java|ecma)script$|^module$/.test(type)) return;
@@ -1617,7 +1645,7 @@
       // a frame without src, and its realm is ready at once. Pages do
       // `f.src='about:blank'; body.appendChild(f); f.contentWindow.eval(…)` to
       // get pristine builtins, and challenges rely on it.
-      const blank = !src || /^about:blank(\?|#|$)/.test(src.trim());
+      const blank = !src || /^about:blank(\?|#|$)/.test(__s_trim(src));
       if (blank) {
         // A `srcdoc` frame loads as soon as it is in the document, without
         // waiting for `contentWindow` to be read.
@@ -1837,12 +1865,12 @@
     // Playwright's fillability check).
     // An unknown `type` value reads back as `text`.
     get type() {
-      const t = (__ptGetA(this, 'type') || '').toLowerCase();
+      const t = __s_toLowerCase(__ptGetA(this, 'type') || '');
       if (this.tagName !== 'INPUT') return t;
       const KNOWN = ['button','checkbox','color','date','datetime-local','email','file','hidden',
                      'image','month','number','password','radio','range','reset','search','submit',
                      'tel','text','time','url','week'];
-      return KNOWN.indexOf(t) >= 0 ? t : 'text';
+      return __s_indexOf(KNOWN, t) >= 0 ? t : 'text';
     }
     set type(v) { __ptSetA(this, 'type', v); }
     get disabled() { return __ptHasA(this, 'disabled'); }
@@ -1891,7 +1919,7 @@
     select() {}
     setSelectionRange() {}
     setRangeText() {}
-    get isContentEditable() { const v = (__ptGetA(this, 'contenteditable') || '').toLowerCase(); return v === '' || v === 'true'; }
+    get isContentEditable() { const v = __s_toLowerCase(__ptGetA(this, 'contenteditable') || ''); return v === '' || v === 'true'; }
     click() {
       const ok = this.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
       if (ok) __ptActivate(this);
@@ -1977,7 +2005,7 @@
         },
         createDocument(ns, qname, doctype) {
           const d = globalThis.__pt_lateDom.parseDocument(qname ? '<' + String(qname) + '/>' : '', ns === 'http://www.w3.org/1999/xhtml' ? 'application/xhtml+xml' : 'application/xml');
-          if (!qname) { for (const k of d.__ptKids.slice()) d.removeChild(k); }
+          if (!qname) { for (const k of __s_slice(d.__ptKids)) d.removeChild(k); }
           return d;
         },
         createDocumentType(name, publicId, systemId) { return { nodeType: 10, name: String(name), publicId: String(publicId || ''), systemId: String(systemId || ''), nodeName: String(name) }; },
@@ -2004,7 +2032,7 @@
     get nodeName() { return '#document'; }
     get head() { return this.documentElement && __tags(this.documentElement, 'head')[0] || null; }
     get body() { return this.documentElement && __tags(this.documentElement, 'body')[0] || null; }
-    get title() { const t = this.documentElement ? __tags(this.documentElement, 'title')[0] : null; return t ? t.textContent.trim() : ''; }
+    get title() { const t = this.documentElement ? __tags(this.documentElement, 'title')[0] : null; return t ? __s_trim(t.textContent) : ''; }
     set title(v) {
       let t = this.documentElement ? __tags(this.documentElement, 'title')[0] : null;
       if (!t) { t = this.createElement('title'); (this.head || this.documentElement || this).appendChild(t); }
@@ -2059,7 +2087,7 @@
     set designMode(v) {}
     // Chrome's format is MM/DD/YYYY HH:MM:SS, not a localised string.
     get lastModified() {
-      const d = new Date(), p2 = (n) => String(n).padStart(2, '0');
+      const d = new Date(), p2 = (n) => __s_padStart(String(n), 2, '0');
       return `${p2(d.getMonth() + 1)}/${p2(d.getDate())}/${d.getFullYear()} ` +
              `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
     }
@@ -2097,14 +2125,14 @@
     set cookie(v) {
       if (this !== globalThis.document) return;
       const raw = String(v);
-      const parts = raw.split(';');
-      const pair = parts[0].trim();
-      const eq = pair.indexOf('=');
-      const name = (eq < 0 ? '' : pair.slice(0, eq)).trim();
+      const parts = __s_split(raw, ';');
+      const pair = __s_trim(parts[0]);
+      const eq = __s_indexOf(pair, '=');
+      const name = __s_trim(eq < 0 ? '' : __s_slice(pair, 0, eq));
       let gone = false;
-      for (const p of parts.slice(1)) {
-        const [k, ...rest] = p.split('=');
-        const key = k.trim().toLowerCase(), val = rest.join('=').trim();
+      for (const p of __s_slice(parts, 1)) {
+        const [k, ...rest] = __s_split(p, '=');
+        const key = __s_toLowerCase(__s_trim(k)), val = __s_trim(rest.join('='));
         // Script cannot set an HttpOnly cookie, nor a Secure one on plain http.
         if (key === 'httponly') return;
         if (key === 'secure' && globalThis.location && globalThis.location.protocol !== 'https:') return;
@@ -2112,8 +2140,8 @@
         if (key === 'expires') { const t = Date.parse(val); if (!isNaN(t) && t <= Date.now()) gone = true; }
       }
       __cookieOps.push(raw);
-      const jar = this.__ptCookie ? this.__ptCookie.split('; ') : [];
-      const kept = jar.filter(c => (c.indexOf('=') < 0 ? '' : c.slice(0, c.indexOf('='))) !== name);
+      const jar = this.__ptCookie ? __s_split(this.__ptCookie, '; ') : [];
+      const kept = jar.filter(c => (__s_indexOf(c, '=') < 0 ? '' : __s_slice(c, 0, __s_indexOf(c, '='))) !== name);
       if (!gone) kept.push(pair);
       this.__ptCookie = kept.join('; ');
     }
@@ -2133,7 +2161,7 @@
         e.__ptDoc = this;
         return e;
       }
-      const C = __customs.get(raw.toLowerCase());
+      const C = __customs.get(__s_toLowerCase(raw));
       if (globalThis.__pt_setPendingTag) __pt_setPendingTag(tag);
       const e = C ? new C() : new Element(tag);
       if (C) Object.defineProperty(e, '__ptUpgraded', { value: true, configurable: true, enumerable: false });
@@ -2146,8 +2174,8 @@
       return e;
     }
     createElementNS(ns, qname) {
-      const q = String(qname), colon = q.indexOf(':');
-      const prefix = colon > 0 ? q.slice(0, colon) : null, tag = colon > 0 ? q.slice(colon + 1) : q;
+      const q = String(qname), colon = __s_indexOf(q, ':');
+      const prefix = colon > 0 ? __s_slice(q, 0, colon) : null, tag = colon > 0 ? __s_slice(q, colon + 1) : q;
       const NS = ns === null || ns === undefined || ns === '' ? null : String(ns);
       const e = this.createElement(tag);
       e.__ptNS = NS;
@@ -2204,10 +2232,10 @@
     getElementById(id) { return firstMatch(this, (e) => __ptGetA(e, 'id') === String(id)); }
     getElementsByTagName(t) { return __collection(__tags(this, t)); }
     getElementsByClassName(c) {
-      const cs = String(c).split(/\s+/).filter(Boolean);
+      const cs = __s_split(String(c), /\s+/).filter(Boolean);
       return __collection(collect(this, (e) => {
-        const own = ((e.__ptAttrs && e.__ptAttrs.get('class')) || '').split(/\s+/);
-        return cs.length > 0 && cs.every((x) => own.indexOf(x) >= 0);
+        const own = __s_split((e.__ptAttrs && e.__ptAttrs.get('class')) || '', /\s+/);
+        return cs.length > 0 && cs.every((x) => __s_indexOf(own, x) >= 0);
       }));
     }
     getElementsByName(n) {
@@ -2520,11 +2548,11 @@
       // URL.revokeObjectURL(u)` — read it a round later and the blob is gone.
       const src = String(scriptURL);
       let body = null;
-      if (src.slice(0, 5) === 'blob:' || src.slice(0, 5) === 'data:') {
+      if (__s_slice(src, 0, 5) === 'blob:' || __s_slice(src, 0, 5) === 'data:') {
         try { body = globalThis.__pt_localSource ? __pt_localSource(src) : null; } catch (e) {}
         // A blob URL of a foreign (or no) origin is refused in the
         // constructor; an own but empty one fails later with an error event.
-        if (src.slice(0, 5) === 'blob:') {
+        if (__s_slice(src, 0, 5) === 'blob:') {
           let o = 'null'; try { o = new URL(src).origin; } catch (e) {}
           const mine = (globalThis.location && location.origin) || 'null';
           if (o === 'null' || o !== mine) throw __pt_mkErr(globalThis.DOMException || Error, "Failed to construct 'Worker': Script at '" + src + "' cannot be accessed from origin '" + mine + "'.", 'SecurityError');
@@ -2750,7 +2778,7 @@
   // ---- helpers: classList, dataset, style -----------------------------------
   function makeClassList(el, attr) {
     const name = attr || 'class';
-    const get = () => (__ptGetA(el, name) || '').split(/\s+/).filter(Boolean);
+    const get = () => __s_split(__ptGetA(el, name) || '', /\s+/).filter(Boolean);
     const set = (arr) => __ptSetA(el, name, arr.join(' '));
     // A real `DOMTokenList`, not a literal: iterable, indexable, named
     // (`[...el.classList]` is common).
@@ -2762,13 +2790,13 @@
     } catch (e) {}
     const api = Object.create(proto);
     Object.assign(api, {
-      contains: (c) => get().includes(c),
-      add: (...cs) => { const s = get(); for (const c of cs) if (!s.includes(c)) s.push(c); set(s); },
-      remove: (...cs) => set(get().filter(c => !cs.includes(c))),
-      toggle: (c, force) => { const s = get(); const has = s.includes(c);
+      contains: (c) => __s_includes(get(), c),
+      add: (...cs) => { const s = get(); for (const c of cs) if (!__s_includes(s, c)) s.push(c); set(s); },
+      remove: (...cs) => set(get().filter(c => !__s_includes(cs, c))),
+      toggle: (c, force) => { const s = get(); const has = __s_includes(s, c);
         if (force === true || (force === undefined && !has)) { if (!has) s.push(c); set(s); return true; }
         set(s.filter(x => x !== c)); return false; },
-      replace: (a, b) => { const s = get(); const i = s.indexOf(a); if (i < 0) return false; s[i] = b; set(s); return true; },
+      replace: (a, b) => { const s = get(); const i = __s_indexOf(s, a); if (i < 0) return false; s[i] = b; set(s); return true; },
       supports: () => true,
       item: (i) => get()[i] || null,
       forEach(fn, self) { get().forEach((v, i) => fn.call(self, v, i, api)); },
@@ -2825,10 +2853,10 @@
   // Colours are not kept as written: `#f2f2f2` in cssText comes back as
   // `rgb(242, 242, 242)`. Checked against the Cloudflare widget stylesheet
   // (73 of 183 rules differed only by this).
-  const __cssHex = (v) => v.replace(/#([0-9a-fA-F]{3,8})\b/g, (m, h) => {
+  const __cssHex = (v) => __s_replace(v, /#([0-9a-fA-F]{3,8})\b/g, (m, h) => {
     const wide = h.length > 4;
     if (h.length !== 3 && h.length !== 4 && h.length !== 6 && h.length !== 8) return m;
-    const at = (i) => wide ? parseInt(h.slice(i * 2, i * 2 + 2), 16)
+    const at = (i) => wide ? parseInt(__s_slice(h, i * 2, i * 2 + 2), 16)
                            : parseInt(h[i] + h[i], 16);
     const [r, g, b] = [at(0), at(1), at(2)];
     if (h.length === 4 || h.length === 8) {
@@ -2839,7 +2867,7 @@
   });
   // `.9` prints as `0.9`, inside functions too:
   // `cubic-bezier(.55, .085, …)` -> `cubic-bezier(0.55, 0.085, …)`.
-  const __cssZero = (v) => v.replace(/(^|[\s(,])(-?)\.(\d)/g, '$1$20.$3');
+  const __cssZero = (v) => __s_replace(v, /(^|[\s(,])(-?)\.(\d)/g, '$1$20.$3');
 
   // The `animation` shorthand is split into eight parts and always printed in
   // full, in spec order, with initial values filled in:
@@ -2861,21 +2889,21 @@
     if (cur) out.push(cur);
     return out;
   };
-  const __cssAnimation = (v) => v.split(',').map((part) => {
+  const __cssAnimation = (v) => __s_split(v, ',').map((part) => {
     // Commas inside `cubic-bezier(…)` do not split the list; rejoin.
     return part;
   }).reduce((acc, part) => {
     const prev = acc[acc.length - 1];
-    if (prev !== undefined && (prev.split('(').length !== prev.split(')').length)) {
+    if (prev !== undefined && (__s_split(prev, '(').length !== __s_split(prev, ')').length)) {
       acc[acc.length - 1] = prev + ',' + part;
     } else acc.push(part);
     return acc;
   }, []).map((one) => {
-    const t = __cssTokens(one.trim());
+    const t = __cssTokens(__s_trim(one));
     let dur = null, timing = null, delay = null, count = null;
     let dir = null, fill = null, state = null, name = null;
     for (const tok of t) {
-      const low = tok.toLowerCase();
+      const low = __s_toLowerCase(tok);
       if (/^-?[\d.]+m?s$/.test(low)) { if (dur === null) dur = low; else if (delay === null) delay = low; continue; }
       if (timing === null && (ANIM_TIMING.has(low) || /^(cubic-bezier|steps|linear)\(/.test(low))) { timing = tok; continue; }
       if (count === null && (low === 'infinite' || /^[\d.]+$/.test(low))) { count = low; continue; }
@@ -2907,7 +2935,7 @@
   };
 
   const __cssShadow = (v) => __cssCommaParts(v).map((one) => {
-    const parts = __ptCssParts(one.trim());
+    const parts = __ptCssParts(__s_trim(one));
     let colour = null, inset = false;
     const lens = [];
     for (const t of parts) {
@@ -2915,7 +2943,7 @@
       if (/^[-\d.]/.test(t)) { lens.push(/^[-\d.]+$/.test(t) ? t + 'px' : t); continue; }
       colour = t;
     }
-    if (!lens.length) return one.trim();
+    if (!lens.length) return __s_trim(one);
     // Length count as written: `1px 2px` gets no blur added. A colour keyword
     // stays a keyword (`red`), but function notation is normalised:
     // `rgba(0,0,0,.1)` becomes `rgba(0, 0, 0, 0.1)`.
@@ -2928,10 +2956,10 @@
 
   // Outline: colour, style, width, in that order.
   const __cssOutline = (v) => {
-    const parts = __ptCssParts(v.trim());
+    const parts = __ptCssParts(__s_trim(v));
     let colour = null, style = null, width = null;
     for (const t of parts) {
-      const low = t.toLowerCase();
+      const low = __s_toLowerCase(t);
       if (CS_BORDER_STYLES.has(low)) { style = low; continue; }
       if (/^[-\d.]/.test(t) || CS_WIDTH_WORDS[low]) { width = /^[-\d.]+$/.test(t) ? t + 'px' : t; continue; }
       colour = t;
@@ -2942,14 +2970,14 @@
 
   // Zeros inside transforms get units: `rotate(0)` prints as `rotate(0deg)`,
   // `translateY(0)` as `translateY(0px)`.
-  const __cssTransform = (v) => v.replace(/([a-zA-Z]+)\(([^()]*)\)/g, (m, fn, args) => {
-    const low = fn.toLowerCase();
+  const __cssTransform = (v) => __s_replace(v, /([a-zA-Z]+)\(([^()]*)\)/g, (m, fn, args) => {
+    const low = __s_toLowerCase(fn);
     const unit = /^(rotate|rotatex|rotatey|rotatez|rotate3d|skew|skewx|skewy)$/.test(low) ? 'deg'
       : /^(translate|translatex|translatey|translatez|translate3d|perspective)$/.test(low) ? 'px'
       : null;
     if (!unit) return m;
-    const out = args.split(',').map((a, i) => {
-      const t = a.trim();
+    const out = __s_split(args, ',').map((a, i) => {
+      const t = __s_trim(a);
       if (!/^-?\d+(?:\.\d+)?$/.test(t)) return t;
       // The first three numbers of `rotate3d` are the axis, unitless.
       if (low === 'rotate3d' && i < 3) return t;
@@ -2962,11 +2990,11 @@
   /// Family list as Chrome prints it: names with spaces in double quotes,
   /// single quotes turned to double, the rest as is.
   const __cssFamilies = (v) => __cssCommaParts(v).map((one) => {
-    const t = one.trim();
+    const t = __s_trim(one);
     if (!t) return t;
     const q = t[0];
     if (q === '"' || q === "'") {
-      const inner = t.slice(1, t.length - (t[t.length - 1] === q ? 1 : 0));
+      const inner = __s_slice(t, 1, t.length - (t[t.length - 1] === q ? 1 : 0));
       return '"' + inner + '"';
     }
     return /\s/.test(t) ? '"' + t + '"' : t;
@@ -2975,8 +3003,8 @@
   // Property names: built-ins are case-insensitive, custom ones (`--*`) are
   // not (`var(--Wide)` must find `--Wide`).
   const __cssKey = (p) => {
-    const s = String(p).trim();
-    return s.charCodeAt(0) === 45 && s.charCodeAt(1) === 45 ? s : s.toLowerCase();
+    const s = __s_trim(String(p));
+    return __s_charCodeAt(s, 0) === 45 && __s_charCodeAt(s, 1) === 45 ? s : __s_toLowerCase(s);
   };
   // Numbers in values print with six significant digits: `scale(1.000998)`
   // becomes `scale(1.001)`, `138.828125px` becomes `138.828px`. Quoted strings,
@@ -2988,7 +3016,7 @@
   };
   // Transform as a matrix: `scale(1.000998)` -> [a, b, c, d, e, f].
   const __parseTransform = (str) => {
-    const src = String(str || '').trim();
+    const src = __s_trim(String(str || ''));
     if (!src || src === 'none') return null;
     let M = [1, 0, 0, 1, 0, 0];
     let any = false;
@@ -2999,8 +3027,8 @@
     const re = /([a-zA-Z0-9]+)\s*\(([^)]*)\)/g;
     let m;
     while ((m = re.exec(src))) {
-      const fn = m[1].toLowerCase();
-      const v = m[2].split(/[\s,]+/).filter(Boolean).map((x) => parseFloat(x));
+      const fn = __s_toLowerCase(m[1]);
+      const v = __s_split(m[2], /[\s,]+/).filter(Boolean).map((x) => parseFloat(x));
       if (v.some((x) => !isFinite(x))) return null;
       any = true;
       const rad = (x) => (x || 0) * Math.PI / 180;
@@ -3022,34 +3050,33 @@
     }
     return any ? M : null;
   };
-  const __cssNumbers = (v) => v.replace(
-    /("[^"]*"|'[^']*'|url\([^)]*\))|(?<![A-Za-z0-9_#.\-])([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)(?=[A-Za-z%]*(?![A-Za-z0-9_.#\-]))/g,
+  const __cssNumbers = (v) => __s_replace(v, /("[^"]*"|'[^']*'|url\([^)]*\))|(?<![A-Za-z0-9_#.\-])([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)(?=[A-Za-z%]*(?![A-Za-z0-9_.#\-]))/g,
     (m, q, num) => (q ? q : __cssNum1(num)));
   const __cssValue = (prop, value) => {
     const r = __cssValueRaw(prop, value);
-    if ((prop.charCodeAt(0) === 45 && prop.charCodeAt(1) === 45) || prop === 'unicode-range') return r;
+    if ((__s_charCodeAt(prop, 0) === 45 && __s_charCodeAt(prop, 1) === 45) || prop === 'unicode-range') return r;
     try { return __cssNumbers(r); } catch (e) { return r; }
   };
   const __cssValueRaw = (prop, value) => {
     // Custom property values are stored as written.
-    if (prop.charCodeAt(0) === 45 && prop.charCodeAt(1) === 45) return String(value).trim();
-    let v = __cssZero(__cssHex(String(value).trim().replace(/\s+/g, ' ')));
+    if (__s_charCodeAt(prop, 0) === 45 && __s_charCodeAt(prop, 1) === 45) return __s_trim(String(value));
+    let v = __cssZero(__cssHex(__s_replace(__s_trim(String(value)), /\s+/g, ' ')));
     if (prop === 'animation') return __cssAnimation(v);
     if (prop === 'box-shadow' || prop === 'text-shadow') return __cssShadow(v);
     if (prop === 'outline') return __cssOutline(v);
     if (prop === 'transform') return __cssTransform(v);
     // A slash in grid shorthands prints with spaces around it.
     if (prop === 'grid-area' || prop === 'grid-row' || prop === 'grid-column') {
-      return v.replace(/\s*\/\s*/g, ' / ');
+      return __s_replace(v, /\s*\/\s*/g, ' / ');
     }
     // A single-keyword transform-origin gets a second value.
     if (prop === 'transform-origin' && /^[a-z%\d.-]+$/i.test(v) && !/\s/.test(v)) {
       return v + ' center';
     }
     // A comma list prints with a space after each comma.
-    if (prop === 'stroke-dasharray') return v.replace(/\s*,\s*/g, ', ');
+    if (prop === 'stroke-dasharray') return __s_replace(v, /\s*,\s*/g, ', ');
     // The initial `transition-property` is not printed.
-    if (prop === 'transition') return v.replace(/^all\s+/i, '');
+    if (prop === 'transition') return __s_replace(v, /^all\s+/i, '');
     // Background prints in its own order: image first, colour last; a bare
     // URL gets quoted.
     if (prop === 'background') {
@@ -3058,7 +3085,7 @@
       let colour = null;
       for (const t of parts) {
         if (/^url\(/i.test(t)) {
-          image.push(t.replace(/^url\(\s*(['"]?)(.*?)\1\s*\)$/i, (m, q, u) => 'url("' + u + '")'));
+          image.push(__s_replace(t, /^url\(\s*(['"]?)(.*?)\1\s*\)$/i, (m, q, u) => 'url("' + u + '")'));
         } else if (/^(linear-gradient|radial-gradient|conic-gradient|image-set|-webkit-)/i.test(t)) image.push(t);
         else if (__ptIsColour(t)) colour = t;
         else rest.push(t);
@@ -3069,19 +3096,19 @@
     // In the font shorthand the slash gets spaces, and the family list follows
     // the same rules as the longhand.
     if (prop === 'font') {
-      const spaced = v.replace(/\s*\/\s*/g, ' / ');
-      const at = spaced.search(/(?:^|\s)(?:[\d.]+[a-z%]*|smaller|larger|x?x-(?:small|large)|small|medium|large)(?:\s*\/\s*\S+)?\s+/);
+      const spaced = __s_replace(v, /\s*\/\s*/g, ' / ');
+      const at = __s_search(spaced, /(?:^|\s)(?:[\d.]+[a-z%]*|smaller|larger|x?x-(?:small|large)|small|medium|large)(?:\s*\/\s*\S+)?\s+/);
       if (at < 0) return spaced;
       const m = /(?:^|\s)(?:[\d.]+[a-z%]*|smaller|larger|x?x-(?:small|large)|small|medium|large)(?:\s*\/\s*\S+)?\s+/.exec(spaced);
-      const head = spaced.slice(0, m.index + m[0].length);
-      return head + __cssFamilies(spaced.slice(m.index + m[0].length));
+      const head = __s_slice(spaced, 0, m.index + m[0].length);
+      return head + __cssFamilies(__s_slice(spaced, m.index + m[0].length));
     }
     // Family list: space after commas, multi-word names in double quotes
     // (single quotes become double).
     if (prop === 'font-family') return __cssFamilies(v);
     // Shorthand parts equal to their initial value are not printed:
     // `flex-flow: column nowrap` comes back as `column`.
-    if (prop === 'flex-flow') v = v.replace(/\s+nowrap$/, '');
+    if (prop === 'flex-flow') v = __s_replace(v, /\s+nowrap$/, '');
     if (!CSS_LENGTH_PROPS.has(prop)) return v;
     // Top level only: a bare 0 in `border: 0` is a length, but the 3 in
     // `rgb(178, 15, 3)` is not, and adding `px` breaks the colour.
@@ -3100,11 +3127,8 @@
     flush();
     return out;
   };
-  const __cssSelector = (sel) => String(sel).trim()
-    .replace(/\s+/g, ' ')
-    .replace(/\s*([>+~])\s*/g, ' $1 ')
-    .replace(/\s*,\s*/g, ', ');
-  const __cssPrelude = (p) => String(p).trim().replace(/\s+/g, ' ').replace(/:\s*/g, ': ');
+  const __cssSelector = (sel) => __s_replace(__s_replace(__s_replace(__s_trim(String(sel)), /\s+/g, ' '), /\s*([>+~])\s*/g, ' $1 '), /\s*,\s*/g, ', ');
+  const __cssPrelude = (p) => __s_replace(__s_replace(__s_trim(String(p)), /\s+/g, ' '), /:\s*/g, ': ');
 
   // Parsing: prelude up to `{` or `;`, then the body with nesting depth.
   // Strings and comments are skipped, or `content: "}"` splits the rule.
@@ -3124,7 +3148,7 @@
     while (i < n) {
       while (i < n && /\s/.test(text[i])) i++;
       if (i >= n) break;
-      if (text.startsWith('/*', i)) { const e = text.indexOf('*/', i + 2); i = e < 0 ? n : e + 2; continue; }
+      if (__s_startsWith(text, '/*', i)) { const e = __s_indexOf(text, '*/', i + 2); i = e < 0 ? n : e + 2; continue; }
       const start = i;
       let depth = 0, q = null;
       while (i < n) {
@@ -3136,7 +3160,7 @@
         else if (depth === 0 && (c === '{' || c === ';')) break;
         i++;
       }
-      const prelude = text.slice(start, i).trim();
+      const prelude = __s_trim(__s_slice(text, start, i));
       if (i >= n) { if (prelude) out.push({ prelude, statement: true }); break; }
       if (text[i] === ';') { i++; if (prelude) out.push({ prelude, statement: true }); continue; }
       i++;                                    // past '{'
@@ -3151,7 +3175,7 @@
         else if (c === '}') d--;
         i++;
       }
-      out.push({ prelude, body: text.slice(bodyStart, d === 0 ? i - 1 : i) });
+      out.push({ prelude, body: __s_slice(text, bodyStart, d === 0 ? i - 1 : i) });
     }
     return out;
   }
@@ -3172,17 +3196,17 @@
         else if (c === ';' && depth === 0) break;
         i++;
       }
-      const decl = body.slice(start, i).trim();
+      const decl = __s_trim(__s_slice(body, start, i));
       i++;
       if (!decl) continue;
-      const colon = decl.indexOf(':');
+      const colon = __s_indexOf(decl, ':');
       if (colon <= 0) continue;
-      const prop = __cssKey(decl.slice(0, colon));
+      const prop = __cssKey(__s_slice(decl, 0, colon));
       // A property written twice moves to the later position: Chrome removes
       // and re-appends on overwrite.
       if (prop) {
         map.delete(prop);
-        map.set(prop, __cssValue(prop, decl.slice(colon + 1)));
+        map.set(prop, __cssValue(prop, __s_slice(decl, colon + 1)));
       }
     }
     return map;
@@ -3245,8 +3269,8 @@
   const BORDER_INITIAL = { width: 'medium', style: 'none', color: 'currentcolor' };
   const __borderParts = (v) => {
     const out = { width: null, style: null, color: null };
-    for (const tok of String(v).trim().split(/\s+/)) {
-      const t = tok.toLowerCase();
+    for (const tok of __s_split(__s_trim(String(v)), /\s+/)) {
+      const t = __s_toLowerCase(tok);
       if (/^(none|hidden|dotted|dashed|solid|double|groove|ridge|inset|outset)$/.test(t)) out.style = t;
       else if (/^(thin|medium|thick)$/.test(t) || /^-?[\d.]+(px|em|rem|pt|%)?$/.test(t)) out.width = t;
       else out.color = t;
@@ -3300,7 +3324,7 @@
   const __cssStore = (m, k, v) => {
     const raw = __cssValueRaw(k, v);
     let shown = raw;
-    if (!((k.charCodeAt(0) === 45 && k.charCodeAt(1) === 45) || k === 'unicode-range')) { try { shown = __cssNumbers(raw); } catch (e) {} }
+    if (!((__s_charCodeAt(k, 0) === 45 && __s_charCodeAt(k, 1) === 45) || k === 'unicode-range')) { try { shown = __cssNumbers(raw); } catch (e) {} }
     m.set(k, shown);
     const pm = __cssPrecise(m);
     if (shown !== raw) pm.set(k, raw); else pm.delete(k);
@@ -3312,7 +3336,7 @@
     const important = (k) => {
       if (!imp || !imp.size) return false;
       if (imp.has(k)) return true;
-      for (const sh of imp) if ((CSS_LONGHANDS[sh] || []).includes(k)) return true;
+      for (const sh of imp) if (__s_includes(CSS_LONGHANDS[sh] || [], k)) return true;
       return false;
     };
     return __styleEntries(m).map(([k, v]) => `${k}: ${v}${important(k) ? ' !important' : ''};`).join(' ');
@@ -3344,7 +3368,7 @@
         if (!written.has(n)) return false;
         // Its own expansion does not count.
         return ![...m.keys()].every((other) => other === k
-          || !(other === n || (CSS_LONGHANDS[other] || []).includes(n)));
+          || !(other === n || __s_includes(CSS_LONGHANDS[other] || [], n)));
       });
       const pairs = overridden && typeof __ptExpand === 'function' ? __ptExpand(k, v) : null;
       if (pairs && pairs.length) {
@@ -3363,7 +3387,7 @@
       if (vals.some((x) => x == null)) continue;
       const first = Math.min(...at);
       const merged = [short, __cssFour(vals[0], vals[1], vals[2], vals[3])];
-      live = live.map((e, i) => (i === first ? merged : (parts.includes(e[0]) ? null : e)))
+      live = live.map((e, i) => (i === first ? merged : (__s_includes(parts, e[0]) ? null : e)))
         .filter(Boolean);
     }
     return live;
@@ -3419,17 +3443,17 @@
   /// appearance, no duplicates, as in Chrome.
   const __styleNames = (m) => {
     const out = [];
-    for (const k of m.keys()) for (const n of (CSS_LONGHANDS[k] || [k])) if (!out.includes(n)) out.push(n);
+    for (const k of m.keys()) for (const n of (CSS_LONGHANDS[k] || [k])) if (!__s_includes(out, n)) out.push(n);
     return out;
   };
 
   function __cssDeclaration(map) {
-    const dash = (p) => String(p).replace(/[A-Z]/g, (c) => '-' + c.toLowerCase());
+    const dash = (p) => __s_replace(String(p), /[A-Z]/g, (c) => '-' + __s_toLowerCase(c));
     const target = Object.create(__shapeStyleProto(__styleProto()));
     __cssMaps.set(target, map);
     // Property names are own properties, in Chrome's order.
     for (const name of CSS_PROPS) {
-      const key = dash(name).toLowerCase();
+      const key = __s_toLowerCase(dash(name));
       Object.defineProperty(target, name, {
         get() { return map.get(key) || __longhandFrom(map, key); },
         set(v) { if (v === '' || v == null) map.delete(key); else map.set(key, __cssValue(key, v)); },
@@ -3438,13 +3462,13 @@
     }
     const px = __ptProxy(target, {
       get: (t, p) => {
-        if (typeof p === 'string' && !(p in t)) return map.get(dash(p).toLowerCase()) || '';
+        if (typeof p === 'string' && !(p in t)) return map.get(__s_toLowerCase(dash(p))) || '';
         const v = t[p];
         return typeof v === 'function' ? v.bind(t) : v;
       },
       set: (t, p, v) => {
         if (typeof p === 'string' && !(p in t)) {
-          const k = dash(p).toLowerCase();
+          const k = __s_toLowerCase(dash(p));
           if (v === '' || v == null) map.delete(k); else map.set(k, __cssValue(k, v));
           return true;
         }
@@ -3472,17 +3496,17 @@
   const __mediaListProto = {
     get [Symbol.toStringTag]() { return 'MediaList'; },
     get mediaText() { return this.__ptMedia.join(', '); },
-    set mediaText(v) { this.__ptMedia = String(v).split(',').map((s) => s.trim()).filter(Boolean); },
+    set mediaText(v) { this.__ptMedia = __s_split(String(v), ',').map((s) => __s_trim(s)).filter(Boolean); },
     get length() { return this.__ptMedia.length; },
     item(i) { return this.__ptMedia[i] != null ? this.__ptMedia[i] : null; },
-    appendMedium(m) { if (!this.__ptMedia.includes(String(m))) this.__ptMedia.push(String(m)); },
+    appendMedium(m) { if (!__s_includes(this.__ptMedia, String(m))) this.__ptMedia.push(String(m)); },
     deleteMedium(m) { this.__ptMedia = this.__ptMedia.filter((x) => x !== String(m)); },
     toString() { return this.mediaText; },
   };
   function __mediaList(text) {
     const m = Object.create(__link('MediaList', __mediaListProto));
     Object.defineProperty(m, '__ptMedia', {
-      value: String(text || '').split(',').map((s) => s.trim()).filter(Boolean),
+      value: __s_split(String(text || ''), ',').map((s) => __s_trim(s)).filter(Boolean),
       writable: true, enumerable: false,
     });
     return m;
@@ -3509,20 +3533,19 @@
   // spaces. `@keyframes` keeps a space after the opening brace, `@media` does
   // not, as in Chrome.
   const __cssGroup = (prelude, kids, pad) => prelude + ' {' + (pad ? ' ' : '') + '\n'
-    + kids.map((k) => '  ' + String(k.cssText).replace(/\n/g, '\n  ')).join('\n')
+    + kids.map((k) => '  ' + __s_replace(String(k.cssText), /\n/g, '\n  ')).join('\n')
     + '\n}';
 
   function __makeRule(parsed, sheet, parent) {
     const prelude = parsed.prelude || '';
-    const at = prelude.charCodeAt(0) === 64 ? prelude.split(/[\s({]/)[0].toLowerCase() : '';
+    const at = __s_charCodeAt(prelude, 0) === 64 ? __s_toLowerCase(__s_split(prelude, /[\s({]/)[0]) : '';
     const own = (r, props) => { for (const k of Object.keys(props)) Object.defineProperty(r, k, { value: props[k], enumerable: true, configurable: true }); return r; };
     const common = (r, type) => own(r, {
       type, parentStyleSheet: sheet, parentRule: parent || null,
     });
 
     if (at === '@import') {
-      const href = (/url\(\s*["']?([^"')]*)["']?\s*\)|["']([^"']*)["']/.exec(prelude) || [])
-        .slice(1).find((x) => x !== undefined) || '';
+      const href = __s_slice(/url\(\s*["']?([^"')]*)["']?\s*\)|["']([^"']*)["']/.exec(prelude) || [], 1).find((x) => x !== undefined) || '';
       const r = common(Object.create(__ruleProto('CSSImportRule')), RULE_TYPE.import);
       return own(r, { href, layerName: null, supportsText: null, styleSheet: null,
                       media: __mediaList(''), cssText: '@import url("' + href + '");' });
@@ -3530,7 +3553,7 @@
     if (at === '@media' || at === '@supports') {
       const name = at === '@media' ? 'CSSMediaRule' : 'CSSSupportsRule';
       const r = common(Object.create(__ruleProto(name)), at === '@media' ? RULE_TYPE.media : RULE_TYPE.supports);
-      const cond = __cssPrelude(prelude.slice(at.length).trim());
+      const cond = __cssPrelude(__s_trim(__s_slice(prelude, at.length)));
       const kids = __cssParse(parsed.body || '').map((p) => __makeRule(p, sheet, r)).filter(Boolean);
       own(r, { cssRules: __cssRuleList(kids), conditionText: cond });
       if (at === '@media') own(r, { media: __mediaList(cond) });
@@ -3545,7 +3568,7 @@
                         cssText: __cssPrelude(p.prelude) + ' { '
                           + __styleEntries(decls).map(([a2, b2]) => a2 + ': ' + b2 + ';').join(' ') + ' }' });
       });
-      const name = prelude.slice(at.length).trim();
+      const name = __s_trim(__s_slice(prelude, at.length));
       return own(r, { name, length: kids.length, cssRules: __cssRuleList(kids),
                       appendRule() {}, deleteRule() {}, findRule() { return null; },
                       cssText: __cssGroup('@keyframes ' + name, kids, true) });
@@ -3613,6 +3636,19 @@
   // `document.styleSheets[0] === document.styleSheets[0]`, and rules are
   // rebuilt only when the text changes.
   globalThis.__pt_sheetFor = (owner) => __sheetFor(owner);
+  // Where `<meta http-equiv="refresh">` sends the document, for the engine.
+  // A browser does this natively; read with the engine's own helpers so the
+  // page sees no `getAttribute` or string calls after load.
+  globalThis.__pt_metaRefresh = () => {
+    for (const m of __docTags(document, 'meta')) {
+      if (__s_toLowerCase(__ptGetA(m, 'http-equiv') || '') !== 'refresh') continue;
+      const c = __ptGetA(m, 'content') || '';
+      const i = __s_indexOf(__s_toLowerCase(c), 'url=');
+      if (i < 0) continue;
+      return __s_replace(__s_replace(__s_trim(__s_slice(c, i + 4)), /^['"]/, ''), /['"]$/, '');
+    }
+    return '';
+  };
   function __sheetFor(owner) {
     const proto = __link('CSSStyleSheet', __sheetProto);
     const text = owner.__ptLocal === 'style'
@@ -3655,16 +3691,16 @@
 
   function makeDataset(el) {
     const target = {};
-    for (const k of el.getAttributeNames()) if (k.startsWith('data-'))
-      target[camel(k.slice(5))] = __ptGetA(el, k);
+    for (const k of el.getAttributeNames()) if (__s_startsWith(k, 'data-'))
+      target[camel(__s_slice(k, 5))] = __ptGetA(el, k);
     return __ptProxy(target, {
       get: (t, p) => __ptGetA(el, 'data-' + dash(String(p))) ?? undefined,
       set: (t, p, v) => { __ptSetA(el, 'data-' + dash(String(p)), v); return true; },
       has: (t, p) => __ptHasA(el, 'data-' + dash(String(p))),
     });
   }
-  const camel = (s) => s.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-  const dash = (s) => s.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase());
+  const camel = (s) => __s_replace(s, /-([a-z])/g, (_, c) => __s_toUpperCase(c));
+  const dash = (s) => __s_replace(s, /[A-Z]/g, (c) => '-' + __s_toLowerCase(c));
   // `el.style` and the `style` attribute are two views of one store.
   // The inline style is a CSSStyleDeclaration too: `el.style` and
   // `getComputedStyle(el)` share an interface, and fingerprinters read its name.
@@ -3713,7 +3749,7 @@
       // `-epub-word-break` answers like `word-break`.
       const alias = s.computed ? EPUB_ALIAS[k] : null;
       if (alias) return m.get(alias) || __longhandFrom(m, alias) || '';
-      return m.get(k) || (k.charCodeAt(0) === 45 ? m.get(k.slice(1)) || '' : '')
+      return m.get(k) || (__s_charCodeAt(k, 0) === 45 ? m.get(__s_slice(k, 1)) || '' : '')
         || __longhandFrom(m, k);
     });
     def('getPropertyPriority', function getPropertyPriority(p) {
@@ -3721,7 +3757,7 @@
       const m = s.read(), k = __cssKey(p), imp = m.__ptImp;
       if (!imp || !imp.size) return '';
       if (imp.has(k)) return 'important';
-      for (const sh of imp) if ((CSS_LONGHANDS[sh] || []).includes(k)) return 'important';
+      for (const sh of imp) if (__s_includes(CSS_LONGHANDS[sh] || [], k)) return 'important';
       return '';
     });
     def('setProperty', function setProperty(p, v, prio) {
@@ -3729,7 +3765,7 @@
       if (s.computed) throw __pt_mkErr(TypeError, 'Cannot modify computed style');
       // Priority is either empty or `important`; anything else makes Chrome
       // silently reject the whole call, as does `!important` inside the value.
-      const pr = prio == null ? '' : String(prio).trim().toLowerCase();
+      const pr = prio == null ? '' : __s_toLowerCase(__s_trim(String(prio)));
       if (pr !== '' && pr !== 'important') return;
       if (__cssImportantIn(v)) return;
       const m = s.read(), k = __cssKey(p);
@@ -3801,9 +3837,9 @@
   };
   // Names are inserted where Chrome has them, right after `emptyCells`.
   const __withEpub = (keys) => {
-    const at = keys.indexOf('emptyCells');
+    const at = __s_indexOf(keys, 'emptyCells');
     if (at < 0) return keys;
-    return keys.slice(0, at + 1).concat(EPUB_NAMES, keys.slice(at + 1));
+    return __s_slice(keys, 0, at + 1).concat(EPUB_NAMES, __s_slice(keys, at + 1));
   };
   // Declaration properties are data properties, not accessors: `color`'s
   // descriptor holds `value: "red"`, no `get`/`set`. CSS property names are
@@ -3858,15 +3894,15 @@
       const text = String((el && el.getAttribute && __ptGetA(el, 'style')) || '');
       if (text === cachedText) return cachedMap;
       const m = new Map();
-      for (const part of text.split(';')) {
-        const i = part.indexOf(':');
+      for (const part of __s_split(text, ';')) {
+        const i = __s_indexOf(part, ':');
         if (i < 0) continue;
-        const k = __cssKey(part.slice(0, i));
-        let v = part.slice(i + 1).trim();
+        const k = __cssKey(__s_slice(part, 0, i));
+        let v = __s_trim(__s_slice(part, i + 1));
         // Priority is stored beside the value: `getPropertyValue` answers
         // without `!important`, `getPropertyPriority` with it.
         const im = /!\s*important\s*$/i.exec(v);
-        if (im) v = v.slice(0, im.index).trim();
+        if (im) v = __s_trim(__s_slice(v, 0, im.index));
         if (k) { m.set(k, v); if (im) __cssImp(m).add(k); }
       }
       cachedText = text; cachedMap = m;
@@ -3927,7 +3963,7 @@
   function __tags(root, t) {
     // By internal name, not `tagName`: internal walks must not use
     // page-visible accessors, which a page can wrap and log.
-    const local = String(t).toLowerCase();
+    const local = __s_toLowerCase(String(t));
     return collect(root, (e) => t === '*' || e.__ptLocal === local);
   }
   function __tagsNS(root, ns, local) {
@@ -3946,9 +3982,9 @@
   function __ptHasSheet(e) {
     if (e.__ptLocal === 'style') return true;
     if (e.__ptLocal !== 'link') return false;
-    const rel = String(__ptGetA(e, 'rel') || '').toLowerCase().split(/[\t\n\f\r ]+/);
-    if (rel.indexOf('stylesheet') < 0 || rel.indexOf('alternate') >= 0) return false;
-    return !!String(__ptGetA(e, 'href') || '').trim();
+    const rel = __s_split(__s_toLowerCase(String(__ptGetA(e, 'rel') || '')), /[\t\n\f\r ]+/);
+    if (__s_indexOf(rel, 'stylesheet') < 0 || __s_indexOf(rel, 'alternate') >= 0) return false;
+    return !!__s_trim(String(__ptGetA(e, 'href') || ''));
   }
   /// Stylesheet owners in document order.
   function __sheetOwners(root) {
@@ -3992,10 +4028,10 @@
       if (c === '"' || c === "'") q = c;
       else if (c === '(' || c === '[') depth++;
       else if (c === ')' || c === ']') depth--;
-      else if (c === ',' && depth === 0) { out.push(s.slice(start, i)); start = i + 1; }
+      else if (c === ',' && depth === 0) { out.push(__s_slice(s, start, i)); start = i + 1; }
     }
-    out.push(s.slice(start));
-    return out.map((x) => x.trim());
+    out.push(__s_slice(s, start));
+    return out.map((x) => __s_trim(x));
   }
 
   function __selParse(src) {
@@ -4008,7 +4044,7 @@
       while (i < s.length) {
         const c = s[i];
         if (c === '\\') {
-          const hex = /^[0-9a-fA-F]{1,6}\s?/.exec(s.slice(i + 1, i + 8));
+          const hex = /^[0-9a-fA-F]{1,6}\s?/.exec(__s_slice(s, i + 1, i + 8));
           if (hex) { out += String.fromCodePoint(parseInt(hex[0], 16) || 0xfffd); i += 1 + hex[0].length; }
           else { out += s[i + 1] || ''; i += 2; }
         } else if (/[\w -￿-]/.test(c)) { out += c; i++; }
@@ -4030,7 +4066,7 @@
         else if (c === ')' && --depth === 0) break;
       }
       if (depth) fail();
-      return s.slice(a, i++);
+      return __s_slice(s, a, i++);
     };
     const compound = () => {
       const tests = [];
@@ -4041,7 +4077,7 @@
         const c = s[i];
         if (c === '*') {
           i++; any = true;
-          if (s[i] === '|') { i++; if (s[i] === '*') i++; else { const n = ident().toLowerCase(); spec[2]++; tests.push((e) => e.localName === n); } }
+          if (s[i] === '|') { i++; if (s[i] === '*') i++; else { const n = __s_toLowerCase(ident()); spec[2]++; tests.push((e) => e.localName === n); } }
           continue;
         }
         if (c === '|') { i++; continue; }
@@ -4049,7 +4085,7 @@
           if (any || tests.length) break;
           let n = ident();
           if (s[i] === '|' && s[i + 1] !== '=') { i++; if (s[i] === '*') { i++; any = true; continue; } n = ident(); }
-          const low = n.toLowerCase();
+          const low = __s_toLowerCase(n);
           spec[2]++; any = true;
           tests.push((e) => e.localName === low || (e.__ptNS && e.__ptNS !== 'http://www.w3.org/1999/xhtml' && e.localName === n));
           continue;
@@ -4068,7 +4104,7 @@
           let op = null, val = '', flag = '';
           if (s[i] === ']') i++;
           else {
-            const m = /^([~^$*|]?=)/.exec(s.slice(i));
+            const m = /^([~^$*|]?=)/.exec(__s_slice(s, i));
             if (!m) fail();
             op = m[1]; i += op.length; ws();
             if (s[i] === '"' || s[i] === "'") {
@@ -4077,27 +4113,27 @@
               i++; val = v;
             } else val = ident();
             ws();
-            if (/[isIS]/.test(s[i] || '') && !/[\w-]/.test(s[i + 1] || '')) { flag = s[i].toLowerCase(); i++; ws(); }
+            if (/[isIS]/.test(s[i] || '') && !/[\w-]/.test(s[i + 1] || '')) { flag = __s_toLowerCase(s[i]); i++; ws(); }
             if (s[i] !== ']') fail();
             i++;
           }
           spec[1]++; any = true;
-          const nm = name.toLowerCase();
+          const nm = __s_toLowerCase(name);
           const ci = flag === 'i';
-          const want = ci ? val.toLowerCase() : val;
+          const want = ci ? __s_toLowerCase(val) : val;
           tests.push((e) => {
             let a = __ptGetA(e, nm);
             if (a == null && nm !== name) a = __ptGetA(e, name);
             if (a == null) return false;
             if (!op) return true;
-            if (ci) a = a.toLowerCase();
+            if (ci) a = __s_toLowerCase(a);
             switch (op) {
               case '=': return a === want;
-              case '^=': return want !== '' && a.startsWith(want);
-              case '$=': return want !== '' && a.endsWith(want);
-              case '*=': return want !== '' && a.indexOf(want) >= 0;
-              case '~=': return want !== '' && !/\s/.test(want) && a.split(/[\t\n\f\r ]+/).indexOf(want) >= 0;
-              case '|=': return a === want || a.startsWith(want + '-');
+              case '^=': return want !== '' && __s_startsWith(a, want);
+              case '$=': return want !== '' && __s_endsWith(a, want);
+              case '*=': return want !== '' && __s_indexOf(a, want) >= 0;
+              case '~=': return want !== '' && !/\s/.test(want) && __s_indexOf(__s_split(a, /[\t\n\f\r ]+/), want) >= 0;
+              case '|=': return a === want || __s_startsWith(a, want + '-');
             }
             return false;
           });
@@ -4111,7 +4147,7 @@
         }
         if (c === ':') {
           i++;
-          const name = ident().toLowerCase();
+          const name = __s_toLowerCase(ident());
           if (!name) fail();
           // Legacy single-colon pseudo-elements.
           if (/^(before|after|first-line|first-letter)$/.test(name)) { spec[2]++; any = true; tests.push(__SEL_NEVER); continue; }
@@ -4179,7 +4215,7 @@
   // matcher: ancestors by `__parentEl`, classes by `__ptClassSet`.
   function __bloomHash(t) {
     let x = 2166136261;
-    for (let i = 0; i < t.length; i++) { x ^= t.charCodeAt(i); x = Math.imul(x, 16777619); }
+    for (let i = 0; i < t.length; i++) { x ^= __s_charCodeAt(t, i); x = Math.imul(x, 16777619); }
     return x >>> 0;
   }
   const __BLOOM_NONE = new Int32Array(8);
@@ -4268,7 +4304,7 @@
   };
   // An+B from `:nth-child()`.
   function __nthParse(t) {
-    t = t.trim().toLowerCase().replace(/\s+/g, '');
+    t = __s_replace(__s_toLowerCase(__s_trim(t)), /\s+/g, '');
     if (t === 'odd') return [2, 1];
     if (t === 'even') return [2, 0];
     let m = /^([+-]?\d*)n([+-]\d+)?$/.exec(t);
@@ -4287,7 +4323,7 @@
   };
   const __FORM_CTL = new Set(['button', 'input', 'select', 'textarea', 'optgroup', 'option', 'fieldset']);
   const __TEXTISH = /^(text|search|url|tel|email|password|date|month|week|time|datetime-local|number)$/;
-  const __inputType = (e) => String(__ptGetA(e, 'type') || 'text').toLowerCase();
+  const __inputType = (e) => __s_toLowerCase(String(__ptGetA(e, 'type') || 'text'));
   const __isDisabled = (e) => {
     if (!__FORM_CTL.has(e.localName)) return false;
     if (__ptHasA(e, 'disabled')) return true;
@@ -4418,29 +4454,29 @@
       case 'link': case 'any-link': case '-webkit-any-link': return { spec: B, test: (e) => (e.localName === 'a' || e.localName === 'area') && __ptHasA(e, 'href') };
       case 'focus': return { spec: B, test: (e) => { const d = e.ownerDocument; return !!d && d.__ptActive === e; } };
       case 'focus-within': return { spec: B, test: (e) => { const d = e.ownerDocument; const a = d && d.__ptActive; return !!a && (a === e || e.contains(a)); } };
-      case 'target': return { spec: B, test: (e) => { try { const h = decodeURIComponent(String(globalThis.location && globalThis.location.hash || '').slice(1)); return !!h && e.id === h; } catch (x) { return false; } } };
+      case 'target': return { spec: B, test: (e) => { try { const h = decodeURIComponent(__s_slice(String(globalThis.location && globalThis.location.hash || ''), 1)); return !!h && e.id === h; } catch (x) { return false; } } };
       case 'lang': {
-        const want = String(arg || '').trim().replace(/^["']|["']$/g, '').toLowerCase();
+        const want = __s_toLowerCase(__s_replace(__s_trim(String(arg || '')), /^["']|["']$/g, ''));
         return { spec: B, test: (e) => {
           for (let p = e; p; p = __parentEl(p)) {
             const v = __ptGetA(p, 'lang');
-            if (v != null) { const l = v.toLowerCase(); return l === want || l.startsWith(want + '-'); }
+            if (v != null) { const l = __s_toLowerCase(v); return l === want || __s_startsWith(l, want + '-'); }
           }
           return false;
         } };
       }
       case 'dir': {
-        const want = String(arg || '').trim().toLowerCase();
+        const want = __s_toLowerCase(__s_trim(String(arg || '')));
         return { spec: B, test: (e) => {
           for (let p = e; p; p = __parentEl(p)) {
-            const v = String(__ptGetA(p, 'dir') || '').toLowerCase();
+            const v = __s_toLowerCase(String(__ptGetA(p, 'dir') || ''));
             if (v === 'ltr' || v === 'rtl') return v === want;
           }
           return want === 'ltr';
         } };
       }
       case 'open': return { spec: B, test: (e) => (e.localName === 'details' || e.localName === 'dialog') && __ptHasA(e, 'open') };
-      case 'defined': return { spec: B, test: (e) => e.localName.indexOf('-') < 0 || !!(globalThis.customElements && globalThis.customElements.get && globalThis.customElements.get(e.localName)) };
+      case 'defined': return { spec: B, test: (e) => __s_indexOf(e.localName, '-') < 0 || !!(globalThis.customElements && globalThis.customElements.get && globalThis.customElements.get(e.localName)) };
       case 'host': case 'host-context': case 'state':
         return { spec: B, test: __SEL_NEVER };
     }
@@ -4452,9 +4488,9 @@
   function __selParseRelative(src) {
     // Relative selector: same parse, with a leading combinator anchored on
     // the left.
-    const t = String(src).trim();
+    const t = __s_trim(String(src));
     const lead = /^[>+~]/.test(t) ? t[0] : null;
-    const body = lead ? t.slice(1) : t;
+    const body = lead ? __s_slice(t, 1) : t;
     const parsed = __selParse(body);
     if (parsed.length !== 1) throw new SyntaxError('selector');
     const cx = parsed[0];
@@ -4484,10 +4520,10 @@
       if (q) { if (ch === '\\') k++; else if (ch === q) q = null; continue; }
       if (ch === '"' || ch === "'") { q = ch; continue; }
       if (ch === '(') depth++;
-      else if (ch === ')') { if (--depth === 0) return { arg: t.slice(i + 1, k), end: k + 1 }; }
+      else if (ch === ')') { if (--depth === 0) return { arg: __s_slice(t, i + 1, k), end: k + 1 }; }
     }
     // An unclosed paren at the end of the string is closed implicitly.
-    return { arg: t.slice(i + 1), end: t.length };
+    return { arg: __s_slice(t, i + 1), end: t.length };
   };
   const __selAnb = (a, allowOf) => {
     const m = /^\s*(even|odd|[+-]?\d*n(?:\s*[+-]\s*\d+)?|[+-]?\d+)(?:\s+(of)\s+([\s\S]+))?\s*$/i.exec(a);
@@ -4501,11 +4537,11 @@
     ctx = ctx || {};
     let i = 0; const n = t.length;
     const ws = () => { while (i < n && /\s/.test(t[i])) i++; };
-    const ident = () => { const m = __SEL_IDENT.exec(t.slice(i)); if (!m) return null; i += m[0].length; return m[0]; };
+    const ident = () => { const m = __SEL_IDENT.exec(__s_slice(t, i)); if (!m) return null; i += m[0].length; return m[0]; };
     ws();
     if (i >= n) return false;
     let expectCompound = true;
-    if (/^[>+~]/.test(t.slice(i))) { if (!relative) return false; i += 1; ws(); }
+    if (/^[>+~]/.test(__s_slice(t, i))) { if (!relative) return false; i += 1; ws(); }
     while (i < n) {
       // Compound selector.
       let any = false;
@@ -4513,7 +4549,7 @@
       const save = i;
       let nsPrefix = null;
       if (t[i] === '&') { i++; any = true; }
-      else if (t[i] === '*' || t[i] === '|' || __SEL_IDENT.test(t.slice(i))) {
+      else if (t[i] === '*' || t[i] === '|' || __SEL_IDENT.test(__s_slice(t, i))) {
         let first = t[i] === '*' ? (i++, '*') : (t[i] === '|' ? '' : ident());
         if (first === null) return false;
         if (t[i] === '|' && t[i + 1] !== '=') { nsPrefix = first; i++; const el = t[i] === '*' ? (i++, '*') : ident(); if (el === null) return false; if (nsPrefix !== '*' && nsPrefix !== '') return false; }
@@ -4535,14 +4571,14 @@
           ws();
           if (i >= n) return true;            // `a[b` is closed implicitly
           if (t[i] !== ']') {
-            if (!/^[~|^$*]?=/.test(t.slice(i))) return false;
+            if (!/^[~|^$*]?=/.test(__s_slice(t, i))) return false;
             i += t[i] === '=' ? 1 : 2; ws();
             if (i >= n) return false;
-            const vm = /^(?:"(?:[^"\\\n]|\\[\s\S])*"|'(?:[^'\\\n]|\\[\s\S])*'|"(?:[^"\\\n]|\\[\s\S])*$|'(?:[^'\\\n]|\\[\s\S])*$)/.exec(t.slice(i));
+            const vm = /^(?:"(?:[^"\\\n]|\\[\s\S])*"|'(?:[^'\\\n]|\\[\s\S])*'|"(?:[^"\\\n]|\\[\s\S])*$|'(?:[^'\\\n]|\\[\s\S])*$)/.exec(__s_slice(t, i));
             if (vm) i += vm[0].length; else if (ident() === null) return false;
             ws();
             if (i >= n) return true;
-            if (/^[iI](?=\s*(\]|$))/.test(t.slice(i))) { i++; ws(); }
+            if (/^[iI](?=\s*(\]|$))/.test(__s_slice(t, i))) { i++; ws(); }
             if (i >= n) return true;
           }
           if (t[i] !== ']') return false;
@@ -4552,7 +4588,7 @@
           i++;
           const pe = t[i] === ':'; if (pe) i++;
           const name = ident(); if (name === null) return false;
-          const low = name.toLowerCase();
+          const low = __s_toLowerCase(name);
           if (t[i] === '(') {
             const a = __selArg(t, i); if (!a) return false;
             i = a.end;
@@ -4560,29 +4596,29 @@
             const inner = { logical: true, noHas: ctx.noHas || low === 'has' };
             if (pe) {
               if (ctx.logical) return false;
-              if (!__SEL_PE_FUNC.has(low) && !low.startsWith('-webkit-')) return false;
-              if (low === 'part') { if (!arg.trim() || !arg.trim().split(/\s+/).every((x) => __SEL_IDENT.test(x) && __SEL_IDENT.exec(x)[0] === x)) return false; }
+              if (!__SEL_PE_FUNC.has(low) && !__s_startsWith(low, '-webkit-')) return false;
+              if (low === 'part') { if (!__s_trim(arg) || !__s_split(__s_trim(arg), /\s+/).every((x) => __SEL_IDENT.test(x) && __SEL_IDENT.exec(x)[0] === x)) return false; }
               else if (low === 'slotted') { if (!__selCompoundOnly(arg)) return false; }
               else if (low === 'cue') { if (!__selValid(arg, false, inner)) return false; }
-              else if (!arg.trim()) return false;
+              else if (!__s_trim(arg)) return false;
               afterPE = true;
             } else {
               if (!__SEL_PC_FUNC.has(low)) return false;
               // :is/:where take a forgiving list: invalid parts dropped, empty allowed.
-              if (low === 'is' || low === 'where') { for (const p of __selSplit(arg)) { if (!p.trim()) continue; try { if (!__selValidOne(p, false, inner)) { if (/::|\bhas\(/.test(p)) {} } } catch (e) {} } }
+              if (low === 'is' || low === 'where') { for (const p of __selSplit(arg)) { if (!__s_trim(p)) continue; try { if (!__selValidOne(p, false, inner)) { if (/::|\bhas\(/.test(p)) {} } } catch (e) {} } }
               else if (low === 'not' || low === '-webkit-any') { if (!__selValid(arg, false, inner)) return false; }
-              else if (low === 'has') { if (ctx.noHas || !arg.trim() || !__selValid(arg, true, inner)) return false; }
+              else if (low === 'has') { if (ctx.noHas || !__s_trim(arg) || !__selValid(arg, true, inner)) return false; }
               else if (low === 'nth-child' || low === 'nth-last-child') { if (!__selAnb(arg, true)) return false; }
               else if (low === 'nth-of-type' || low === 'nth-last-of-type') { if (!__selAnb(arg, false)) return false; }
               else if (low === 'host' || low === 'host-context') { if (!__selCompoundOnly(arg)) return false; }
               else if (low === 'lang') { if (!__selStringOrIdent(arg) || /["']/.test(arg)) return false; }
-              else if (low === 'active-view-transition-type') { if (!arg.trim() || !arg.split(',').every((x) => __selStringOrIdent(x) && !/["']/.test(x))) return false; }
+              else if (low === 'active-view-transition-type') { if (!__s_trim(arg) || !__s_split(arg, ',').every((x) => __selStringOrIdent(x) && !/["']/.test(x))) return false; }
               else if (low === 'dir' || low === 'state') { if (!__selStringOrIdent(arg) || /["']/.test(arg)) return false; }
-              else if (!arg.trim()) return false;
+              else if (!__s_trim(arg)) return false;
             }
           } else if (pe) {
             if (ctx.logical) return false;
-            if (!__SEL_PE_PLAIN.has(low) && !low.startsWith('-webkit-')) return false;
+            if (!__SEL_PE_PLAIN.has(low) && !__s_startsWith(low, '-webkit-')) return false;
             afterPE = true;
           } else if (__SEL_LEGACY_PE.has(low)) { if (ctx.logical) return false; afterPE = true; }
           else if (!__SEL_PC_PLAIN.has(low)) return false;
@@ -4600,20 +4636,20 @@
       else if (i === before) return false;     // a character no selector allows
       else expectCompound = true;              // descendant (whitespace)
       if (i >= n) return false;                // trailing combinator
-      if (/^[>+~]/.test(t.slice(i))) return false; // two in a row
+      if (/^[>+~]/.test(__s_slice(t, i))) return false; // two in a row
     }
     return !expectCompound;
   };
   const __selValid = (sel, relative, ctx) => {
     const s = String(sel);
-    if (!s.trim()) return false;
+    if (!__s_trim(s)) return false;
     for (const part of __selSplit(s)) { if (!__selValidOne(part, !!relative, ctx)) return false; }
     return true;
   };
   // Compound selector only (no combinators): :host(), ::slotted().
   const __selCompoundOnly = (sel) => {
-    const t = String(sel).trim();
-    if (!t || /[>+~]|\s/.test(t.replace(/\[[^\]]*\]|\([^)]*\)/g, ''))) return false;
+    const t = __s_trim(String(sel));
+    if (!t || /[>+~]|\s/.test(__s_replace(t, /\[[^\]]*\]|\([^)]*\)/g, ''))) return false;
     return __selValid(t, false, { logical: true });
   };
   const __selectorOk = (sel) => { try { return __selValid(sel, false); } catch (e) { return false; } };
@@ -4642,7 +4678,7 @@
   // The reference node must be a child; otherwise Chrome throws `NotFoundError`
   // with its own words.
   const __needChild = (parent, ref, method, what) => {
-    if (parent.__ptKids.indexOf(ref) >= 0) return;
+    if (__s_indexOf(parent.__ptKids, ref) >= 0) return;
     throw __pt_mkErr(globalThis.DOMException || Error, 
       "Failed to execute '" + method + "' on 'Node': " + what, 'NotFoundError');
   };
@@ -4667,7 +4703,7 @@
 
   // ---- HTML serialization (innerHTML getter) --------------------------------
   const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
-  const esc = (s, attr) => s.replace(attr ? /[&<>"]/g : /[&<>]/g, c => ESC[c]);
+  const esc = (s, attr) => __s_replace(s, attr ? /[&<>"]/g : /[&<>]/g, c => ESC[c]);
   function serializeNode(n, withShadow) {
     if (n.nodeType === TEXT_NODE) return esc(n.data, false);
     if (n.nodeType === COMMENT_NODE) return `<!--${n.data}-->`;
@@ -4716,7 +4752,7 @@
     if (v == null) return null;
     let c = __ptClassCache.get(e);
     if (c === undefined || c.raw !== v) {
-      c = { raw: v, set: new Set(v.split(/[\t\n\f\r ]+/)) };
+      c = { raw: v, set: new Set(__s_split(v, /[\t\n\f\r ]+/)) };
       __ptClassCache.set(e, c);
     }
     return c.set;
@@ -4730,7 +4766,7 @@
     for (let el = target; el && el.nodeType === 1; el = el.parentNode) {
       const tag = el.__ptLocal;
       if ((tag === 'button' || tag === 'input') && __ptHasA(el, 'disabled')) return;
-      const btype = tag === 'button' ? String(__ptGetA(el, 'type') || 'submit').toLowerCase()
+      const btype = tag === 'button' ? __s_toLowerCase(String(__ptGetA(el, 'type') || 'submit'))
         : tag === 'input' ? __inputType(el) : null;
       if (btype === 'submit' || btype === 'image' || btype === 'reset') {
         if (tag === 'button' && btype !== 'submit' && btype !== 'reset') return;
@@ -4744,7 +4780,7 @@
       }
       if (tag === 'button') return;
       if ((tag === 'a' || tag === 'area') && __ptHasA(el, 'href')) {
-        const t = String(__ptGetA(el, 'target') || '').toLowerCase();
+        const t = __s_toLowerCase(String(__ptGetA(el, 'target') || ''));
         if (t && t !== '_self' && t !== '_top' && t !== '_parent') return;
         if (__ptHasA(el, 'download')) return;
         const raw = String(__ptGetA(el, 'href'));
@@ -4753,7 +4789,7 @@
         try { url = new URL(raw, document.baseURI || location.href); } catch (e) { return; }
         const here = String(location.href);
         // Fragment only: scroll and hashchange, no navigation.
-        if (url.href.split('#')[0] === here.split('#')[0] && url.hash) { location.hash = url.hash; return; }
+        if (__s_split(url.href, '#')[0] === __s_split(here, '#')[0] && url.hash) { location.hash = url.hash; return; }
         location.assign(url.href);
         return;
       }
@@ -4767,9 +4803,9 @@
   const __SVG_NS = 'http://www.w3.org/2000/svg', __MATH_NS = 'http://www.w3.org/1998/Math/MathML';
   // Case tables from the HTML spec (adjust SVG tag/attribute names).
   const __SVG_CASE = {};
-  for (const n of ['altGlyph', 'altGlyphDef', 'altGlyphItem', 'animateColor', 'animateMotion', 'animateTransform', 'clipPath', 'feBlend', 'feColorMatrix', 'feComponentTransfer', 'feComposite', 'feConvolveMatrix', 'feDiffuseLighting', 'feDisplacementMap', 'feDistantLight', 'feDropShadow', 'feFlood', 'feFuncA', 'feFuncB', 'feFuncG', 'feFuncR', 'feGaussianBlur', 'feImage', 'feMerge', 'feMergeNode', 'feMorphology', 'feOffset', 'fePointLight', 'feSpecularLighting', 'feSpotLight', 'feTile', 'feTurbulence', 'foreignObject', 'glyphRef', 'linearGradient', 'radialGradient', 'textPath']) __SVG_CASE[n.toLowerCase()] = n;
+  for (const n of ['altGlyph', 'altGlyphDef', 'altGlyphItem', 'animateColor', 'animateMotion', 'animateTransform', 'clipPath', 'feBlend', 'feColorMatrix', 'feComponentTransfer', 'feComposite', 'feConvolveMatrix', 'feDiffuseLighting', 'feDisplacementMap', 'feDistantLight', 'feDropShadow', 'feFlood', 'feFuncA', 'feFuncB', 'feFuncG', 'feFuncR', 'feGaussianBlur', 'feImage', 'feMerge', 'feMergeNode', 'feMorphology', 'feOffset', 'fePointLight', 'feSpecularLighting', 'feSpotLight', 'feTile', 'feTurbulence', 'foreignObject', 'glyphRef', 'linearGradient', 'radialGradient', 'textPath']) __SVG_CASE[__s_toLowerCase(n)] = n;
   const __SVG_ATTR_CASE = {};
-  for (const n of ['attributeName', 'attributeType', 'baseFrequency', 'baseProfile', 'calcMode', 'clipPathUnits', 'diffuseConstant', 'edgeMode', 'filterUnits', 'glyphRef', 'gradientTransform', 'gradientUnits', 'kernelMatrix', 'kernelUnitLength', 'keyPoints', 'keySplines', 'keyTimes', 'lengthAdjust', 'limitingConeAngle', 'markerHeight', 'markerUnits', 'markerWidth', 'maskContentUnits', 'maskUnits', 'numOctaves', 'pathLength', 'patternContentUnits', 'patternTransform', 'patternUnits', 'pointsAtX', 'pointsAtY', 'pointsAtZ', 'preserveAlpha', 'preserveAspectRatio', 'primitiveUnits', 'refX', 'refY', 'repeatCount', 'repeatDur', 'requiredExtensions', 'requiredFeatures', 'specularConstant', 'specularExponent', 'spreadMethod', 'startOffset', 'stdDeviation', 'stitchTiles', 'surfaceScale', 'systemLanguage', 'tableValues', 'targetX', 'targetY', 'textLength', 'viewBox', 'viewTarget', 'xChannelSelector', 'yChannelSelector', 'zoomAndPan']) __SVG_ATTR_CASE[n.toLowerCase()] = n;
+  for (const n of ['attributeName', 'attributeType', 'baseFrequency', 'baseProfile', 'calcMode', 'clipPathUnits', 'diffuseConstant', 'edgeMode', 'filterUnits', 'glyphRef', 'gradientTransform', 'gradientUnits', 'kernelMatrix', 'kernelUnitLength', 'keyPoints', 'keySplines', 'keyTimes', 'lengthAdjust', 'limitingConeAngle', 'markerHeight', 'markerUnits', 'markerWidth', 'maskContentUnits', 'maskUnits', 'numOctaves', 'pathLength', 'patternContentUnits', 'patternTransform', 'patternUnits', 'pointsAtX', 'pointsAtY', 'pointsAtZ', 'preserveAlpha', 'preserveAspectRatio', 'primitiveUnits', 'refX', 'refY', 'repeatCount', 'repeatDur', 'requiredExtensions', 'requiredFeatures', 'specularConstant', 'specularExponent', 'spreadMethod', 'startOffset', 'stdDeviation', 'stitchTiles', 'surfaceScale', 'systemLanguage', 'tableValues', 'targetX', 'targetY', 'textLength', 'viewBox', 'viewTarget', 'xChannelSelector', 'yChannelSelector', 'zoomAndPan']) __SVG_ATTR_CASE[__s_toLowerCase(n)] = n;
   const __foreignElem = (doc, ns, name) => {
     const O = globalThis.__pt_orig || {};
     const f = O.createElementNS || Document.prototype.createElementNS;
@@ -4794,24 +4830,24 @@
     let i = 0;
     while (i < html.length) {
       if (html[i] === '<') {
-        if (html.startsWith('<!--', i)) {
-          const end = html.indexOf('-->', i + 4);
+        if (__s_startsWith(html, '<!--', i)) {
+          const end = __s_indexOf(html, '-->', i + 4);
           const stop = end < 0 ? html.length : end;
-          put(top(), note(html.slice(i + 4, stop)));
+          put(top(), note(__s_slice(html, i + 4, stop)));
           i = end < 0 ? html.length : end + 3; continue;
         }
         // A DOCTYPE inside a fragment is a parse error the parser ignores —
         // it never becomes text.
-        if (/^<!doctype/i.test(html.slice(i, i + 9))) {
-          const end = html.indexOf('>', i);
+        if (/^<!doctype/i.test(__s_slice(html, i, i + 9))) {
+          const end = __s_indexOf(html, '>', i);
           i = end < 0 ? html.length : end + 1; continue;
         }
         const close = html[i + 1] === '/';
-        const m = /^<\/?([a-zA-Z][\w-]*)((?:[^>"']|"[^"]*"|'[^']*')*)\/?>/.exec(html.slice(i));
+        const m = /^<\/?([a-zA-Z][\w-]*)((?:[^>"']|"[^"]*"|'[^']*')*)\/?>/.exec(__s_slice(html, i));
         if (!m) { put(top(), text('<')); i++; continue; }
-        const tag = m[1].toLowerCase();
+        const tag = __s_toLowerCase(m[1]);
         if (close) {
-          for (let s = stack.length - 1; s > 0; s--) if (String(stack[s].localName).toLowerCase() === tag) { stack.length = s; break; }
+          for (let s = stack.length - 1; s > 0; s--) if (__s_toLowerCase(String(stack[s].localName)) === tag) { stack.length = s; break; }
         } else if (tag === 'html' || tag === 'head' || tag === 'body') {
           // Fragment parsing: Chrome does not insert these tags, their content
           // moves into the current parent (`div.innerHTML =
@@ -4823,7 +4859,7 @@
           const SELF_CLOSES = { li: ['li'], dt: ['dt', 'dd'], dd: ['dt', 'dd'], option: ['option', 'optgroup'], optgroup: ['optgroup'], tr: ['tr', 'td', 'th'], td: ['td', 'th'], th: ['td', 'th'], thead: ['tbody', 'tfoot', 'thead'], tbody: ['tbody', 'tfoot', 'thead'], tfoot: ['tbody', 'tfoot', 'thead'] };
           if (CLOSES_P.has(tag)) { for (let s = stack.length - 1; s > 0; s--) { if (stack[s].localName === 'p') { stack.length = s; break; } if (CLOSES_P.has(stack[s].localName) && stack[s].localName !== 'p') break; } }
           const closes = SELF_CLOSES[tag];
-          if (closes) { for (let s = stack.length - 1; s > 0; s--) { const ln = stack[s].localName; if (closes.indexOf(ln) >= 0) { stack.length = s; break; } if (ln === 'table' || ln === 'ul' || ln === 'ol' || ln === 'select' || ln === 'dl') break; } }
+          if (closes) { for (let s = stack.length - 1; s > 0; s--) { const ln = stack[s].localName; if (__s_indexOf(closes, ln) >= 0) { stack.length = s; break; } if (ln === 'table' || ln === 'ul' || ln === 'ol' || ln === 'select' || ln === 'dl') break; } }
           // Implied table wrappers: `<table><tr>` gets a `<tbody>`, a `<td>`
           // without a row gets a `<tr>`; `table.tBodies[0].rows` always exists.
           if (tag === 'tr' || tag === 'td' || tag === 'th') {
@@ -4847,33 +4883,33 @@
           const el = ns ? __foreignElem(doc, ns, ns === __SVG_NS ? (__SVG_CASE[tag] || tag) : tag) : elem(tag);
           for (const am of m[2].matchAll(/([\w:-]+)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s>]+))?/g)) {
             let v = am[2] || '';
-            if (v && (v[0] === '"' || v[0] === "'")) v = v.slice(1, -1);
+            if (v && (v[0] === '"' || v[0] === "'")) v = __s_slice(v, 1, -1);
             // Character references in attribute values are decoded like text:
             // `&quot;` becomes a quote and serializes back as `&quot;`.
-            const an = am[1].toLowerCase();
+            const an = __s_toLowerCase(am[1]);
             attr(el, ns === __SVG_NS ? (__SVG_ATTR_CASE[an] || an) : an, unescapeEntities(v));
           }
           put(top(), el);
-          const selfClose = m[0].endsWith('/>') && (ns || VOID.has(tag)) || VOID.has(tag) && !ns;
+          const selfClose = __s_endsWith(m[0], '/>') && (ns || VOID.has(tag)) || VOID.has(tag) && !ns;
           if (!selfClose) stack.push(el);
         }
         i += m[0].length;
       } else {
-        const next = html.indexOf('<', i);
+        const next = __s_indexOf(html, '<', i);
         const stop = next < 0 ? html.length : next;
-        const chunk = html.slice(i, stop);
+        const chunk = __s_slice(html, i, stop);
         if (chunk) put(top(), text(unescapeEntities(chunk)));
         i = stop;
       }
     }
-    return root.__ptKids.slice();
+    return __s_slice(root.__ptKids);
   }
   const NAMED_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00a0', copy: '\u00a9', reg: '\u00ae', trade: '\u2122', hellip: '\u2026', mdash: '\u2014', ndash: '\u2013', laquo: '\u00ab', raquo: '\u00bb', times: '\u00d7', middot: '\u00b7', bull: '\u2022', lsquo: '\u2018', rsquo: '\u2019', ldquo: '\u201c', rdquo: '\u201d', euro: '\u20ac', pound: '\u00a3', yen: '\u00a5', cent: '\u00a2', sect: '\u00a7', deg: '\u00b0', plusmn: '\u00b1', para: '\u00b6', shy: '\u00ad', iexcl: '\u00a1', iquest: '\u00bf', larr: '\u2190', rarr: '\u2192', uarr: '\u2191', darr: '\u2193', ensp: '\u2002', emsp: '\u2003', thinsp: '\u2009', zwnj: '\u200c', zwj: '\u200d' };
   function unescapeEntities(s) {
-    if (s.indexOf('&') < 0) return s;
-    return s.replace(/&(#[xX][0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);/g, (m, e) => {
+    if (__s_indexOf(s, '&') < 0) return s;
+    return __s_replace(s, /&(#[xX][0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);/g, (m, e) => {
       if (e[0] === '#') {
-        const cp = e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+        const cp = e[1] === 'x' || e[1] === 'X' ? parseInt(__s_slice(e, 2), 16) : parseInt(__s_slice(e, 1), 10);
         if (!Number.isFinite(cp) || cp <= 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) return '\ufffd';
         return String.fromCodePoint(cp);
       }
@@ -4981,7 +5017,7 @@
         if (root(this) !== root(other)) return 35;              // DISCONNECTED | IMPLEMENTATION_SPECIFIC | PRECEDING
         const order = [];
         (function walk(n) { order.push(n); for (const c of n.childNodes) walk(c); })(root(this));
-        return order.indexOf(this) < order.indexOf(other) ? 4 : 2;
+        return __s_indexOf(order, this) < __s_indexOf(order, other) ? 4 : 2;
       },
     },
     normalize: {
@@ -4991,7 +5027,7 @@
           const cur = kids[i], prev = kids[i - 1];
           if (cur.nodeType === 3 && prev.nodeType === 3) { prev.data += cur.data; this.removeChild(cur); }
         }
-        for (const c of this.childNodes) if (c.normalize) c.normalize();
+        for (const c of this.childNodes) if (c.normalize) __s_normalize(c);
       },
     },
     isDefaultNamespace: { value: function isDefaultNamespace(ns) { return ns === 'http://www.w3.org/1999/xhtml'; } },
@@ -5106,8 +5142,8 @@
     const defGet = (P, k, get) => { if (!P) return; try { Object.defineProperty(P, k, { get, enumerable: true, configurable: true }); } catch (e) {} };
     const defFn = (P, k, fn) => { if (!P) return; try { Object.defineProperty(P, k, { value: fn, writable: true, enumerable: true, configurable: true }); } catch (e) {} };
     const kids = (el) => (el && el.__ptKids ? el.__ptKids : []).filter((k) => k.nodeType === ELEMENT_NODE);
-    const local = (el) => String(el.__ptLocal || '').toLowerCase();
-    const isTag = (el, ...names) => el && el.nodeType === ELEMENT_NODE && names.includes(local(el));
+    const local = (el) => __s_toLowerCase(String(el.__ptLocal || ''));
+    const isTag = (el, ...names) => el && el.nodeType === ELEMENT_NODE && __s_includes(names, local(el));
     const branded = (arr, name) => {
       const c = __collection(arr);
       try { const I = globalThis[name]; if (I && I.prototype) Object.setPrototypeOf(c, I.prototype); } catch (e) {}
@@ -5150,18 +5186,18 @@
       let t = this.parentNode;
       if (t && isTag(t, 'thead', 'tbody', 'tfoot')) t = t.parentNode;
       if (!t || !isTag(t, 'table')) return -1;
-      return tableRows(t).indexOf(this);
+      return __s_indexOf(tableRows(t), this);
     });
     defGet(R, 'sectionRowIndex', function () {
       const p = this.parentNode;
       if (!p || !isTag(p, 'table', 'thead', 'tbody', 'tfoot')) return -1;
-      return kids(p).filter((k) => isTag(k, 'tr')).indexOf(this);
+      return __s_indexOf(kids(p).filter((k) => isTag(k, 'tr')), this);
     });
     const C = proto('HTMLTableCellElement');
     defGet(C, 'cellIndex', function () {
       const p = this.parentNode;
       if (!p || !isTag(p, 'tr')) return -1;
-      return kids(p).filter((k) => isTag(k, 'td', 'th')).indexOf(this);
+      return __s_indexOf(kids(p).filter((k) => isTag(k, 'td', 'th')), this);
     });
     // Select.
     const selOptions = (sel) => {
@@ -5182,13 +5218,13 @@
     };
     const selSetLength = (sel, n) => {
       const opts = selOptions(sel); n = Math.max(0, n >>> 0);
-      if (n < opts.length) { for (const o of opts.slice(n)) o.parentNode && o.parentNode.removeChild(o); }
+      if (n < opts.length) { for (const o of __s_slice(opts, n)) o.parentNode && o.parentNode.removeChild(o); }
       else for (let i = opts.length; i < n; i++) sel.appendChild(sel.ownerDocument.createElement('option'));
     };
     globalThis.__pt_selSetLength = selSetLength;
     globalThis.__pt_selSetIndex = selSetIndex;
     // A select's `value` is the selected option's; option `selected`/`value`/`text`.
-    const optValue = (o) => { const v = __ptGetA(o, 'value'); return v != null ? String(v) : String(o.textContent || '').replace(/\s+/g, ' ').trim(); };
+    const optValue = (o) => { const v = __ptGetA(o, 'value'); return v != null ? String(v) : __s_trim(__s_replace(String(o.textContent || ''), /\s+/g, ' ')); };
     defAcc(SEL, 'value', function () {
       const opts = selOptions(this); const multiple = __ptHasA(this, 'multiple');
       let chosen = opts.filter(isSelected);
@@ -5204,7 +5240,7 @@
       if (v) { let p = this.parentNode; if (p && isTag(p, 'optgroup')) p = p.parentNode; if (p && isTag(p, 'select') && !__ptHasA(p, 'multiple')) for (const o of selOptions(p)) if (o !== this) o.__ptSelected = false; }
     });
     defAcc(O_, 'value', function () { return optValue(this); }, function (v) { __ptSetA(this, 'value', String(v)); });
-    defAcc(O_, 'text', function () { return String(this.textContent || '').replace(/\s+/g, ' ').trim(); }, function (v) { this.textContent = String(v); });
+    defAcc(O_, 'text', function () { return __s_trim(__s_replace(String(this.textContent || ''), /\s+/g, ' ')); }, function (v) { this.textContent = String(v); });
     defGet(SEL, 'selectedOptions', function () {
       const opts = selOptions(this);
       const multiple = __ptHasA(this, 'multiple');
@@ -5216,7 +5252,7 @@
       const opts = selOptions(this);
       const multiple = __ptHasA(this, 'multiple');
       const chosen = opts.filter(isSelected);
-      if (chosen.length) return opts.indexOf(multiple ? chosen[0] : chosen[chosen.length - 1]);
+      if (chosen.length) return __s_indexOf(opts, multiple ? chosen[0] : chosen[chosen.length - 1]);
       return !multiple && opts.length && __ptGetA(this, 'size') == null ? 0 : -1;
     }, function (v) { selSetIndex(this, v); });
     defAcc(SEL, 'length', function () { return selOptions(this).length; }, function (v) { selSetLength(this, v); });
@@ -5239,7 +5275,7 @@
       const root = doc && doc.documentElement ? doc.documentElement : form;
       __walkTree(root, (n) => {
         if (!n || n.nodeType !== ELEMENT_NODE || !LISTED.has(local(n))) return;
-        if (local(n) === 'input' && String(__ptGetA(n, 'type') || '').toLowerCase() === 'image') return;
+        if (local(n) === 'input' && __s_toLowerCase(String(__ptGetA(n, 'type') || '')) === 'image') return;
         if (formOf(n) === form) out.push(n);
       });
       return out;
@@ -5257,7 +5293,7 @@
         const f = __ptGetA(n, 'for');
         if (f != null) { if (f === el.id) out.push(n); return; }
         let found = null;
-        __walkTree(n, (m) => { if (!found && m !== n && m.nodeType === ELEMENT_NODE && LABELABLE.has(local(m)) && !(local(m) === 'input' && String(__ptGetA(m, 'type') || '').toLowerCase() === 'hidden')) found = m; });
+        __walkTree(n, (m) => { if (!found && m !== n && m.nodeType === ELEMENT_NODE && LABELABLE.has(local(m)) && !(local(m) === 'input' && __s_toLowerCase(String(__ptGetA(m, 'type') || '')) === 'hidden')) found = m; });
         if (found === el) out.push(n);
       });
       return out;
@@ -5266,7 +5302,7 @@
     for (const n of ['HTMLButtonElement', 'HTMLInputElement', 'HTMLMeterElement', 'HTMLOutputElement', 'HTMLProgressElement', 'HTMLSelectElement', 'HTMLTextAreaElement']) {
       const P = proto(n);
       defGet(P, 'labels', function () {
-        if (local(this) === 'input' && String(__ptGetA(this, 'type') || '').toLowerCase() === 'hidden') return null;
+        if (local(this) === 'input' && __s_toLowerCase(String(__ptGetA(this, 'type') || '')) === 'hidden') return null;
         return __staticNodeList(labelsOf(this));
       });
     }
@@ -5283,16 +5319,16 @@
       const f = __ptGetA(this, 'for');
       if (f != null) { const el = this.ownerDocument && this.ownerDocument.getElementById ? this.ownerDocument.getElementById(f) : null; return el && LABELABLE.has(local(el)) ? el : null; }
       let found = null;
-      __walkTree(this, (m) => { if (!found && m !== this && m.nodeType === ELEMENT_NODE && LABELABLE.has(local(m)) && !(local(m) === 'input' && String(__ptGetA(m, 'type') || '').toLowerCase() === 'hidden')) found = m; });
+      __walkTree(this, (m) => { if (!found && m !== this && m.nodeType === ELEMENT_NODE && LABELABLE.has(local(m)) && !(local(m) === 'input' && __s_toLowerCase(String(__ptGetA(m, 'type') || '')) === 'hidden')) found = m; });
       return found;
     });
     const M = proto('HTMLMapElement');
     defGet(M, 'areas', function () { const out = []; __walkTree(this, (n) => { if (isTag(n, 'area')) out.push(n); }); return __collection(out); });
     const O = proto('HTMLOptionElement');
-    defGet(O, 'index', function () { let p = this.parentNode; if (p && isTag(p, 'optgroup')) p = p.parentNode; return p && isTag(p, 'select') ? selOptions(p).indexOf(this) : 0; });
+    defGet(O, 'index', function () { let p = this.parentNode; if (p && isTag(p, 'optgroup')) p = p.parentNode; return p && isTag(p, 'select') ? __s_indexOf(selOptions(p), this) : 0; });
   }
   globalThis.__pt_elementProto = (tag) => {
-    tag = String(tag).toLowerCase();
+    tag = __s_toLowerCase(String(tag));
     const iface = TAG_IFACE[tag];
     if (iface) return __ifaceProto.get(iface) || __htmlProto;
     if (PLAIN_TAGS.has(tag)) return __htmlProto;
@@ -5439,7 +5475,7 @@
     // length. Curves are split into segments, as Chrome does (with a finer step).
     const pathPoints = (d) => {
       const out = [];
-      const toks = String(d || '').match(/[MmLlHhVvCcSsQqTtAaZz]|-?[\d.]+(?:e-?\d+)?/g) || [];
+      const toks = __s_match(String(d || ''), /[MmLlHhVvCcSsQqTtAaZz]|-?[\d.]+(?:e-?\d+)?/g) || [];
       let i = 0, x = 0, y = 0, sx = 0, sy = 0, cmd = '';
       const n = () => parseFloat(toks[i++]) || 0;
       const push = (px, py) => out.push([px, py]);
@@ -5452,8 +5488,8 @@
       };
       while (i < toks.length) {
         if (/[A-Za-z]/.test(toks[i])) cmd = toks[i++];
-        const rel = cmd === cmd.toLowerCase();
-        const C = cmd.toUpperCase();
+        const rel = cmd === __s_toLowerCase(cmd);
+        const C = __s_toUpperCase(cmd);
         if (C === 'M') { const a = n(), b = n(); x = rel ? x + a : a; y = rel ? y + b : b; sx = x; sy = y; push(x, y); cmd = rel ? 'l' : 'L'; }
         else if (C === 'L') { const a = n(), b = n(); x = rel ? x + a : a; y = rel ? y + b : b; push(x, y); }
         else if (C === 'H') { const a = n(); x = rel ? x + a : a; push(x, y); }
@@ -5488,7 +5524,7 @@
       return L;
     };
     const outline = (el) => {
-      const t = (el.localName || '').toLowerCase();
+      const t = __s_toLowerCase(el.localName || '');
       if (t === 'path') return pathPoints(__ptGetA(el, 'd'));
       if (t === 'line') return [[num(el, 'x1'), num(el, 'y1')], [num(el, 'x2'), num(el, 'y2')]];
       if (t === 'rect') { const x = num(el, 'x'), y = num(el, 'y'), w = num(el, 'width'), h = num(el, 'height');
@@ -5498,7 +5534,7 @@
       if (t === 'ellipse') { const cx = num(el, 'cx'), cy = num(el, 'cy'), rx = num(el, 'rx'), ry = num(el, 'ry');
         return [[cx - rx, cy - ry], [cx + rx, cy + ry]]; }
       if (t === 'polyline' || t === 'polygon') {
-        const nums = String(__ptGetA(el, 'points') || '').match(/-?[\d.]+/g) || [];
+        const nums = __s_match(String(__ptGetA(el, 'points') || ''), /-?[\d.]+/g) || [];
         const pts = []; for (let k = 0; k + 1 < nums.length; k += 2) pts.push([+nums[k], +nums[k+1]]);
         return pts;
       }
@@ -5521,7 +5557,7 @@
       // The bbox needs a laid-out tree; otherwise stylesheet rules are not
       // collected yet and text is measured in the wrong face.
       __relayout();
-      const t = (this.localName || '').toLowerCase();
+      const t = __s_toLowerCase(this.localName || '');
       if (t === 'text' || t === 'tspan') {
         // Text bbox: width measured and rounded up to 1/64 px, ascent and
         // height from font metrics (verified at three sizes). Size and face come
@@ -5609,11 +5645,11 @@
       const c = __cascadeFor(el);
       let famRaw = c.get('font-family');
       if (famRaw == null) famRaw = __inheritedValue(el, 'font-family');
-      const fam = String(famRaw || '').trim() || String((typeof CS_BASE !== 'undefined' && CS_BASE['font-family']) || '"Times New Roman"');
+      const fam = __s_trim(String(famRaw || '')) || String((typeof CS_BASE !== 'undefined' && CS_BASE['font-family']) || '"Times New Roman"');
       let st = c.get('font-style'); if (st == null) st = __inheritedValue(el, 'font-style');
       let wt = c.get('font-weight'); if (wt == null) wt = __inheritedValue(el, 'font-weight');
       const italic = /^(italic|oblique)/i.test(String(st || ''));
-      const w = String(wt || '').toLowerCase();
+      const w = __s_toLowerCase(String(wt || ''));
       const bold = w === 'bold' || w === 'bolder' || (Number(w) >= 600);
       return { fam, bold, italic };
     };
@@ -5648,7 +5684,7 @@
       const fb = __fontBox(fs, fam);
       let asc = fb.asc, desc = fb.desc;
       if (EMOJI_RE.test(txt)) {
-        const rest = txt.replace(/\p{Extended_Pictographic}|\uFE0F|\u200D|[\u{1F3FB}-\u{1F3FF}]|\s/gu, '');
+        const rest = __s_replace(txt, /\p{Extended_Pictographic}|\uFE0F|\u200D|[\u{1F3FB}-\u{1F3FF}]|\s/gu, '');
         // For the bitmap emoji face ascent and descent are the image bounds,
         // same as canvas actualBoundingBox (15/4 at 16px, 23/6 at 24px,
         // 139/38 at 150px).
@@ -5687,7 +5723,7 @@
       const { fam, bold, italic } = __svgFont(this);
       const full = __svgText(this);
       const from = Math.max(0, start | 0), len = Math.max(0, n | 0);
-      const txt = full.slice(from, from + len);
+      const txt = __s_slice(full, from, from + len);
       if (!txt) return 0;
       const w = Math.ceil(__textWidth(txt, fs, fam, bold, italic) * 64) / 64;
       // Length divides by the scale in float32 (the bbox multiplies by the
@@ -5712,8 +5748,8 @@
       const cps = Array.from(full);
       let at = 0, ci = 0;
       for (; ci < cps.length && at + cps[ci].length <= idx; ci++) at += cps[ci].length;
-      const before = full.slice(0, at);
-      const ch = full.slice(at, at + (cps[ci] ? cps[ci].length : 1)) || full.slice(at, at + 1);
+      const before = __s_slice(full, 0, at);
+      const ch = __s_slice(full, at, at + (cps[ci] ? cps[ci].length : 1)) || __s_slice(full, at, at + 1);
       const wAll = __textWidth(before + ch, fs, fam, bold, italic), wBefore = before ? __textWidth(before, fs, fam, bold, italic) : 0;
       const adv = Math.ceil(Math.max(0, wAll - wBefore) * 64) / 64;
       const fb = __fontBox(fs, fam);
@@ -5740,7 +5776,7 @@
     }
     const svgEl = P('SVGSVGElement');
     acc(svgEl, 'viewBox', function viewBox() {
-      const n = String(__ptGetA(this, 'viewBox') || '').match(/-?[\d.]+/g) || [];
+      const n = __s_match(String(__ptGetA(this, 'viewBox') || ''), /-?[\d.]+/g) || [];
       const r = svgRect(+n[0] || 0, +n[1] || 0, +n[2] || 0, +n[3] || 0);
       return wrap('SVGAnimatedRect', { baseVal: r, animVal: r });
     });
@@ -5779,16 +5815,16 @@
     // These types are their own codec: container and content are the same.
     const SINGLE = new Set(['audio/mpeg', 'audio/aac', 'audio/flac']);
     const canPlay = function canPlayType(type) {
-      const t = String(type == null ? '' : type).trim();
-      const semi = t.indexOf(';');
-      const mime = (semi < 0 ? t : t.slice(0, semi)).trim().toLowerCase();
-      const rest = semi < 0 ? '' : t.slice(semi + 1);
+      const t = __s_trim(String(type == null ? '' : type));
+      const semi = __s_indexOf(t, ';');
+      const mime = __s_toLowerCase(__s_trim(semi < 0 ? t : __s_slice(t, 0, semi)));
+      const rest = semi < 0 ? '' : __s_slice(t, semi + 1);
       const m = /codecs\s*=\s*"?([^"]*)"?/i.exec(rest);
-      const codecs = m ? m[1].split(',').map((c) => c.trim().toLowerCase()).filter(Boolean) : [];
+      const codecs = m ? __s_split(m[1], ',').map((c) => __s_toLowerCase(__s_trim(c))).filter(Boolean) : [];
       const allowed = FAMILY[mime];
       if (!allowed) return '';
       if (!codecs.length) return SINGLE.has(mime) ? 'probably' : 'maybe';
-      const fits = (c) => allowed.some((a) => (a.charAt(a.length - 1) === '.' ? c.indexOf(a) === 0 : c === a));
+      const fits = (c) => allowed.some((a) => (__s_charAt(a, a.length - 1) === '.' ? __s_indexOf(c, a) === 0 : c === a));
       return codecs.every(fits) ? 'probably' : '';
     };
     const M = globalThis.HTMLMediaElement && globalThis.HTMLMediaElement.prototype;
@@ -5844,7 +5880,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       }
     }
     for (const name of Object.getOwnPropertyNames(Element.prototype)) {
-      if (name === 'constructor' || name.lastIndexOf('__pt', 0) === 0) continue;
+      if (name === 'constructor' || __s_lastIndexOf(name, '__pt', 0) === 0) continue;
       if (onElement.has(name)) continue;
       const d = Object.getOwnPropertyDescriptor(Element.prototype, name);
       if (!d || !d.configurable) continue;
@@ -5893,8 +5929,8 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       if (cat === 'o') return {};
       if (cat === 'a') return [];
       if (cat === 'p') { const q = Promise.resolve(); q.catch(() => {}); return q; }
-      if (cat.charCodeAt(0) === 35) return Number(cat.slice(1));      // '#12' → 12
-      if (cat.charCodeAt(0) === 115 && cat[1] === ':') return cat.slice(2);   // 's:auto'
+      if (__s_charCodeAt(cat, 0) === 35) return Number(__s_slice(cat, 1));      // '#12' → 12
+      if (__s_charCodeAt(cat, 0) === 115 && cat[1] === ':') return __s_slice(cat, 2);   // 's:auto'
       return undefined;
     };
     for (const iface of Object.keys(CHROME_IFACE_SHAPE)) {
@@ -5981,7 +6017,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     'link', 'meta', 'param', 'source', 'track', 'wbr']);
   globalThis.__pt_lateDom = {
     parseDocument(markup, type) {
-      const kind = String(type || 'text/html').toLowerCase();
+      const kind = __s_toLowerCase(String(type || 'text/html'));
       const doc = new Document();
       Object.defineProperty(doc, '__ptContentType', { value: kind, writable: true, configurable: true });
       const isHtml = kind === 'text/html';
@@ -6048,45 +6084,45 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       const col = (at) => at - ls + 1;
       const fail = (msg, at) => { if (!out.error) out.error = { msg, line, col: col(at === undefined ? i : at) }; };
       const text = (t) => doc.createTextNode(t);
-      const decode = (s) => s.replace(/&(#[xX][0-9a-fA-F]+|#[0-9]+|[A-Za-z_][\w.\-]*);/g, (m, e) => {
-        if (e[0] === '#') { const cp = e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10); return cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : '\ufffd'; }
+      const decode = (s) => __s_replace(s, /&(#[xX][0-9a-fA-F]+|#[0-9]+|[A-Za-z_][\w.\-]*);/g, (m, e) => {
+        if (e[0] === '#') { const cp = e[1] === 'x' || e[1] === 'X' ? parseInt(__s_slice(e, 2), 16) : parseInt(__s_slice(e, 1), 10); return cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : '\ufffd'; }
         const p = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }[e];
         if (p === undefined) { fail("Entity '" + e + "' not defined"); return ''; }
         return p;
       });
       let rootSeen = false;
-      const advance = (from, to) => { for (let k = from; k < to; k++) if (src.charCodeAt(k) === 10) { line++; ls = k + 1; } };
+      const advance = (from, to) => { for (let k = from; k < to; k++) if (__s_charCodeAt(src, k) === 10) { line++; ls = k + 1; } };
       while (i < n && !out.error) {
         if (src[i] === '<') {
-          if (src.startsWith('<?', i)) { const e = src.indexOf('?>', i + 2); if (e < 0) { fail("Parsing XML declaration: '?>' expected"); break; } advance(i, e + 2); i = e + 2; continue; }
-          if (src.startsWith('<!--', i)) { const e = src.indexOf('-->', i + 4); if (e < 0) { fail('Comment not terminated'); break; } push(doc.createComment(src.slice(i + 4, e))); advance(i, e + 3); i = e + 3; continue; }
-          if (src.startsWith('<![CDATA[', i)) { const e = src.indexOf(']]>', i + 9); if (e < 0) { fail('CData section not finished'); break; } if (!stack.length) { fail('Extra content at the end of the document'); break; } push(text(src.slice(i + 9, e))); advance(i, e + 3); i = e + 3; continue; }
-          if (src.startsWith('<!DOCTYPE', i)) { const e = src.indexOf('>', i); if (e < 0) { fail('DOCTYPE improperly terminated'); break; } advance(i, e + 1); i = e + 1; continue; }
+          if (__s_startsWith(src, '<?', i)) { const e = __s_indexOf(src, '?>', i + 2); if (e < 0) { fail("Parsing XML declaration: '?>' expected"); break; } advance(i, e + 2); i = e + 2; continue; }
+          if (__s_startsWith(src, '<!--', i)) { const e = __s_indexOf(src, '-->', i + 4); if (e < 0) { fail('Comment not terminated'); break; } push(doc.createComment(__s_slice(src, i + 4, e))); advance(i, e + 3); i = e + 3; continue; }
+          if (__s_startsWith(src, '<![CDATA[', i)) { const e = __s_indexOf(src, ']]>', i + 9); if (e < 0) { fail('CData section not finished'); break; } if (!stack.length) { fail('Extra content at the end of the document'); break; } push(text(__s_slice(src, i + 9, e))); advance(i, e + 3); i = e + 3; continue; }
+          if (__s_startsWith(src, '<!DOCTYPE', i)) { const e = __s_indexOf(src, '>', i); if (e < 0) { fail('DOCTYPE improperly terminated'); break; } advance(i, e + 1); i = e + 1; continue; }
           if (src[i + 1] === '/') {
-            const m = /^<\/([^\s>]+)\s*>/.exec(src.slice(i));
+            const m = /^<\/([^\s>]+)\s*>/.exec(__s_slice(src, i));
             if (!m) { fail("expected '>'"); break; }
             const top = stack[stack.length - 1];
             if (!top) { fail('Extra content at the end of the document'); break; }
             if (top.__ptLocal !== m[1]) { fail('Opening and ending tag mismatch: ' + top.__ptLocal + ' line ' + top.__ptLine + ' and ' + m[1], i + m[0].length + 1); break; }
             stack.pop(); i += m[0].length; continue;
           }
-          const m = /^<([A-Za-z_:][\w:.\-]*)/.exec(src.slice(i));
+          const m = /^<([A-Za-z_:][\w:.\-]*)/.exec(__s_slice(src, i));
           if (!m) { fail('StartTag: invalid element name', i + 1); break; }
           if (!stack.length && rootSeen) { fail('Extra content at the end of the document'); break; }
           let el = doc.createElement(m[1]); el.__ptLine = line;
           let j = i + m[0].length;
           for (;;) {
-            j += /^\s*/.exec(src.slice(j))[0].length;
+            j += /^\s*/.exec(__s_slice(src, j))[0].length;
             if (src[j] === '>') { j++; break; }
-            if (src.startsWith('/>', j)) { j += 2; push(el); if (!stack.length) rootSeen = true; el = null; break; }
-            const am = /^([A-Za-z_:][\w:.\-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/.exec(src.slice(j));
+            if (__s_startsWith(src, '/>', j)) { j += 2; push(el); if (!stack.length) rootSeen = true; el = null; break; }
+            const am = /^([A-Za-z_:][\w:.\-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/.exec(__s_slice(src, j));
             if (!am) {
-              const nm = /^([A-Za-z_:][\w:.\-]*)/.exec(src.slice(j));
+              const nm = /^([A-Za-z_:][\w:.\-]*)/.exec(__s_slice(src, j));
               if (nm) fail('Specification mandates value for attribute ' + nm[1], j + nm[0].length); else fail('error parsing attribute name', j);
               break;
             }
             const val = am[2] !== undefined ? am[2] : am[3];
-            if (val.indexOf('<') >= 0) { fail("Unescaped '<' not allowed in attributes values", j); break; }
+            if (__s_indexOf(val, '<') >= 0) { fail("Unescaped '<' not allowed in attributes values", j); break; }
             if (__ptHasA(el, am[1])) { fail('Attribute ' + am[1] + ' redefined', j); break; }
             __ptSetAttr.call(el, am[1], decode(val)); j += am[0].length;
           }
@@ -6094,15 +6130,15 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
           if (el) { push(el); if (!stack.length) rootSeen = true; stack.push(el); }
           advance(i, j); i = j; continue;
         }
-        const next = src.indexOf('<', i); const stop = next < 0 ? n : next;
-        const chunk = src.slice(i, stop);
+        const next = __s_indexOf(src, '<', i); const stop = next < 0 ? n : next;
+        const chunk = __s_slice(src, i, stop);
         if (!stack.length) {
-          if (chunk.trim()) { fail(rootSeen ? 'Extra content at the end of the document' : "Start tag expected, '<' not found", i + (chunk.length - chunk.replace(/^\s+/, '').length)); break; }
+          if (__s_trim(chunk)) { fail(rootSeen ? 'Extra content at the end of the document' : "Start tag expected, '<' not found", i + (chunk.length - __s_replace(chunk, /^\s+/, '').length)); break; }
         } else push(text(decode(chunk)));
         advance(i, stop); i = stop;
       }
       if (!out.error && stack.length) { const top = stack[stack.length - 1]; fail('Premature end of data in tag ' + top.__ptLocal + ' line ' + top.__ptLine, n); }
-      if (!out.error && !rootSeen) fail(src.trim() ? "Start tag expected, '<' not found" : 'Document is empty', 0);
+      if (!out.error && !rootSeen) fail(__s_trim(src) ? "Start tag expected, '<' not found" : 'Document is empty', 0);
       return out;
     },
     parseErrorNode(doc, err) {
@@ -6197,22 +6233,22 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
   const __csp = { policies: [] };
   const __cspParse = (text) => {
     const out = {};
-    for (const part of String(text).split(';')) {
-      const toks = part.trim().split(/\s+/).filter(Boolean);
+    for (const part of __s_split(String(text), ';')) {
+      const toks = __s_split(__s_trim(part), /\s+/).filter(Boolean);
       if (!toks.length) continue;
-      const name = toks[0].toLowerCase();
-      if (!(name in out)) out[name] = toks.slice(1);
+      const name = __s_toLowerCase(toks[0]);
+      if (!(name in out)) out[name] = __s_slice(toks, 1);
     }
     return out;
   };
   const __cspScriptDirective = (p) => (p.dirs['script-src'] ? ['script-src', p.dirs['script-src']] : (p.dirs['default-src'] ? ['default-src', p.dirs['default-src']] : null));
-  const __cspHas = (list, kw) => list.some((t) => t.toLowerCase() === kw);
+  const __cspHas = (list, kw) => list.some((t) => __s_toLowerCase(t) === kw);
   const __cspDirectiveText = (name, list) => name + (list.length ? ' ' + list.join(' ') : '');
   // Line and column of the call site, from the stack's first page frame.
   const __cspSite = () => {
     try {
-      const st = String(new Error().stack || '').split('\n');
-      for (const line of st.slice(1)) {
+      const st = __s_split(String(new Error().stack || ''), '\n');
+      for (const line of __s_slice(st, 1)) {
         const m = /(https?:[^\s()]+|about:[^\s()]+):(\d+):(\d+)\)?\s*$/.exec(line);
         if (m && !/<anonymous>/.test(line)) return { file: m[1], line: +m[2], column: +m[3] };
       }
@@ -6267,7 +6303,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       const docURL = String((globalThis.location && location.href) || 'about:blank');
       const init = Object.assign({
         documentURI: __cspStripURL(docURL), referrer: String(document.referrer || ''), blockedURI, violatedDirective: name, effectiveDirective: name,
-        originalPolicy: __csp.policies.map((p) => p.raw).join(', '), disposition: 'enforce', sourceFile: __cspStripURL(site.file), sample: String(sample || '').slice(0, 40), statusCode: /^https?:/.test(docURL) ? 200 : 0, lineNumber: site.line, columnNumber: site.column,
+        originalPolicy: __csp.policies.map((p) => p.raw).join(', '), disposition: 'enforce', sourceFile: __cspStripURL(site.file), sample: __s_slice(String(sample || ''), 0, 40), statusCode: /^https?:/.test(docURL) ? 200 : 0, lineNumber: site.line, columnNumber: site.column,
       }, extra || {});
       delete init.noSite;
       const ev = typeof E === 'function' ? new E('securitypolicyviolation', Object.assign({ bubbles: true, composed: true }, init)) : new Event('securitypolicyviolation', { bubbles: true });
@@ -6289,9 +6325,9 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
   // goes through the default policy; without one it is refused with Chrome's
   // words and a `trusted-types-sink` violation. TT is checked before CSP
   // 'unsafe-eval': with both, Chrome's eval throws the TT error.
-  const __ttRequired = () => __csp.policies.some((p) => (p.dirs['require-trusted-types-for'] || []).some((t) => t.replace(/'/g, '').toLowerCase() === 'script'));
+  const __ttRequired = () => __csp.policies.some((p) => (p.dirs['require-trusted-types-for'] || []).some((t) => __s_toLowerCase(__s_replace(t, /'/g, '')) === 'script'));
   globalThis.__pt_ttRequired = __ttRequired;
-  globalThis.__pt_ttNames = () => { for (const p of __csp.policies) { const l = p.dirs['trusted-types']; if (l) return l.slice(); } return null; };
+  globalThis.__pt_ttNames = () => { for (const p of __csp.policies) { const l = p.dirs['trusted-types']; if (l) return __s_slice(l); } return null; };
   const __ttViolation = (sink, value) => __cspViolation('require-trusted-types-for', ["'script'"], 'trusted-types-sink', sink + '|' + String(value), {});
   const __TT_MEMBER = { TrustedHTML: 'createHTML', TrustedScript: 'createScript', TrustedScriptURL: 'createScriptURL' };
   // A trusted value is recognised across realms (Chrome checks the wrapper
@@ -6312,7 +6348,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     if (r === null || r === undefined) throw fail(" and the 'default' policy failed to execute");
     // The policy result is stringified (a Symbol fails the binding); for eval
     // it must equal the input: there the policy may only allow, not rewrite.
-    if (typeof r === 'symbol') throw __pt_mkErr(TypeError, "Failed to execute 'invoke' on '" + __TT_MEMBER[kind].replace('create', 'Create') + "Callback': Failed to convert value to 'String'.");
+    if (typeof r === 'symbol') throw __pt_mkErr(TypeError, "Failed to execute 'invoke' on '" + __s_replace(__TT_MEMBER[kind], 'create', 'Create') + "Callback': Failed to convert value to 'String'.");
     const out = String(r);
     if (strict && out !== String(value)) throw fail(" and the 'default' policy failed to execute");
     return out;
@@ -6336,26 +6372,26 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
   // Whether a script URL is allowed by a source list (ignoring nonce/hash).
   const __cspAllowsUrl = (list, url, nonce) => {
     const u = String(url || '');
-    if (nonce && list.some((t) => t.toLowerCase() === "'nonce-" + nonce.toLowerCase() + "'" || t === "'nonce-" + nonce + "'")) return true;
+    if (nonce && list.some((t) => __s_toLowerCase(t) === "'nonce-" + __s_toLowerCase(nonce) + "'" || t === "'nonce-" + nonce + "'")) return true;
     if (__cspHas(list, "'strict-dynamic'")) return false;
-    const scheme = (u.match(/^([a-z][a-z0-9+.-]*):/i) || [])[1];
+    const scheme = (__s_match(u, /^([a-z][a-z0-9+.-]*):/i) || [])[1];
     const self_ = (globalThis.location && location.origin) || '';
     for (const t of list) {
-      const low = t.toLowerCase();
+      const low = __s_toLowerCase(t);
       if (low === '*') { if (scheme && !/^(blob|data|filesystem)$/i.test(scheme)) return true; continue; }
-      if (low === "'self'") { if (self_ && u.indexOf(self_ + '/') === 0) return true; continue; }
-      if (/^[a-z][a-z0-9+.-]*:$/i.test(low)) { if (scheme && low === scheme.toLowerCase() + ':') return true; continue; }
-      if (low.charAt(0) === "'") continue;
+      if (low === "'self'") { if (self_ && __s_indexOf(u, self_ + '/') === 0) return true; continue; }
+      if (/^[a-z][a-z0-9+.-]*:$/i.test(low)) { if (scheme && low === __s_toLowerCase(scheme) + ':') return true; continue; }
+      if (__s_charAt(low, 0) === "'") continue;
       // host-source: compare scheme+host(+port), leading wildcard in host.
       try {
-        const hs = low.indexOf('://') > 0 ? low : ((globalThis.location && location.protocol) || 'https:') + '//' + low;
-        const want = new URL(hs.replace(/\*\./g, 'wild.')), got = new URL(u, (globalThis.location && location.href) || undefined);
+        const hs = __s_indexOf(low, '://') > 0 ? low : ((globalThis.location && location.protocol) || 'https:') + '//' + low;
+        const want = new URL(__s_replace(hs, /\*\./g, 'wild.')), got = new URL(u, (globalThis.location && location.href) || undefined);
         if (want.protocol !== got.protocol) continue;
         const wh = want.hostname, gh = got.hostname;
-        const okHost = /^\*\./.test(low.replace(/^[a-z]+:\/\//, '')) ? (gh === wh.replace(/^wild\./, '') || gh.endsWith('.' + wh.replace(/^wild\./, ''))) : gh === wh;
+        const okHost = /^\*\./.test(__s_replace(low, /^[a-z]+:\/\//, '')) ? (gh === __s_replace(wh, /^wild\./, '') || __s_endsWith(gh, '.' + __s_replace(wh, /^wild\./, ''))) : gh === wh;
         if (!okHost) continue;
         if (want.port && want.port !== got.port) continue;
-        if (want.pathname && want.pathname !== '/' && got.pathname.indexOf(want.pathname) !== 0) continue;
+        if (want.pathname && want.pathname !== '/' && __s_indexOf(got.pathname, want.pathname) !== 0) continue;
         return true;
       } catch (e) {}
     }
@@ -6426,7 +6462,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       // `(function anonymous(a\n) {\nbody\n})`, and the policy sees that.
       const ttFn = (real, a) => {
         const kind = real.name === 'AsyncGeneratorFunction' ? 'async function*' : real.name === 'GeneratorFunction' ? 'function*' : real.name === 'AsyncFunction' ? 'async function' : 'function';
-        const params = a.length > 1 ? a.slice(0, -1).map(String).join(',') : '';
+        const params = a.length > 1 ? __s_slice(a, 0, -1).map(String).join(',') : '';
         const body = a.length ? String(a[a.length - 1]) : '';
         const src = '(' + kind + ' anonymous(' + params + '\n) {\n' + body + '\n})';
         const code = __pt_ttEval(src);
@@ -6438,7 +6474,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       const ctors = [globalThis.Function];
       for (const mk of [() => Object.getPrototypeOf(async function () {}).constructor, () => Object.getPrototypeOf(function* () {}).constructor, () => Object.getPrototypeOf(async function* () {}).constructor]) { try { ctors.push(mk()); } catch (e) {} }
       for (const real of ctors) {
-        if (typeof real !== 'function' || seen.includes(real)) continue;
+        if (typeof real !== 'function' || __s_includes(seen, real)) continue;
         seen.push(real);
         if (!ev) continue;
         const w = function (...a) { throw evalErr(); };
@@ -6475,7 +6511,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
           const real = W[k]; if (typeof real !== 'function') continue;
           const w = function (...a) { if (!new.target) throw __pt_mkErr(TypeError, "WebAssembly." + k + " must be invoked with 'new'"); const e = wasmErr(k); if (e) throw e; return Reflect.construct(real, a, new.target); };
           w.prototype = real.prototype;
-          for (const sk of Object.getOwnPropertyNames(real)) { if (['length', 'name', 'prototype'].includes(sk)) continue; try { Object.defineProperty(w, sk, Object.getOwnPropertyDescriptor(real, sk)); } catch (e) {} }
+          for (const sk of Object.getOwnPropertyNames(real)) { if (__s_includes(['length', 'name', 'prototype'], sk)) continue; try { Object.defineProperty(w, sk, Object.getOwnPropertyDescriptor(real, sk)); } catch (e) {} }
           try { Object.defineProperty(w, 'length', { value: real.length, configurable: true }); } catch (e) {}
           Object.defineProperty(W, k, { value: nat(w, k), writable: true, enumerable: false, configurable: true });
         }
@@ -6489,7 +6525,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
           if (!new.target) throw __pt_mkErr(TypeError, "Failed to construct '" + name + "': Please use the 'new' operator, this DOM object constructor cannot be called as a function.");
           const u = String(url);
           // Origin before policy: a foreign blob URL is a SecurityError.
-          if (u.slice(0, 5) === 'blob:') {
+          if (__s_slice(u, 0, 5) === 'blob:') {
             let o = 'null'; try { o = new URL(u).origin; } catch (e) {}
             const mine = (globalThis.location && location.origin) || 'null';
             if (o === 'null' || o !== mine) throw __pt_mkErr(globalThis.DOMException || Error, "Failed to construct '" + name + "': Script at '" + u + "' cannot be accessed from origin '" + mine + "'.", 'SecurityError');
@@ -6501,8 +6537,8 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
             if (__cspAllowsUrl(d[1], u, '')) continue;
             const text = __cspDirectiveText(d[0], d[1]);
             __cspReport("Refused to create a worker from '" + u + "' because it violates the following Content Security Policy directive: \"" + text + "\"." + (d[0] === 'worker-src' ? '\n' : " Note that 'worker-src' was not explicitly set, so '" + d[0] + "' is used as a fallback.\n"));
-            const scheme = (u.match(/^([a-z][a-z0-9+.-]*):/i) || [])[1];
-            __cspViolation(d[0], d[1], /^(blob|data|filesystem)$/i.test(scheme || '') ? scheme.toLowerCase() : u, '', { violatedDirective: 'worker-src', effectiveDirective: 'worker-src' });
+            const scheme = (__s_match(u, /^([a-z][a-z0-9+.-]*):/i) || [])[1];
+            __cspViolation(d[0], d[1], /^(blob|data|filesystem)$/i.test(scheme || '') ? __s_toLowerCase(scheme) : u, '', { violatedDirective: 'worker-src', effectiveDirective: 'worker-src' });
             // Chrome returns an object but does not load the script; the
             // worker gets an error event.
             const dead = Reflect.construct(real, ['data:text/javascript,', opts], new.target);
@@ -6519,10 +6555,10 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     }
   };
   globalThis.__pt_applyCsp = (text, source) => {
-    const raw = String(text == null ? '' : text).trim();
+    const raw = __s_trim(String(text == null ? '' : text));
     if (!raw) return;
-    for (const one of raw.split(',')) {
-      const t = one.trim();
+    for (const one of __s_split(raw, ',')) {
+      const t = __s_trim(one);
       if (!t) continue;
       __csp.policies.push({ raw: t, dirs: __cspParse(t), source: source || 'meta' });
       if ((source || 'meta') === 'header') __csp.headerDelivered = true;
@@ -6535,7 +6571,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     try {
       if (__csp.headerDelivered) __walkTree(root, (n) => { try { if (n && n.nodeType === ELEMENT_NODE && typeof n.__ptHideNonce === 'function') n.__ptHideNonce(); } catch (e) {} });
       const metas = [];
-      __walkTree(root, (n) => { if (n && n.nodeType === ELEMENT_NODE && String(n.__ptLocal || '').toLowerCase() === 'meta' && String(__ptGetA(n, 'http-equiv') || '').toLowerCase() === 'content-security-policy') metas.push(n); });
+      __walkTree(root, (n) => { if (n && n.nodeType === ELEMENT_NODE && __s_toLowerCase(String(n.__ptLocal || '')) === 'meta' && __s_toLowerCase(String(__ptGetA(n, 'http-equiv') || '')) === 'content-security-policy') metas.push(n); });
       for (const m of metas) { const c = __ptGetA(m, 'content'); if (c) __pt_applyCsp(c, 'meta'); }
     } catch (e) {}
   };
@@ -6544,8 +6580,8 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
   globalThis.__pt_markupLine = (text) => {
     try {
       const m = document.__ptMarkup; if (typeof m !== 'string' || !text) return 0;
-      const i = m.indexOf(text); if (i < 0) return 0;
-      let n = 1; for (let k = 0; k < i; k++) if (m.charCodeAt(k) === 10) n++;
+      const i = __s_indexOf(m, text); if (i < 0) return 0;
+      let n = 1; for (let k = 0; k < i; k++) if (__s_charCodeAt(m, k) === 10) n++;
       return n;
     } catch (e) { return 0; }
   };
@@ -6563,7 +6599,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       body = document.createElement('body');
       // Anything the markup put outside head is body content.
       const head = __tags(root, 'head')[0];
-      for (const n of root.childNodes.slice ? root.childNodes.slice() : Array.from(root.childNodes)) {
+      for (const n of root.childNodes.slice ? __s_slice(root.childNodes) : Array.from(root.childNodes)) {
         if (n !== head) { root.removeChild(n); body.appendChild(n); }
       }
       root.appendChild(body);
@@ -6714,7 +6750,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     globalThis.addEventListener = Node.prototype.addEventListener.bind(globalThis);
     globalThis.removeEventListener = Node.prototype.removeEventListener.bind(globalThis);
     globalThis.dispatchEvent = (ev) => {
-      const l = globalThis.__ptLis[ev.type]; if (l) for (const { fn } of l.slice()) { try { fn.call(globalThis, ev); } catch (_) {} }
+      const l = globalThis.__ptLis[ev.type]; if (l) for (const { fn } of __s_slice(l)) { try { fn.call(globalThis, ev); } catch (_) {} }
       return true;
     };
   }
@@ -6744,7 +6780,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     let subtype, className = (v.constructor && v.constructor.name) || 'Object', description = className;
     if (Array.isArray(v)) { subtype = 'array'; className = 'Array'; description = 'Array(' + v.length + ')'; }
     else if (v.nodeType === 1) { subtype = 'node'; description = v.localName || 'element'; }
-    else if (v.nodeType) { subtype = 'node'; description = (v.nodeName || 'node').toLowerCase(); }
+    else if (v.nodeType) { subtype = 'node'; description = __s_toLowerCase(v.nodeName || 'node'); }
     return { type: 'object', subtype, objectId: id, className, description };
   };
   globalThis.__pt_objGet = (id) => __ptObjs.get(id);
@@ -6867,7 +6903,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     if (rec.type === 'attributes') {
       if (!entry.opts.attributes) return false;
       const filter = entry.opts.attributeFilter;
-      return !filter || filter.some(a => String(a).toLowerCase() === rec.attributeName);
+      return !filter || filter.some(a => __s_toLowerCase(String(a)) === rec.attributeName);
     }
     return !!entry.opts.characterData;
   }
@@ -6936,7 +6972,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
         } catch (e) {}
       });
     }
-    unobserve(target) { const t = this.__ptState.targets; const i = t.indexOf(target); if (i >= 0) t.splice(i, 1); }
+    unobserve(target) { const t = this.__ptState.targets; const i = __s_indexOf(t, target); if (i >= 0) t.splice(i, 1); }
     disconnect() { this.__ptState.targets = []; }
   }
 
@@ -6972,7 +7008,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     for (const p of transfer) {
       const st = p && p.__pt;
       if (!st || !('remote' in st)) continue;
-      const id = (globalThis.__pt_frameId || 0) + '-' + (++__portSeq) + '-' + Math.random().toString(36).slice(2, 8);
+      const id = (globalThis.__pt_frameId || 0) + '-' + (++__portSeq) + '-' + __s_slice(Math.random().toString(36), 2, 8);
       const peer = st.peer;
       st.peer = null;
       if (peer) {
@@ -6981,7 +7017,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
         __portEnds.set(id + ':a', peer);
       } else if (st.remote) {
         // A port that already crossed once and moves on: hand its route over.
-        ids.push(st.remote.replace(/:[ab]$/, ''));
+        ids.push(__s_replace(st.remote, /:[ab]$/, ''));
         continue;
       }
       ids.push(id);
@@ -7292,7 +7328,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     lastChild() { return this.__ptChild(-1); }
     __ptChild(from) {
       const kids = this.__ptCur.__ptKids || [];
-      const list = from === 0 ? kids : kids.slice().reverse();
+      const list = from === 0 ? kids : __s_slice(kids).reverse();
       for (const c of list) {
         if (__ptVerdict(this, c) === FILTER_ACCEPT) { this.__ptCur = c; return c; }
       }
@@ -7502,7 +7538,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     if (__IFACE[local]) return __IFACE[local];
     // A dashed name is a custom element (HTMLElement); an unknown single-word
     // tag is HTMLUnknownElement.
-    if (local.indexOf('-') > 0) return 'HTMLElement';
+    if (__s_indexOf(local, '-') > 0) return 'HTMLElement';
     return /^(abbr|address|article|aside|b|bdi|bdo|cite|code|dd|dfn|dt|em|figcaption|figure|footer|h1|h2|h3|h4|h5|h6|header|hgroup|i|ins|del|kbd|main|mark|nav|noscript|rp|rt|ruby|s|samp|section|small|strong|sub|summary|sup|time|u|var|wbr|details|blockquote|caption|colgroup|col)$/.test(local)
       ? 'HTMLElement' : 'HTMLUnknownElement';
   };
@@ -7526,20 +7562,20 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
   const __asNodes = (ns) => ns.map((n) => (typeof n === 'string' ? new Text(n) : n));
   const __afterSelf = function after(...ns) {
     const p = this.parentNode; if (!p) return;
-    let ref = this.nextSibling; while (ref && ns.includes(ref)) ref = ref.nextSibling;
+    let ref = this.nextSibling; while (ref && __s_includes(ns, ref)) ref = ref.nextSibling;
     for (const n of __asNodes(ns)) p.insertBefore(n, ref);
   };
   const __beforeSelf = function before(...ns) {
     const p = this.parentNode; if (!p) return;
-    let prev = this.previousSibling; while (prev && ns.includes(prev)) prev = prev.previousSibling;
+    let prev = this.previousSibling; while (prev && __s_includes(ns, prev)) prev = prev.previousSibling;
     const ref = prev ? prev.nextSibling : p.firstChild;
     for (const n of __asNodes(ns)) p.insertBefore(n, ref);
   };
   const __replaceSelf = function replaceWith(...ns) {
     const p = this.parentNode; if (!p) return;
-    let ref = this.nextSibling; while (ref && ns.includes(ref)) ref = ref.nextSibling;
+    let ref = this.nextSibling; while (ref && __s_includes(ns, ref)) ref = ref.nextSibling;
     const nodes = __asNodes(ns);
-    if (this.parentNode === p && !nodes.includes(this)) p.removeChild(this);
+    if (this.parentNode === p && !__s_includes(nodes, this)) p.removeChild(this);
     for (const n of nodes) p.insertBefore(n, ref);
   };
   for (const C of [Element, Text, Comment]) {
@@ -7578,7 +7614,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     // A hidden input takes no space, nor a line.
     if (el.tagName === 'INPUT' && /^hidden$/i.test(__ptGetA(el, 'type') || '')) return true;
     const s = el.style;
-    if (s && String(s.display || '').toLowerCase() === 'none') return true;
+    if (s && __s_toLowerCase(String(s.display || '')) === 'none') return true;
     return false;
   }
 
@@ -7587,7 +7623,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     if (__hiddenBySheet.has(el)) return true;
     const s = el.style;
     if (s) {
-      const v = String(s.visibility || '').toLowerCase();
+      const v = __s_toLowerCase(String(s.visibility || ''));
       if (v === 'hidden' || v === 'collapse') return true;
     }
     return false;
@@ -7602,18 +7638,18 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       const [a, b, c] = list[0].spec;
       return a * 10000 + b * 100 + c;
     }
-    const s = String(sel).replace(__SPEC_ATTR, '[]');
-    const ids = (s.match(/#[\w-]+/g) || []).length;
-    const cls = (s.match(/\.[\w-]+|\[\]|:(?!:)[a-zA-Z-]+/g) || []).length;
-    const tags = (s.match(/(?:^|[\s>+~])([a-zA-Z][\w-]*)/g) || []).length
-               + (s.match(/::[\w-]+/g) || []).length;
+    const s = __s_replace(String(sel), __SPEC_ATTR, '[]');
+    const ids = (__s_match(s, /#[\w-]+/g) || []).length;
+    const cls = (__s_match(s, /\.[\w-]+|\[\]|:(?!:)[a-zA-Z-]+/g) || []).length;
+    const tags = (__s_match(s, /(?:^|[\s>+~])([a-zA-Z][\w-]*)/g) || []).length
+               + (__s_match(s, /::[\w-]+/g) || []).length;
     return ids * 10000 + cls * 100 + tags;
   }
 
   // @media: only viewport width and height are evaluated; anything else
   // answers "no" rather than guessing.
   function __mediaApplies(cond) {
-    const c = String(cond || '').toLowerCase().trim();
+    const c = __s_trim(__s_toLowerCase(String(cond || '')));
     if (!c || c === 'all' || c === 'screen') return true;
     if (/print|speech/.test(c)) return false;
     if (/prefers-color-scheme:\s*dark/.test(c)) return false;
@@ -7650,7 +7686,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
         }
         if (r.type !== 1 || !r.selectorText) continue;
         for (const one of __selSplit(r.selectorText)) {
-          const sel = one.trim();
+          const sel = __s_trim(one);
           if (!sel) continue;
           out.push({ root, sel, spec: __specificity(sel), order: state.order++, rule: r });
         }
@@ -7688,7 +7724,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       else if (c === ')' || c === ']') depth--;
       else if (depth === 0 && (c === ' ' || c === '>' || c === '+' || c === '~' || c === '\t' || c === '\n')) start = i + 1;
     }
-    const comp = sel.slice(start);
+    const comp = __s_slice(sel, start);
     let flat = '';
     depth = 0;
     for (const c of comp) {
@@ -7696,13 +7732,13 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       if (c === ')' || c === ']') { depth--; continue; }
       if (depth === 0) flat += c;
     }
-    if (flat.indexOf('\\') >= 0) return null;
+    if (__s_indexOf(flat, '\\') >= 0) return null;
     let m = /#([\w-]+)/.exec(flat);
     if (m) return 'i' + m[1];
     m = /\.([\w-]+)/.exec(flat);
     if (m) return 'c' + m[1];
     m = /^([a-zA-Z][\w-]*)/.exec(flat);
-    if (m) return 't' + m[1].toLowerCase();
+    if (m) return 't' + __s_toLowerCase(m[1]);
     return null;
   }
   const __ruleIndexes = new WeakMap();
@@ -7741,13 +7777,13 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     const inScope = (r) => !r.root || r.root === root || (root === docEl && r.root === docEl) || (root && root.nodeType !== 11 && r.root && r.root.nodeType !== 11);
     const out = ix.any.filter(inScope);
     const add = (k) => { const l = ix.keyed.get(k); if (l) for (const r of l) if (inScope(r)) out.push(r); };
-    add('t' + String(el.localName || '').toLowerCase());
+    add('t' + __s_toLowerCase(String(el.localName || '')));
     const id = __ptGetA(el, 'id');
     if (id) add('i' + id);
     const cls = __ptGetA(el, 'class');
     if (cls) {
       const seen = new Set();
-      for (const c of cls.split(/[\t\n\f\r ]+/)) if (c && !seen.has(c)) { seen.add(c); add('c' + c); }
+      for (const c of __s_split(cls, /[\t\n\f\r ]+/)) if (c && !seen.has(c)) { seen.add(c); add('c' + c); }
     }
     return out;
   }
@@ -7791,8 +7827,8 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     for (const r of __rules) {
       const d = __ruleMap(r);
       if (!d) continue;
-      const disp = String(d.get('display') || '').toLowerCase();
-      const vis = String(d.get('visibility') || '').toLowerCase();
+      const disp = __s_toLowerCase(String(d.get('display') || ''));
+      const vis = __s_toLowerCase(String(d.get('visibility') || ''));
       if (disp !== 'none' && vis !== 'hidden' && vis !== 'collapse') continue;
       let list = byRoot.get(r.root);
       if (!list) byRoot.set(r.root, (list = []));
@@ -7821,7 +7857,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       walk(root, (e) => {
         for (const h of any) test(e, h);
         if (!keyed.size) return;
-        byKey(e, 't' + String(e.localName || '').toLowerCase());
+        byKey(e, 't' + __s_toLowerCase(String(e.localName || '')));
         const id = __ptGetA(e, 'id');
         if (id) byKey(e, 'i' + id);
         const set = __ptClassSet(e);
@@ -7882,7 +7918,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       for (const name of SVG_PRESENTATION) {
         const raw = __ptGetA(el, name);
         if (raw == null) continue;
-        const v = String(raw).trim();
+        const v = __s_trim(String(raw));
         // A bare number in SVG is user units, i.e. pixels.
         const norm = SVG_LENGTH_ATTRS.has(name) && /^-?[\d.]+$/.test(v) ? v + 'px' : v;
         out.set(name, norm);
@@ -7913,7 +7949,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     const decls = [];
     const mine = new Map();
     const note = (n, v) => {
-      if (n.charCodeAt(0) === 45 && n.charCodeAt(1) === 45) mine.set(n, v);
+      if (__s_charCodeAt(n, 0) === 45 && __s_charCodeAt(n, 1) === 45) mine.set(n, v);
       else decls.push([n, v]);
     };
     const noteAll = (d) => {
@@ -7938,7 +7974,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       return p && p.nodeType === ELEMENT_NODE ? __cascadeFor(p) : null;
     };
     for (let k = 0; k < decls.length; k++) {
-      const v = String(decls[k][1]).trim().toLowerCase();
+      const v = __s_toLowerCase(__s_trim(String(decls[k][1])));
       if (v === 'initial' || v === 'unset' || v === 'revert' || v === 'revert-layer') { decls[k][1] = null; continue; }
       if (v !== 'inherit') continue;
       const pc = parentOf();
@@ -7947,7 +7983,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     }
     for (const [n, v] of decls) {
       if (v == null) { out.delete(n); continue; }
-      if (v.indexOf('var(') < 0) { take(n, v); continue; }
+      if (__s_indexOf(v, 'var(') < 0) { take(n, v); continue; }
       // A failed substitution makes the declaration invalid: as if not written.
       const sub = __ptSubstVars(v, vars);
       if (sub != null) take(n, sub);
@@ -7976,7 +8012,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     // value invalid.
     for (const n of mine.keys()) {
       const v = out[n];
-      if (typeof v !== 'string' || v.indexOf('var(') < 0) continue;
+      if (typeof v !== 'string' || __s_indexOf(v, 'var(') < 0) continue;
       const sub = __ptSubstVars(v, out, new Set([n]));
       if (sub == null) out[n] = undefined; else out[n] = sub;
     }
@@ -7989,11 +8025,11 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
   function __ptSubstVars(v, vars, busy) {
     let out = '', i = 0, bad = false;
     while (i < v.length) {
-      const at = v.indexOf('var(', i);
-      if (at < 0) { out += v.slice(i); break; }
+      const at = __s_indexOf(v, 'var(', i);
+      if (at < 0) { out += __s_slice(v, i); break; }
       // `var(` never follows a name char (`--my-var(`), but `somevar(` exists.
-      if (at > 0 && /[\w-]/.test(v[at - 1])) { out += v.slice(i, at + 4); i = at + 4; continue; }
-      out += v.slice(i, at);
+      if (at > 0 && /[\w-]/.test(v[at - 1])) { out += __s_slice(v, i, at + 4); i = at + 4; continue; }
+      out += __s_slice(v, i, at);
       let depth = 1, j = at + 4, comma = -1;
       for (; j < v.length && depth; j++) {
         const c = v[j];
@@ -8001,13 +8037,13 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
         else if (c === ')') { if (--depth === 0) break; }
         else if (c === ',' && depth === 1 && comma < 0) comma = j;
       }
-      const name = v.slice(at + 4, comma < 0 ? j : comma).trim();
-      const fallback = comma < 0 ? null : v.slice(comma + 1, j).trim();
+      const name = __s_trim(__s_slice(v, at + 4, comma < 0 ? j : comma));
+      const fallback = comma < 0 ? null : __s_trim(__s_slice(v, comma + 1, j));
       let val = null;
       if (!(busy && busy.has(name))) {
         const raw = vars ? vars[name] : undefined;
         if (typeof raw === 'string') {
-          if (raw.indexOf('var(') < 0) val = raw;
+          if (__s_indexOf(raw, 'var(') < 0) val = raw;
           else {
             const b = new Set(busy || []); b.add(name);
             val = __ptSubstVars(raw, vars, b);
@@ -8015,13 +8051,13 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
         }
       }
       if (val == null && fallback != null) {
-        val = fallback.indexOf('var(') < 0 ? fallback : __ptSubstVars(fallback, vars, busy);
+        val = __s_indexOf(fallback, 'var(') < 0 ? fallback : __ptSubstVars(fallback, vars, busy);
       }
       if (val == null) { bad = true; break; }
       out += val;
       i = j + 1;
     }
-    return bad ? null : out.trim();
+    return bad ? null : __s_trim(out);
   }
 
   // Layout: normal block flow with padding, borders, margins, percentages,
@@ -8038,7 +8074,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
   // row-wise auto-placement into free cells; as many columns as needed
   // (implicit ones auto). Shared by layout and max-content.
   function __gridPlacement(flow, nTracks) {
-    const lineOf = (c, prop) => { const v = String(__cascadeFor(c).get(prop) || 'auto').trim(); const m = /^(\d+)$/.exec(v); return m ? +m[1] : null; };
+    const lineOf = (c, prop) => { const v = __s_trim(String(__cascadeFor(c).get(prop) || 'auto')); const m = /^(\d+)$/.exec(v); return m ? +m[1] : null; };
     const want = flow.map((c) => ({ col: lineOf(c, 'grid-column-start'), row: lineOf(c, 'grid-row-start') }));
     let n = Math.max(nTracks, ...want.map((w) => w.col || 0));
     const taken = new Set(); const place = new Array(flow.length);
@@ -8049,7 +8085,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     return { place, n, want };
   }
   function __gridTracks(raw, avail, gap, fs, rows) {
-    const v = raw == null ? 'none' : String(raw).trim();
+    const v = raw == null ? 'none' : __s_trim(String(raw));
     if (!v || /^(none|auto|subgrid|masonry)$/i.test(v)) return rows ? [] : [{ auto: true }];
     const split = (t) => {
       const out = []; let depth = 0, cur = '';
@@ -8063,7 +8099,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       return out.filter((x) => x[0] !== '[');
     };
     const one = (t) => {
-      const low = t.toLowerCase();
+      const low = __s_toLowerCase(t);
       let m;
       if ((m = /^(-?[\d.]+)fr$/.exec(low))) return { fr: parseFloat(m[1]) };
       if (/^(auto|min-content|max-content)$/.test(low) || /^fit-content\(/.test(low)) return { auto: true };
@@ -8085,7 +8121,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     for (const t of split(v)) {
       const m = /^repeat\(\s*([^,]+?)\s*,(.*)\)$/i.exec(t);
       if (!m) { out.push(one(t)); continue; }
-      const list = split(m[2].trim()).map(one);
+      const list = split(__s_trim(m[2])).map(one);
       let count = parseInt(m[1], 10);
       if (!Number.isFinite(count)) {
         // auto-fill / auto-fit: as many as fit at the minimum size.
@@ -8144,16 +8180,16 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     while (pos < v.length) {
       re.lastIndex = pos;
       const m = re.exec(v);
-      if (!m) { if (/^\s*$/.test(v.slice(pos))) break; return null; }
+      if (!m) { if (/^\s*$/.test(__s_slice(v, pos))) break; return null; }
       pos = re.lastIndex;
       if (m[1] != null) {
         // `a -1px` is subtraction, not a signed number, after an operand.
         const prev = toks[toks.length - 1];
         if (/^[+-]/.test(m[1]) && prev && (prev.t === 'n' || prev.t === ')')) {
           toks.push({ t: m[1][0] });
-          toks.push({ t: 'n', x: parseFloat(m[1].slice(1)), u: m[2].toLowerCase() });
-        } else toks.push({ t: 'n', x: parseFloat(m[1]), u: m[2].toLowerCase() });
-      } else if (m[3] != null) toks.push({ t: 'f', f: m[3].toLowerCase() });
+          toks.push({ t: 'n', x: parseFloat(__s_slice(m[1], 1)), u: __s_toLowerCase(m[2]) });
+        } else toks.push({ t: 'n', x: parseFloat(m[1]), u: __s_toLowerCase(m[2]) });
+      } else if (m[3] != null) toks.push({ t: 'f', f: __s_toLowerCase(m[3]) });
       else toks.push({ t: m[4] });
     }
     let i = 0, fail = false;
@@ -8227,10 +8263,10 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
 
   function __lengthPx(raw, fs, base) {
     if (raw == null) return null;
-    const v = String(raw).trim();
+    const v = __s_trim(String(raw));
     let m;
     if ((m = /^(-?(?:\d+\.?\d*|\.\d+))([a-z%]*)$/i.exec(v))) {
-      const u = m[2].toLowerCase();
+      const u = __s_toLowerCase(m[2]);
       const px = __unitPx(parseFloat(m[1]), u, fs, base);
       if (px == null) return null;
       // Viewport units and percentages are kept at 1/64 px precision.
@@ -8263,8 +8299,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
   const __widths = new Map();
   // SVG whitespace collapses: newlines dropped, tabs become spaces, runs
   // squeezed, ends trimmed. `<text>  ii  </text>` measures as "ii".
-  const __svgText = (el) => String((el && el.textContent) || '')
-    .replace(/[\r\n]/g, '').replace(/\t/g, ' ').replace(/ +/g, ' ').trim();
+  const __svgText = (el) => __s_trim(__s_replace(__s_replace(__s_replace(String((el && el.textContent) || ''), /[\r\n]/g, ''), /\t/g, ' '), / +/g, ' '));
 
   function __textMetrics(text, fs, family, bold, italic) {
     const t = String(text);
@@ -8292,7 +8327,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
   // Word wrapping: greedy, at spaces; the trailing space does not count
   // toward the line width, as in Chrome.
   function __wrapLines(text, maxWidth, fs, family, bold) {
-    const words = String(text).split(' ').filter((w) => w.length);
+    const words = __s_split(String(text), ' ').filter((w) => w.length);
     const out = [];
     if (!words.length) return out;
     if (!(maxWidth > 0)) {
@@ -8319,7 +8354,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
   const __OWN_TEXT = (el) => {
     let t = '';
     for (const c of (el.__ptKids || [])) if (c.nodeType === TEXT_NODE) t += c.data || '';
-    return t.replace(/\s+/g, ' ').trim();
+    return __s_trim(__s_replace(t, /\s+/g, ' '));
   };
 
   // Sizes the UA gives form controls, from Chrome 151: checkbox 13x13, input
@@ -8328,7 +8363,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
   const UA_FORM_FONT = 13.3333;
   function __uaBox(el, tag) {
     if (tag === 'input') {
-      const t = String((el.getAttribute && __ptGetA(el, 'type')) || 'text').toLowerCase();
+      const t = __s_toLowerCase(String((el.getAttribute && __ptGetA(el, 'type')) || 'text'));
       if (t === 'checkbox') return { w: 13, h: 13, p: [0, 0], b: 0, m: [3, 3] };
       if (t === 'radio') return { w: 13, h: 13, p: [0, 0], b: 0, m: [3, 3] };
       if (t === 'range') return { w: 129, h: 16, p: [0, 0], b: 0, m: [2, 2] };
@@ -8402,9 +8437,9 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     if (depth > 40 || !el || el.nodeType !== ELEMENT_NODE || __isUnboxed(el)) return 0;
     const cs = __cascadeFor(el);
     const fs = __usedFontSize(el);
-    const tag = (el.localName || '').toLowerCase();
+    const tag = __s_toLowerCase(el.localName || '');
     const len = (n) => __lengthPx(cs.get(n), fs, null);
-    const bbox = /^border-box$/i.test(String(cs.get('box-sizing') || '').trim());
+    const bbox = /^border-box$/i.test(__s_trim(String(cs.get('box-sizing') || '')));
     const pad = (len('padding-left') || 0) + (len('padding-right') || 0)
       + (len('border-left-width') || 0) + (len('border-right-width') || 0);
     const clamp = (w) => {
@@ -8419,7 +8454,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     if (ua && ua.w != null) return clamp(ua.w + pad);
     let familyRaw = cs.get('font-family');
     if (familyRaw == null) familyRaw = __inheritedValue(el, 'font-family');
-    const family = String(familyRaw || '').trim() || 'sans-serif';
+    const family = __s_trim(String(familyRaw || '')) || 'sans-serif';
     const weight = cs.get('font-weight') || __inheritedValue(el, 'font-weight') || (UA_BOLD.has(tag) ? '700' : '');
     const bold = /(^|\s)(bold|[5-9]00)(\s|$)/i.test(String(weight));
     const text = __OWN_TEXT(el);
@@ -8427,10 +8462,10 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     const kids = [];
     for (const c of (el.__ptKids || [])) {
       if (c.nodeType !== ELEMENT_NODE || __isUnboxed(c)) continue;
-      const p = String(__cascadeFor(c).get('position') || 'static').toLowerCase();
+      const p = __s_toLowerCase(String(__cascadeFor(c).get('position') || 'static'));
       if (p !== 'absolute' && p !== 'fixed') kids.push(c);
     }
-    const display = String(cs.get('display') || CS_DISPLAY[tag] || 'block').toLowerCase();
+    const display = __s_toLowerCase(String(cs.get('display') || CS_DISPLAY[tag] || 'block'));
     const outer = (c) => {
       const ccs = __cascadeFor(c), cfs = __usedFontSize(c);
       return __maxContentW(c, depth + 1) + (__lengthPx(ccs.get('margin-left'), cfs, null) || 0)
@@ -8457,8 +8492,8 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
   }
 
   function __isInlineLevel(el) {
-    const tag = (el.localName || '').toLowerCase();
-    const d = String(__cascadeFor(el).get('display') || CS_DISPLAY[tag] || 'block').toLowerCase();
+    const tag = __s_toLowerCase(el.localName || '');
+    const d = __s_toLowerCase(String(__cascadeFor(el).get('display') || CS_DISPLAY[tag] || 'block'));
     return /^inline(-block|-flex|-grid|-table)?$/.test(d);
   }
 
@@ -8467,8 +8502,8 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
   const __ATOMIC_TAGS = new Set(['img', 'input', 'button', 'select', 'textarea', 'svg',
     'canvas', 'video', 'audio', 'object', 'embed', 'iframe', 'meter', 'progress']);
   function __isAtomicInline(el) {
-    const tag = (el.localName || '').toLowerCase();
-    const d = String(__cascadeFor(el).get('display') || CS_DISPLAY[tag] || 'block').toLowerCase();
+    const tag = __s_toLowerCase(el.localName || '');
+    const d = __s_toLowerCase(String(__cascadeFor(el).get('display') || CS_DISPLAY[tag] || 'block'));
     return d !== 'inline' || __ATOMIC_TAGS.has(tag);
   }
 
@@ -8511,7 +8546,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       const kids = (el.__ptKids || []).filter((k) => k.nodeType === ELEMENT_NODE);
       const it = {
         el, box, atomic: __isAtomicInline(el),
-        text: !!String(__OWN_TEXT(el) || '').trim() || kids.length > 0,
+        text: !!__s_trim(String(__OWN_TEXT(el) || '')) || kids.length > 0,
         ml: m('margin-left'), mr: m('margin-right'), mt: m('margin-top'), mb: m('margin-bottom'),
         x: 0,
       };
@@ -8531,9 +8566,12 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     if (!b) return;
     const dx = x - b.x, dy = y - b.y;
     if (!dx && !dy) return;
+    // A moved box is a new object: layout results are kept by reference
+    // (see `__layoutOne`) and must not change under them.
     const walk = (node) => {
-      const nb = node.__ptBox;
-      if (nb) {
+      const old = node.__ptBox;
+      if (old) {
+        const nb = node.__ptBox = Object.assign({}, old);
         nb.x += dx; nb.y += dy;
         nb.cx += dx; nb.cy += dy;
         if (nb.lineTop != null) nb.lineTop += dy;
@@ -8546,13 +8584,71 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     walk(el);
   }
 
+  // Flex and grid lay a child out more than once (measure, then place), so
+  // nested containers repeated whole subtrees exponentially: 60 s on a store
+  // locator page. Within one pass, a call with the same constraints as an
+  // earlier one restores that result instead, moved to the new origin. Only
+  // moves on the 1/64 px grid: lengths are floored to it, and such a move
+  // floors the same as a fresh layout (off-grid positions may differ in the
+  // last bit of the double).
+  let __layoutMemo = new WeakMap();
+  // Frames told their size during this pass, in order: a restored subtree
+  // tells them again exactly as a fresh layout would.
+  let __tellLog = [];
+  function __ptTellLogged(el, box) {
+    __tellLog.push([el, box && Object.assign({}, box)]);
+    __ptTellFrame(el, box);
+  }
+  const __on64 = (v) => typeof v === 'number' && Number.isInteger(v * 64) && Math.abs(v) < 2 ** 40;
   function __layoutOne(el, originX, originY, availW, strut, forced) {
+    if (forced && forced.cb) return __layoutOneRaw(el, originX, originY, availW, strut, forced);
+    const up = el.parentNode;
+    const key = availW + '|' + (strut ? strut.line + ',' + strut.asc + ',' + strut.desc : '-') + '|'
+      + (forced ? (forced.w === undefined ? 'u' : forced.w) + ',' + (forced.h === undefined ? 'u' : forced.h) + ',' + (forced.block ? 1 : 0) : '-')
+      + '|' + (up && up.nodeType === ELEMENT_NODE ? up.__ptDefH : '-');
+    let mine = __layoutMemo.get(el);
+    const hit = mine && mine.get(key);
+    if (hit) {
+      const dx = originX - hit.ox, dy = originY - hit.oy;
+      if (__on64(dx) && __on64(dy)) {
+        for (const [node, box, defH] of hit.snap) {
+          let b = box;
+          if (dx || dy) {
+            b = Object.assign({}, box);
+            b.x += dx; b.y += dy; b.cx += dx; b.cy += dy;
+            if (b.lineTop != null) b.lineTop += dy;
+          }
+          node.__ptBox = b;
+          node.__ptBoxV = __layoutBuilt;
+          node.__ptDefH = defH;
+        }
+        for (const n of hit.seq) __boxes.push(n);
+        for (const [n, b] of hit.tells) __ptTellLogged(n, b);
+        return el.__ptBox;
+      }
+    }
+    const start = __boxes.length, tellStart = __tellLog.length;
+    const ret = __layoutOneRaw(el, originX, originY, availW, strut, forced);
+    const seq = __s_slice(__boxes, start), tells = __s_slice(__tellLog, tellStart);
+    const snap = [];
+    const seen = new Set();
+    for (const n of seq) {
+      if (seen.has(n)) continue;
+      seen.add(n);
+      if (n.__ptBox) snap.push([n, n.__ptBox, n.__ptDefH]);
+    }
+    if (!mine) __layoutMemo.set(el, (mine = new Map()));
+    mine.set(key, { ox: originX, oy: originY, snap, seq, tells });
+    return ret;
+  }
+
+  function __layoutOneRaw(el, originX, originY, availW, strut, forced) {
     // Document order, not after children: hit testing scans from the end and a
     // deeper element must come after its parent.
     __boxes.push(el);
     const cs = __cascadeFor(el);
     const fs = __usedFontSize(el);
-    const tag = (el.localName || '').toLowerCase();
+    const tag = __s_toLowerCase(el.localName || '');
     // Font is inherited; without it a `<span>` was measured in the fallback
     // face and word widths and line heights were off.
     let familyRaw = cs.get('font-family');
@@ -8560,7 +8656,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     if (familyRaw == null && typeof __inheritedValue === 'function') {
       familyRaw = __inheritedValue(el, 'font-family');
     }
-    const family = String(familyRaw || '').trim() || 'sans-serif';
+    const family = __s_trim(String(familyRaw || '')) || 'sans-serif';
     let weight = cs.get('font-weight') || cs.get('font');
     // The UA sheet beats inheritance: `<b>` is bold whatever the parent weight.
     if (weight == null && UA_BOLD.has(tag)) weight = '700';
@@ -8573,7 +8669,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       const all = cs.get(prefix);
       const one = ['top', 'right', 'bottom', 'left'].map((k) => len(prefix + '-' + k, availW));
       if (all != null) {
-        const parts = String(all).trim().split(/\s+/);
+        const parts = __s_split(__s_trim(String(all)), /\s+/);
         const pick = (i) => parts[[0, 1, 2, 3].map((k) => Math.min(k, parts.length - 1))[i]];
         ['top', 'right', 'bottom', 'left'].forEach((k, i) => {
           if (one[i] == null) one[i] = __lengthPx(pick(i), fs, availW);
@@ -8594,15 +8690,15 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       const w = m && !/\bnone\b/.test(String(borderAll)) ? parseFloat(m[1]) : 0;
       bt = br = bb = bl = w;
     }
-    const display = String(cs.get('display') || CS_DISPLAY[tag] || 'block').toLowerCase();
-    const ovAll = String(cs.get('overflow') || '').toLowerCase();
-    const ovX = String(cs.get('overflow-x') || ovAll || 'visible').toLowerCase();
-    const ovY = String(cs.get('overflow-y') || ovAll || 'visible').toLowerCase();
+    const display = __s_toLowerCase(String(cs.get('display') || CS_DISPLAY[tag] || 'block'));
+    const ovAll = __s_toLowerCase(String(cs.get('overflow') || ''));
+    const ovX = __s_toLowerCase(String(cs.get('overflow-x') || ovAll || 'visible'));
+    const ovY = __s_toLowerCase(String(cs.get('overflow-y') || ovAll || 'visible'));
     // A flex item is blockified whatever its `display`; its height is the line,
     // not the ink.
     const forcedW = !!(forced && forced.w != null);
     const inlineish = __INLINEISH.test(display) && !(forced && forced.block);
-    const position = String(cs.get('position') || 'static').toLowerCase();
+    const position = __s_toLowerCase(String(cs.get('position') || 'static'));
 
     const uam = __uaMargin(tag, fs);
     if (uam) {
@@ -8618,7 +8714,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       if (!setM[3] && !setM[1] && ua.m) { ml = ua.m[1]; mr = ua.m[1]; }
     }
     // `box-sizing: border-box`: the size includes padding and border.
-    const bbox = /^border-box$/i.test(String(cs.get('box-sizing') || '').trim());
+    const bbox = /^border-box$/i.test(__s_trim(String(cs.get('box-sizing') || '')));
     const inW = (v) => (v == null ? null : bbox ? Math.max(0, v - pl - pr - bl - br) : v);
     const inH = (v) => (v == null ? null : bbox ? Math.max(0, v - pt_ - pb - bt - bb) : v);
     // Percent heights are relative to the parent's set height; the root's is
@@ -8659,10 +8755,10 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     // nodes.
     const autoSide = (name) => {
       const v = cs.get(name);
-      if (v != null) return /^auto$/i.test(String(v).trim());
+      if (v != null) return /^auto$/i.test(__s_trim(String(v)));
       const all = cs.get('margin');
       if (all == null) return false;
-      const parts = String(all).trim().split(/\s+/);
+      const parts = __s_split(__s_trim(String(all)), /\s+/);
       const i = name === 'margin-left' ? 3 : 1;
       return /^auto$/i.test(parts[[0, 1, 2, 3].map((k) => Math.min(k, parts.length - 1))[i]] || '');
     };
@@ -8709,7 +8805,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     {
       let lh = cs.get('line-height');
       if (lh == null && typeof __inheritedValue === 'function') lh = __inheritedValue(el, 'line-height');
-      const t = lh == null ? '' : String(lh).trim();
+      const t = lh == null ? '' : __s_trim(String(lh));
       if (t && t !== 'normal') {
         // Multiplier and percentage are relative to the font size.
         lineH = /^[\d.]+$/.test(t) ? parseFloat(t) * fs : /^[\d.]+%$/.test(t) ? parseFloat(t) / 100 * fs : (__lengthPx(t, fs, availW) || fbox.line);
@@ -8730,17 +8826,17 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     if (gridish && boxedKids.length) {
       const gapLen = (n) => {
         const v = cs.get(n);
-        if (v == null || /^normal$/i.test(String(v).trim())) return 0;
+        if (v == null || /^normal$/i.test(__s_trim(String(v)))) return 0;
         return __lengthPx(v, fs, cw) || 0;
       };
       const colGap = gapLen('column-gap'), rowGap = gapLen('row-gap');
       const flow = boxedKids.filter((c) => {
-        const p = String(__cascadeFor(c).get('position') || 'static').toLowerCase();
+        const p = __s_toLowerCase(String(__cascadeFor(c).get('position') || 'static'));
         return p !== 'absolute' && p !== 'fixed';
       });
       // Without a column template every column is `auto`, including implicit
       // ones created by `grid-column: 2`.
-      const tmplCols = String(cs.get('grid-template-columns') == null ? 'none' : cs.get('grid-template-columns')).trim().toLowerCase();
+      const tmplCols = __s_toLowerCase(__s_trim(String(cs.get('grid-template-columns') == null ? 'none' : cs.get('grid-template-columns'))));
       const cols = tmplCols === 'none' || tmplCols === 'auto' || tmplCols === '' ? [{ auto: true }] : __gridTracks(cs.get('grid-template-columns'), cw, colGap, fs);
       // Explicit placement (`grid-area: 1/1`, `grid-column: 2`) and row-wise
       // auto-placement into free cells; implicit columns are `auto`.
@@ -8759,7 +8855,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       // A grid with no set width inside a flex or grid parent (or an inline
       // grid) shrinks to content: auto columns take the widest child, no free
       // space.
-      const parentDisp = String((el.parentNode && el.parentNode.nodeType === ELEMENT_NODE ? __cascadeFor(el.parentNode).get('display') : '') || '').toLowerCase();
+      const parentDisp = __s_toLowerCase(String((el.parentNode && el.parentNode.nodeType === ELEMENT_NODE ? __cascadeFor(el.parentNode).get('display') : '') || ''));
       const shrinkGrid = !forcedW && explicitW == null && (inlineish || /flex|grid/.test(parentDisp));
       if (autos.length) {
         flow.forEach((c, i) => {
@@ -8777,16 +8873,16 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       else if (autos.length && !shrinkGrid) { for (const k of autos) widths[k] += freeW / autos.length; freeW = 0; }
       const totalW = widths.reduce((a, w) => a + w, 0) + colGap * Math.max(0, n - 1);
       if (globalThis.__pt_gridTrace) { try { (globalThis.__pt_parentConsole || console).error('[grid] ' + __ptJSON.stringify({ tag: el.localName, id: el.id, availW, cw, shrinkGrid, forcedW: !!forcedW, explicitW, n, place, widths, totalW, want })); } catch (e) {} }
-      const jc = String(cs.get('justify-content') || 'normal').toLowerCase();
+      const jc = __s_toLowerCase(String(cs.get('justify-content') || 'normal'));
       const slackW = Math.max(0, cw - totalW);
       const leadX = jc === 'center' ? slackW / 2 : (jc === 'end' || jc === 'flex-end' || jc === 'right') ? slackW : 0;
       const colX = [];
       { let x = contentX + leadX; for (let k = 0; k < n; k++) { colX.push(x); x += widths[k] + colGap; } }
       const rowsT = __gridTracks(cs.get('grid-template-rows'), explicitH != null ? explicitH : 0, rowGap, fs, true);
-      const ji = String(cs.get('justify-items') || 'normal').toLowerCase();
-      const ai = String(cs.get('align-items') || 'normal').toLowerCase();
+      const ji = __s_toLowerCase(String(cs.get('justify-items') || 'normal'));
+      const ai = __s_toLowerCase(String(cs.get('align-items') || 'normal'));
       const selfOf = (c, prop, dflt) => {
-        const v = String(__cascadeFor(c).get(prop) || 'auto').toLowerCase();
+        const v = __s_toLowerCase(String(__cascadeFor(c).get(prop) || 'auto'));
         return v === 'auto' ? dflt : v;
       };
       const stretchy = (v) => v === 'normal' || v === 'stretch' || v === 'legacy';
@@ -8797,7 +8893,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
         const { k, r } = place[i];
         const ccs = __cascadeFor(c);
         const js = selfOf(c, 'justify-self', ji);
-        const fixedW = ccs.get('width') != null && !/^auto$/i.test(String(ccs.get('width')).trim());
+        const fixedW = ccs.get('width') != null && !/^auto$/i.test(__s_trim(String(ccs.get('width'))));
         const mx = marg(c, 'margin-left', 'margin-right');
         const b = __layoutOne(c, colX[k], contentY, widths[k], fbox,
           stretchy(js) && !fixedW ? { w: Math.max(0, widths[k] - mx), block: true } : { block: true }) || { h: 0 };
@@ -8808,7 +8904,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
         if (t && t.px != null) rowH[r] = t.px;
       }
       const totalH = rowH.reduce((a, h) => a + h, 0) + rowGap * Math.max(0, nRows - 1);
-      const ac = String(cs.get('align-content') || 'normal').toLowerCase();
+      const ac = __s_toLowerCase(String(cs.get('align-content') || 'normal'));
       const boxH = explicitH != null ? explicitH : null;
       const slackH = boxH != null ? Math.max(0, boxH - totalH) : 0;
       const leadY = ac === 'center' ? slackH / 2 : (ac === 'end' || ac === 'flex-end') ? slackH : 0;
@@ -8819,8 +8915,8 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
         const { k, r } = place[i];
         const ccs = __cascadeFor(c);
         const js = selfOf(c, 'justify-self', ji), as = selfOf(c, 'align-self', ai);
-        const fixedW = ccs.get('width') != null && !/^auto$/i.test(String(ccs.get('width')).trim());
-        const fixedH = ccs.get('height') != null && !/^auto$/i.test(String(ccs.get('height')).trim());
+        const fixedW = ccs.get('width') != null && !/^auto$/i.test(__s_trim(String(ccs.get('width'))));
+        const fixedH = ccs.get('height') != null && !/^auto$/i.test(__s_trim(String(ccs.get('height'))));
         const mx = marg(c, 'margin-left', 'margin-right'), my = marg(c, 'margin-top', 'margin-bottom');
         const sw = stretchy(js) && !fixedW, sh = stretchy(as) && !fixedH;
         let x = colX[k], yy = rowY[r];
@@ -8851,18 +8947,18 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       y = contentY + Math.max(totalH, 0);
       if ((inlineish || shrinkGrid) && !forcedW && explicitW == null) cw = Math.min(cw || totalW, totalW) || totalW;
       for (const c of boxedKids) {
-        const p = String(__cascadeFor(c).get('position') || 'static').toLowerCase();
+        const p = __s_toLowerCase(String(__cascadeFor(c).get('position') || 'static'));
         if (p === 'absolute' || p === 'fixed') __layoutOne(c, contentX, contentY, cw, fbox, { cb: { x: boxX + bl, y: boxY + bt, w: cw + pl + pr, h: (y - contentY) + pt_ + pb } });
       }
     } else if (flexish && boxedKids.length) {
-      const dir = String(cs.get('flex-direction') || 'row').toLowerCase();
-      const row = dir.lastIndexOf('column', 0) !== 0;
+      const dir = __s_toLowerCase(String(cs.get('flex-direction') || 'row'));
+      const row = __s_lastIndexOf(dir, 'column', 0) !== 0;
       const reverse = /-reverse$/.test(dir);
       const gapMain = len(row ? 'column-gap' : 'row-gap', cw) || 0;
-      const align = String(cs.get('align-items') || 'normal').toLowerCase();
-      const justify = String(cs.get('justify-content') || 'normal').toLowerCase();
+      const align = __s_toLowerCase(String(cs.get('align-items') || 'normal'));
+      const justify = __s_toLowerCase(String(cs.get('justify-content') || 'normal'));
       const flow = boxedKids.filter((c) => {
-        const p = String(__cascadeFor(c).get('position') || 'static').toLowerCase();
+        const p = __s_toLowerCase(String(__cascadeFor(c).get('position') || 'static'));
         return p !== 'absolute' && p !== 'fixed';
       });
       // First pass: natural sizes.
@@ -8877,11 +8973,11 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
         const mh = (__lengthPx(ccs.get('margin-top'), cfs, cw) || 0)
                  + (__lengthPx(ccs.get('margin-bottom'), cfs, cw) || 0);
         const num = (v, dflt) => { const n = parseFloat(v); return Number.isFinite(n) ? n : dflt; };
-        const basis = String(ccs.get('flex-basis') || 'auto').toLowerCase();
+        const basis = __s_toLowerCase(String(ccs.get('flex-basis') || 'auto'));
         const basisPx = basis === 'auto' || basis === 'content'
           ? null : __lengthPx(basis, cfs, cw);
         // Basis in a row is the content width when no width is set.
-        const autoW = ccs.get('width') == null || /^auto$/i.test(String(ccs.get('width')).trim());
+        const autoW = ccs.get('width') == null || /^auto$/i.test(__s_trim(String(ccs.get('width'))));
         const natural = row ? (autoW ? (shrinkToFit ? cb.w : Math.min(cb.w, __maxContentW(c))) : cb.w) : cb.h;
         return {
           el: c, box: cb,
@@ -8936,11 +9032,11 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       const lineCross = row
         ? (explicitH != null ? explicitH : crossOuter)
         : cw;
-      const order = reverse ? items.slice().reverse() : items;
+      const order = reverse ? __s_slice(items).reverse() : items;
       let along = lead;
       for (const it of order) {
         const ccs = __cascadeFor(it.el);
-        const self = String(ccs.get('align-self') || 'auto').toLowerCase();
+        const self = __s_toLowerCase(String(ccs.get('align-self') || 'auto'));
         const how = self !== 'auto' && self !== 'normal' ? self : align;
         const cfs = __usedFontSize(it.el);
         const mLead = row ? (__lengthPx(ccs.get('margin-left'), cfs, cw) || 0)
@@ -8971,7 +9067,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       y = contentY + (row ? lineCross : Math.max(0, along - (order.length ? between : 0)));
       // Otherwise as a block: absolute children are placed on their own.
       for (const c of boxedKids) {
-        const p = String(__cascadeFor(c).get('position') || 'static').toLowerCase();
+        const p = __s_toLowerCase(String(__cascadeFor(c).get('position') || 'static'));
         if (p === 'absolute' || p === 'fixed') __layoutOne(c, contentX, contentY, cw, fbox, { cb: { x: boxX + bl, y: boxY + bt, w: cw + pl + pr, h: (y - contentY) + pt_ + pb } });
       }
     } else {
@@ -8983,7 +9079,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       // has no border or padding on that side.
       let carry = 0;          // previous block's bottom margin, pending collapse
       let firstFlow = true;
-      const positionOf = (c) => String(__cascadeFor(c).get('position') || 'static').toLowerCase();
+      const positionOf = (c) => __s_toLowerCase(String(__cascadeFor(c).get('position') || 'static'));
       while (i < boxedKids.length) {
         const c = boxedKids[i];
         const cpos = positionOf(c);
@@ -8997,7 +9093,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
           continue;
         }
         if (!__isInlineLevel(c)) {
-          const cb = __layoutOne(c, contentX, y, cw, fbox);
+          let cb = __layoutOne(c, contentX, y, cw, fbox);
           i++;
           if (!cb) continue;
           const cmt = cb.mt || 0;
@@ -9008,7 +9104,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
           const escapes = firstFlow && !bt && !pt_;
           const shift = escapes ? -cmt : __collapseM(carry, cmt) - cmt;
           if (escapes) { escapedTop = cmt; hasEscapedTop = true; }
-          if (shift) __ptShiftBox(c, cb.x, cb.y + shift);
+          if (shift) { __ptShiftBox(c, cb.x, cb.y + shift); cb = c.__ptBox; }
           widest = Math.max(widest, cb.x - contentX + cb.w);
           deepest = Math.max(deepest, cb.y - contentY + cb.h);
           y = cb.y + cb.h;
@@ -9111,7 +9207,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     el.__ptBox = box;
     el.__ptBoxV = __layoutBuilt;
     // A resized frame changes its window's viewport.
-    if (tag === 'iframe' && el.__ptRealm) __ptTellFrame(el, box);
+    if (tag === 'iframe' && el.__ptRealm) __ptTellLogged(el, box);
     return box;
   }
 
@@ -9160,6 +9256,8 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       }
     } catch (e) {}
     if (!__rendered) return;
+    __layoutMemo = new WeakMap();
+    __tellLog = [];
     __layoutOne(de, 0, 0, LAYOUT.W);
     // In quirks mode the root and body stretch to the viewport: an empty
     // 300x150 frame gives `html` 150 and body 134, not a line height. Frames
@@ -9237,7 +9335,7 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
     col: 'table-column', colgroup: 'table-column-group', audio: 'none',
   };
   const CS_REPLACED_TAGS = new Set(['iframe', 'img', 'canvas', 'video', 'audio', 'object', 'embed']);
-  const CS_CAMEL = (n) => n.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+  const CS_CAMEL = (n) => __s_replace(n, /-([a-z])/g, (_, c) => __s_toUpperCase(c));
 
   // Inherited properties, per spec; verified in Chrome on colour, font, line
   // height and alignment.
@@ -9325,11 +9423,11 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
       : parts.length === 3 ? [parts[0], parts[1], parts[2], parts[1]]
       : [parts[0], parts[1], parts[2], parts[3]];
     void pick;
-    return CS_SIDES.map((side, i) => [name.replace('*', side), order[i]]);
+    return CS_SIDES.map((side, i) => [__s_replace(name, '*', side), order[i]]);
   };
   // Returns [longhand, value] pairs, or null if not a shorthand.
   const __ptExpand = (prop, value) => {
-    const v = String(value).trim();
+    const v = __s_trim(String(value));
     const parts = __ptCssParts(v);
     const out = [];
     const borderSide = /^border-(top|right|bottom|left|block-start|block-end|inline-start|inline-end)$/.exec(prop);
@@ -9337,7 +9435,7 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
       const sides = borderSide ? [borderSide[1]] : CS_SIDES;
       let width = 'medium', style = 'none', colour = 'currentcolor';
       for (const t of parts) {
-        const low = t.toLowerCase();
+        const low = __s_toLowerCase(t);
         if (CS_BORDER_STYLES.has(low)) style = low;
         else if (CS_WIDTH_WORDS[low] || /^[\d.]/.test(low)) width = CS_WIDTH_WORDS[low] || t;
         else if (__ptIsColour(t)) colour = t;
@@ -9351,7 +9449,7 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
       return out;
     }
     if (prop === 'border-width' || prop === 'border-style' || prop === 'border-color') {
-      const kind = prop.slice('border-'.length);
+      const kind = __s_slice(prop, 'border-'.length);
       return __ptFourWay('border-*-' + kind, v);
     }
     if (prop === 'margin' || prop === 'padding') return __ptFourWay(prop + '-*', v);
@@ -9361,7 +9459,7 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
     }
     if (prop === 'border-radius') {
       const corners = ['top-left', 'top-right', 'bottom-right', 'bottom-left'];
-      const round = v.split('/')[0].trim();
+      const round = __s_trim(__s_split(v, '/')[0]);
       const p = __ptCssParts(round);
       const order = p.length === 1 ? [p[0], p[0], p[0], p[0]]
         : p.length === 2 ? [p[0], p[1], p[0], p[1]]
@@ -9383,7 +9481,7 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
     if (prop === 'outline') {
       let width = 'medium', style = 'none', colour = 'currentcolor';
       for (const t of parts) {
-        const low = t.toLowerCase();
+        const low = __s_toLowerCase(t);
         if (CS_BORDER_STYLES.has(low) || low === 'auto') style = low;
         else if (CS_WIDTH_WORDS[low] || /^[\d.]/.test(low)) width = CS_WIDTH_WORDS[low] || t;
         else if (__ptIsColour(t)) colour = t;
@@ -9395,7 +9493,7 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
       // `font: italic small-caps bold 14px/1.5 Georgia, serif`
       const m = /(^|\s)((?:[\d.]+[a-z%]*|smaller|larger|x?x-(?:small|large)|small|medium|large))(?:\s*\/\s*([^\s]+))?\s+(.+)$/i.exec(v);
       if (!m) return [];
-      const before = v.slice(0, m.index).trim().toLowerCase().split(/\s+/).filter(Boolean);
+      const before = __s_split(__s_toLowerCase(__s_trim(__s_slice(v, 0, m.index))), /\s+/).filter(Boolean);
       for (const w of before) {
         if (w === 'italic' || w === 'oblique') out.push(['font-style', w]);
         else if (w === 'small-caps') out.push(['font-variant-caps', w]);
@@ -9404,7 +9502,7 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
       }
       out.push(['font-size', m[2]]);
       if (m[3]) out.push(['line-height', m[3]]);
-      out.push(['font-family', m[4].trim()]);
+      out.push(['font-family', __s_trim(m[4])]);
       return out;
     }
     if (prop === 'flex') {
@@ -9422,22 +9520,22 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
       return [['overflow-x', x], ['overflow-y', parts[1] || x]];
     }
     if (prop === 'place-items' || prop === 'place-content' || prop === 'place-self') {
-      const kind = prop.slice('place-'.length);
+      const kind = __s_slice(prop, 'place-'.length);
       const a = parts[0] || 'normal';
       return [['align-' + kind, a], ['justify-' + kind, parts[1] || a]];
     }
     if (prop === 'grid-area') {
-      const p = v.split('/').map((x) => x.trim());
+      const p = __s_split(v, '/').map((x) => __s_trim(x));
       const names = ['grid-row-start', 'grid-column-start', 'grid-row-end', 'grid-column-end'];
       return names.map((n, i) => [n, p[i] || 'auto']).filter(([, x]) => x);
     }
     if (prop === 'grid-row' || prop === 'grid-column') {
-      const p = v.split('/').map((x) => x.trim());
+      const p = __s_split(v, '/').map((x) => __s_trim(x));
       return [[prop + '-start', p[0] || 'auto'], [prop + '-end', p[1] || 'auto']];
     }
     if (prop === 'list-style') {
       for (const t of parts) {
-        const low = t.toLowerCase();
+        const low = __s_toLowerCase(t);
         if (low === 'inside' || low === 'outside') out.push(['list-style-position', low]);
         else if (/^(url|linear-gradient|image-set)\(/i.test(t) || low === 'none') out.push(['list-style-image', low === 'none' ? 'none' : t]);
         else out.push(['list-style-type', t]);
@@ -9446,7 +9544,7 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
     }
     if (prop === 'transition') {
       // First layer only: lists print per layer, and pages almost always have one.
-      const layer = v.split(',')[0].trim();
+      const layer = __s_trim(__s_split(v, ',')[0]);
       const p = __ptCssParts(layer);
       const times = p.filter((x) => /^[\d.]+m?s$/i.test(x));
       const ease = p.find((x) => /^(ease|ease-in|ease-out|ease-in-out|linear|step-start|step-end|cubic-bezier\(|steps\()/i.test(x));
@@ -9459,7 +9557,7 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
     }
     if (prop === 'text-decoration') {
       for (const t of parts) {
-        const low = t.toLowerCase();
+        const low = __s_toLowerCase(t);
         if (/^(none|underline|overline|line-through|blink)$/.test(low)) out.push(['text-decoration-line', low]);
         else if (/^(solid|double|dotted|dashed|wavy)$/.test(low)) out.push(['text-decoration-style', low]);
         else if (__ptIsColour(t)) out.push(['text-decoration-color', t]);
@@ -9505,12 +9603,12 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
   try {
     const known = new Set(CS_ORDER);
     for (const name of CSS_PROPS) {
-      const plain = name.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase()).toLowerCase();
+      const plain = __s_toLowerCase(__s_replace(name, /[A-Z]/g, (c) => '-' + __s_toLowerCase(c)));
       known.add(plain);
       if (/^(webkit|moz|ms|o)-/.test(plain)) known.add('-' + plain);
     }
     Object.defineProperty(globalThis, '__pt_cssKnown', {
-      value: (name) => known.has(String(name).trim().toLowerCase()),
+      value: (name) => known.has(__s_toLowerCase(__s_trim(String(name)))),
       enumerable: false, configurable: true, writable: true,
     });
   } catch (e) {}
@@ -9599,7 +9697,7 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
       // Longhands only: computed style never lists shorthands.
       const put = (k, raw) => {
         if (!map.has(k)) return;
-        map.set(k, __resolveLength(String(raw).trim(), k, fs, el));
+        map.set(k, __resolveLength(__s_trim(String(raw)), k, fs, el));
       };
       const written = new Set();
       for (const [n, raw] of cascade) {
@@ -9642,7 +9740,7 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
       }
       // Any sRGB colour is normalised to `rgb(…)`.
       for (const k of map.keys()) {
-        if (k !== 'color' && !k.endsWith('-color')) continue;
+        if (k !== 'color' && !__s_endsWith(k, '-color')) continue;
         const norm = globalThis.__pt_cssColour && globalThis.__pt_cssColour(map.get(k));
         if (norm) map.set(k, norm);
       }
@@ -9765,7 +9863,7 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
         if (map.get('float') && map.get('float') !== 'none') why = true;
         let p = el.parentNode;
         while (!why && p && p.nodeType === ELEMENT_NODE) {
-          const pd = String(__cascadeFor(p).get('display') || CS_DISPLAY[p.localName] || '').trim().toLowerCase();
+          const pd = __s_toLowerCase(__s_trim(String(__cascadeFor(p).get('display') || CS_DISPLAY[p.localName] || '')));
           if (pd === 'contents') { p = p.parentNode; continue; }
           if (/^(inline-)?(flex|grid)$/.test(pd)) why = true;
           break;
@@ -9776,7 +9874,7 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
     // Numbers print with six significant digits: `138.828125px` -> `138.828px`.
     for (const k of map.keys()) {
       const v = map.get(k);
-      if (typeof v === 'string' && v && /\d/.test(v) && !(k.charCodeAt(0) === 45 && k.charCodeAt(1) === 45)) {
+      if (typeof v === 'string' && v && /\d/.test(v) && !(__s_charCodeAt(k, 0) === 45 && __s_charCodeAt(k, 1) === 45)) {
         try { map.set(k, __cssNumbers(v)); } catch (e) {}
       }
     }
@@ -9837,7 +9935,7 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
       ['border-block-width', 'border-block'], ['border-inline-width', 'border-inline'],
       ['border-block-style', 'border-block'], ['border-inline-style', 'border-inline'],
       ['border-block-color', 'border-block'], ['border-inline-color', 'border-inline']]) {
-      const tail = sh.slice(base.length);
+      const tail = __s_slice(sh, base.length);
       set(sh, two(g(base + '-start' + tail), g(base + '-end' + tail)));
     }
     // Border: width, style, colour, only when all sides agree.
@@ -9884,7 +9982,7 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
     set('background', g('background-color') + ' ' + g('background-image') + ' ' + g('background-repeat') +
       ' ' + g('background-attachment') + ' ' + g('background-position') + ' / ' + g('background-size') +
       ' ' + g('background-origin') + ' ' + g('background-clip'));
-    const bp = g('background-position').split(/\s+/);
+    const bp = __s_split(g('background-position'), /\s+/);
     set('background-position-x', bp[0] || '');
     set('background-position-y', bp[1] || bp[0] || '');
     set('flex', g('flex-grow') + ' ' + g('flex-shrink') + ' ' + g('flex-basis'));
@@ -9977,9 +10075,9 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
       // `webkitBorderAfter` is `-webkit-border-after` (leading dash for vendor
       // names), while `webkitAlignItems` is just another name for
       // `align-items` and returns the same value.
-      const plain = name.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase()).toLowerCase();
+      const plain = __s_toLowerCase(__s_replace(name, /[A-Z]/g, (c) => '-' + __s_toLowerCase(c)));
       const keys = /^(webkit|moz|ms|o)-/.test(plain)
-        ? ['-' + plain, plain, plain.replace(/^(webkit|moz|ms|o)-/, '')]
+        ? ['-' + plain, plain, __s_replace(plain, /^(webkit|moz|ms|o)-/, '')]
         : [plain];
       // A data property, not an accessor: Chrome's descriptor has `value` and
       // no `get`. The computed snapshot does not change anyway.
@@ -9987,14 +10085,14 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
       for (const k of keys) { const got = map.get(k); if (got) { v = got; break; } }
       own(name, { value: v, writable: true, enumerable: true, configurable: true });
     }
-    const dashOf = (p) => String(p).replace(/[A-Z]/g, (c) => '-' + c.toLowerCase());
+    const dashOf = (p) => __s_replace(String(p), /[A-Z]/g, (c) => '-' + __s_toLowerCase(c));
     return __ptProxy(decl, {
       // Only ownKeys: descriptors are already right, and another trap would
       // cost ~1.5 ms per style enumeration.
       ownKeys: (t) => __withEpub(Reflect.ownKeys(t)),
       get: (t, p) => {
         if (typeof p === 'string' && EPUB_SET.has(p)) return undefined;
-        if (typeof p === 'string' && !(p in t)) return map.get(p.toLowerCase()) || '';
+        if (typeof p === 'string' && !(p in t)) return map.get(__s_toLowerCase(p)) || '';
         const v = t[p];
         return typeof v === 'function' ? v.bind(t) : v;
       },
@@ -10039,14 +10137,14 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
     for (let i = chain.length - 1; i >= 0; i--) {
       const raw = __cascadeFor(chain[i]).get('font-size');
       if (raw == null) {
-        const f = UA_FONT_SIZE[(chain[i].localName || '').toLowerCase()];
+        const f = UA_FONT_SIZE[__s_toLowerCase(chain[i].localName || '')];
         if (f) size *= f;
         continue;
       }
-      let v = String(raw).trim().toLowerCase();
+      let v = __s_toLowerCase(__s_trim(String(raw)));
       // `rem` on the root means the initial font size, not its own.
       const e = chain[i];
-      if (e.ownerDocument && e === e.ownerDocument.documentElement) v = v.replace(/(\d)rem\b/g, '$1em');
+      if (e.ownerDocument && e === e.ownerDocument.documentElement) v = __s_replace(v, /(\d)rem\b/g, '$1em');
       if (FONT_KEYWORDS[v]) { size = FONT_KEYWORDS[v]; continue; }
       if (v === 'smaller') { size /= 1.2; continue; }
       if (v === 'larger') { size *= 1.2; continue; }
@@ -10066,12 +10164,12 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
     // Chrome prints an expression as a number when everything is known.
     if (__CALC_FN.test(v)) v = __ptCalcOut(v, fontSize, el);
     if (!/[\d.](?:em|rem|pt|%|[dsl]?v(?:h|w|min|max))/.test(v)) return v;
-    return v.replace(/(-?[\d.]+)(em|rem|pt|[dsl]?vmin|[dsl]?vmax|[dsl]?vh|[dsl]?vw|%)(?![\w-])/g, (m, n, unit) => {
+    return __s_replace(v, /(-?[\d.]+)(em|rem|pt|[dsl]?vmin|[dsl]?vmax|[dsl]?vh|[dsl]?vw|%)(?![\w-])/g, (m, n, unit) => {
       const x = parseFloat(n);
       if (unit === 'pt') return (x * 4 / 3) + 'px';
       if (unit === 'em') return (x * fontSize) + 'px';
       if (unit === 'rem') return (x * __rootFontSize()) + 'px';
-      if (unit.length > 2 && /^[dsl]v/.test(unit)) unit = unit.slice(1);
+      if (unit.length > 2 && /^[dsl]v/.test(unit)) unit = __s_slice(unit, 1);
       // Viewport units are printed in pixels too (`margin: 15vh auto`).
       if (unit === 'vh' || unit === 'vw' || unit === 'vmin' || unit === 'vmax') {
         const base = unit === 'vh' ? LAYOUT.H : unit === 'vw' ? LAYOUT.W
@@ -10094,17 +10192,17 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
     for (;;) {
       re.lastIndex = i;
       const m = re.exec(v);
-      if (!m) { out += v.slice(i); break; }
-      if (m.index > 0 && /[\w-]/.test(v[m.index - 1])) { out += v.slice(i, re.lastIndex); i = re.lastIndex; continue; }
+      if (!m) { out += __s_slice(v, i); break; }
+      if (m.index > 0 && /[\w-]/.test(v[m.index - 1])) { out += __s_slice(v, i, re.lastIndex); i = re.lastIndex; continue; }
       let depth = 1, j = re.lastIndex;
       for (; j < v.length && depth; j++) {
         if (v[j] === '(') depth++;
         else if (v[j] === ')') depth--;
       }
-      const part = v.slice(m.index, j);
-      const needsBase = part.indexOf('%') >= 0;
+      const part = __s_slice(v, m.index, j);
+      const needsBase = __s_indexOf(part, '%') >= 0;
       const px = __ptCalcPx(part, fontSize, needsBase ? __containingWidth(el) : null);
-      out += v.slice(i, m.index) + (px == null ? part : (Math.round(px * 64) / 64) + 'px');
+      out += __s_slice(v, i, m.index) + (px == null ? part : (Math.round(px * 64) / 64) + 'px');
       i = j;
     }
     return out;
@@ -10137,7 +10235,7 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
   /// Rect list: Chrome returns a `DOMRectList`, not an array, and pages read
   /// the name.
   function __ptRectList(items) {
-    const list = items.slice();
+    const list = __s_slice(items);
     list.item = function item(i) { return this[i] || null; };
     try { Object.defineProperty(list, Symbol.toStringTag, { value: 'DOMRectList', configurable: true }); } catch (e) {}
     return list;
@@ -10345,7 +10443,7 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
   };
   const __scrollZero = [0, 0];
   for (const [name, rel] of [['scrollTo', false], ['scroll', false], ['scrollBy', true]]) {
-    const f = ({ [name](...a) { const [x, y] = __scrollArgs(a, rel ? __scrollPos.slice() : __scrollZero); __scrollWindowTo(x, y); } })[name];
+    const f = ({ [name](...a) { const [x, y] = __scrollArgs(a, rel ? __s_slice(__scrollPos) : __scrollZero); __scrollWindowTo(x, y); } })[name];
     try {
       const d = Object.getOwnPropertyDescriptor(globalThis, name) || { writable: true, enumerable: true, configurable: true };
       Object.defineProperty(globalThis, name, { value: globalThis.__pt_native ? __pt_native(f) : f,
@@ -10403,7 +10501,7 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
       if (c.nodeType === TEXT_NODE) s += c.data;
       else if (c.nodeType === ELEMENT_NODE && !__isHiddenEl(c)) s += ' ' + __innerText(c);
     }
-    return s.replace(/\s+/g, ' ').trim();
+    return __s_trim(__s_replace(s, /\s+/g, ' '));
   }
 
   // Called from the CDP layer (server.rs). Nodes are resolved there and passed in.
@@ -10464,7 +10562,7 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
     };
     const de = globalThis.document && globalThis.document.documentElement;
     if (de) scan(de, false);
-    return __ptJSON.stringify(seen.slice(0, 8));
+    return __ptJSON.stringify(__s_slice(seen, 0, 8));
   };
 
   // Solver debugging: every input and label (shadow trees included) with
@@ -10487,7 +10585,7 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
       }
     };
     if (globalThis.document) walk(globalThis.document, 0);
-    return __ptJSON.stringify({ ctl: out.slice(0, 20), body: globalThis.document && document.body ? (document.body.innerText || '').slice(0, 120) : '' });
+    return __ptJSON.stringify({ ctl: __s_slice(out, 0, 20), body: globalThis.document && document.body ? __s_slice(document.body.innerText || '', 0, 120) : '' });
   };
 
   // Rect of a frame element by its id, wherever it is, shadow trees included
@@ -10685,7 +10783,7 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
         const clickOn = (target) => {
           const box = isBox(target) ? target : null;
           const was = box ? box.checked : null;
-          if (box) box.checked = String(__ptGetA(box, 'type')).toLowerCase() === 'radio' ? true : !box.checked;
+          if (box) box.checked = __s_toLowerCase(String(__ptGetA(box, 'type'))) === 'radio' ? true : !box.checked;
           // Chrome's click is a PointerEvent with integer mouse coordinates
           // and isPrimary false.
           const ev = new PointerEvent('click', ptrInit({ button: b, buttons: 0, pressure: 0, detail: clicks, isPrimary: false }));
@@ -10748,8 +10846,8 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
     if (name === 'keydown') {
       if (init.text) { if (__editable(el)) __insertInto(el, init.text); }
       else if (init.key === 'Backspace' && __editable(el)) {
-        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') el.value = String(el.value || '').slice(0, -1);
-        else el.textContent = String(el.textContent || '').slice(0, -1);
+        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') el.value = __s_slice(String(el.value || ''), 0, -1);
+        else el.textContent = __s_slice(String(el.textContent || ''), 0, -1);
         el.dispatchEvent(__ptTrust(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' })));
       }
     }
