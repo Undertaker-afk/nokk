@@ -433,6 +433,9 @@
       __needNode(old, 2, 'replaceChild');
       __needChild(this, old, 'replaceChild',
         'The node to be replaced is not a child of this node.');
+      // Replacing a node with itself leaves it in place (Turnstile probes the
+      // root this way); insert-then-remove would drop it.
+      if (nw === old) return old;
       this.insertBefore(nw, old);
       return this.removeChild(old);
     }
@@ -861,7 +864,7 @@
     get styleSheets() { return __styleSheetList(__sheetOwners(this)); }
     get adoptedStyleSheets() { return this.__ptAdopted || (this.__ptAdopted = []); }
     set adoptedStyleSheets(v) { this.__ptAdopted = v; }
-    getElementById(id) { return firstMatch(this, e => e.id === id); }
+    getElementById(id) { return firstMatch(this, (e) => __ptGetA(e, 'id') === String(id)); }
     getElementsByTagName(t) { return __collection(__tags(this, t)); }
     getElementsByClassName(c) {
       const cs = String(c).split(/\s+/).filter(Boolean);
@@ -1934,7 +1937,13 @@
     // `document.dir` reflects the root element's `dir`.
     get dir() { const h = this.documentElement; return h ? h.dir : ''; }
     set dir(v) { const h = this.documentElement; if (h) h.dir = v; }
-    get documentElement() { return this.__ptDocEl; }
+    // The first element child, as in Chrome: the Turnstile VM swaps the root
+    // with `document.replaceChild(html, documentElement)` and reads it back.
+    get documentElement() {
+      const kids = this.__ptKids;
+      for (let i = 0; i < kids.length; i++) if (kids[i].nodeType === ELEMENT_NODE) return kids[i];
+      return null;
+    }
     // The document's ParentNode members are its own: `children` lives on
     // `Document.prototype` (otherwise the surface installs an empty stub).
     get children() { return __collection(this.__ptKids.filter((n) => n.nodeType === ELEMENT_NODE)); }
@@ -2192,7 +2201,7 @@
 
     // Walk from the document itself: <html> is a descendant too (otherwise
     // getElementsByTagName('*') was one short and an id on <html> was not found).
-    getElementById(id) { return firstMatch(this, (e) => e.id === String(id)); }
+    getElementById(id) { return firstMatch(this, (e) => __ptGetA(e, 'id') === String(id)); }
     getElementsByTagName(t) { return __collection(__tags(this, t)); }
     getElementsByClassName(c) {
       const cs = String(c).split(/\s+/).filter(Boolean);

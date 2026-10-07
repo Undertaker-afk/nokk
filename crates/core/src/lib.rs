@@ -9883,6 +9883,36 @@ mod tests {
         assert_eq!(ctx.evaluate("__c").await.unwrap(), Value::String("00ff01800a".into()));
     }
 
+    /// The Turnstile VM calls `document.replaceChild(root, root)` and then looks for
+    /// `script[nonce]`. Insert-then-remove dropped the root, the lookup came back
+    /// empty, the VM's iframe never attached and the widget reported an error beacon
+    /// (2026-10-07). `documentElement` also has to follow the children it reads.
+    #[tokio::test]
+    async fn replacing_the_root_with_itself_keeps_it() {
+        let _serial = serial().await;
+        let engine = engine(1, 2);
+        let ctx = engine.new_context().await.unwrap();
+        ctx.load_html("https://example.com/", "<html><head></head><body><p id=p>x</p></body></html>")
+            .await
+            .unwrap();
+        let out = probe(&ctx, r#"(() => {
+            const de = document.documentElement, p = document.getElementById('p');
+            const same = document.replaceChild(de, de) === de && document.documentElement === de && de.isConnected;
+            const kept = p.parentNode.replaceChild(p, p) === p && p.isConnected;
+            const n = document.createElement('html');
+            n.append(document.createElement('head'), document.createElement('body'));
+            document.replaceChild(n, de);
+            const swapped = document.documentElement === n && document.body === n.lastChild && !de.isConnected;
+            document.removeChild(n);
+            const none = document.documentElement === null;
+            document.appendChild(de);
+            return __ptJSON.stringify({ same, kept, swapped, none, back: document.documentElement === de });
+        })()"#).await;
+        for k in ["same", "kept", "swapped", "none", "back"] {
+            assert_eq!(out[k], true, "{k}: {out}");
+        }
+    }
+
     /// `document.cookie` and the network share one jar, as in a browser. They were two:
     /// the page never saw a header cookie, and a cookie set from script never left with
     /// a request, which breaks every challenge that sets a cookie and reloads (Google's

@@ -1993,12 +1993,23 @@ impl Conn {
 /// `undefined` rather than failing the command, since frames die on their own.
 async fn frame_eval(ctx: &BrowserContext, frame: u32, expr: &str, by_value: bool) -> Value {
     let by = if by_value { "true" } else { "false" };
-    let js = format!(
+    // The expression goes into the script itself, compiled by the engine: an `eval`
+    // of the string is what a frame under Trusted Types refuses (Turnstile's is one),
+    // and DevTools evaluates there regardless. Statements fall back to `eval`.
+    let inline = format!(
+        "(() => {{ try {{ return JSON.stringify(__pt_wrap((\n{expr}\n), {by})); }} \
+           catch (e) {{ return JSON.stringify(__pt_wrap(String(e), true)); }} }})()"
+    );
+    let via_eval = format!(
         "(() => {{ try {{ return JSON.stringify(__pt_wrap((0, eval)({}), {by})); }} \
            catch (e) {{ return JSON.stringify(__pt_wrap(String(e), true)); }} }})()",
         js_str(expr)
     );
-    match ctx.evaluate_in_frame(frame, &js).await {
+    let r = match ctx.evaluate_in_frame(frame, &inline).await {
+        Ok(v) => Ok(v),
+        Err(_) => ctx.evaluate_in_frame(frame, &via_eval).await,
+    };
+    match r {
         Ok(Value::String(s)) => serde_json::from_str(&s).unwrap_or(json!({ "type": "undefined" })),
         _ => json!({ "type": "undefined" }),
     }
