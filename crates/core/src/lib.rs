@@ -287,6 +287,7 @@ impl EngineInner {
         let mut headers = std::collections::BTreeMap::new();
         headers.insert("User-Agent".to_string(), self.stealth.user_agent.clone());
         let req = Request {
+            context: None,
             method: "GET".into(),
             url: nokk_net::GEO_LOOKUP_URL.to_string(),
             headers,
@@ -758,6 +759,7 @@ impl Engine {
             sockets: tokio::sync::Mutex::new(PageSockets::new()),
             network_tx: std::sync::Mutex::new(None),
             frames: std::sync::Mutex::new(HashMap::new()),
+            frame_docs: std::sync::Mutex::new(HashMap::new()),
             workers: std::sync::Mutex::new(HashMap::new()),
             bootstrap,
             frame_init_scripts: std::sync::Mutex::new(Vec::new()),
@@ -840,6 +842,7 @@ impl Engine {
             self.inner.stealth.languages.join(","),
         );
         let req = Request {
+            context: None,
             method: "GET".into(),
             url: url.to_string(),
             headers,
@@ -894,7 +897,7 @@ struct InFlight {
 
 enum Prepared {
     Settled(String),
-    Send(Request, FetchInfo),
+    Send(Box<Request>, FetchInfo),
 }
 
 pub struct BrowserContext {
@@ -962,6 +965,8 @@ pub struct BrowserContext {
     /// V8 context of its own on this same worker — a real browsing context, which
     /// is what a widget means when it polls `iframe.contentWindow`.
     frames: std::sync::Mutex<HashMap<u32, FrameState>>,
+    /// Documents being fetched for frames that have no context yet, by URL.
+    frame_docs: std::sync::Mutex<HashMap<String, u32>>,
     /// Live workers, by the id the page's DOM assigned. A worker is a context of
     /// its own — a different global object, not a window with pieces removed —
     /// which is exactly what code that fingerprints inside one is checking.
@@ -1144,6 +1149,10 @@ pub struct NetworkRecord {
     /// The requesting context: the page or one of its frames. Resource timings are
     /// handed out per context, since a frame has its own timeline in a browser.
     pub context: usize,
+    /// The `<iframe>` that made the request (its `FrameInfo::id`), `None` for the
+    /// page. A driver told a frame's document load came from the page takes it
+    /// for a navigation of the page (Playwright then answers "Loading <url>").
+    pub frame: Option<u32>,
 }
 
 /// What kind of gate the page currently shows.
@@ -2056,7 +2065,7 @@ impl BrowserContext {
                         Prepared::Settled(js) => Err(js),
                         Prepared::Send(req, info) => {
                             let client = self.client.clone();
-                            Ok((info, tokio::spawn(async move { client.send(req).await })))
+                            Ok((info, tokio::spawn(async move { client.send(*req).await })))
                         }
                     })
                     .collect();
@@ -2368,6 +2377,21 @@ impl BrowserContext {
     /// loaded, and its origin. The CDP layer turns these into frame lifecycle
     /// events and per-frame execution contexts, which is what makes a frame
     /// visible to Puppeteer's `page.frames()` — and reachable by an evaluate.
+    /// The `<iframe>` (its `FrameInfo::id`) whose context this is; `None` for the
+    /// page and anything that is not a frame.
+    pub fn frame_of_context(&self, context: usize) -> Option<u32> {
+        self.frames
+            .lock()
+            .ok()
+            .and_then(|f| f.iter().find(|(_, s)| s.index == context).map(|(id, _)| *id))
+    }
+
+    /// The `<iframe>` whose document is being fetched from `url`, before the
+    /// frame has a context of its own.
+    pub fn frame_for_document(&self, url: &str) -> Option<u32> {
+        self.frame_docs.lock().ok().and_then(|d| d.get(url).copied())
+    }
+
     pub fn frame_list(&self) -> Vec<FrameInfo> {
         self.frames
             .lock()
@@ -3610,7 +3634,24 @@ impl BrowserContext {
                         }
                     }
                     let nav_started = std::time::Instant::now();
-                    let Ok((_, html)) = self.fetch_text(&url, "document").await else {
+                    // The frame has no context yet: say whose document this is.
+                    if let Ok(mut docs) = self.frame_docs.lock() {
+                        docs.insert(url.clone(), id);
+                    }
+                    // A form aimed at the frame posts its body; otherwise the frame GETs its `src`.
+                    let fetched = if op["method"].as_str() == Some("POST") {
+                        let from = (!base.is_empty() && base != "about:blank").then_some(base);
+                        self.fetch_document_post(
+                            &url,
+                            from,
+                            op["contentType"].as_str().unwrap_or("application/x-www-form-urlencoded"),
+                            op["body"].as_str().unwrap_or(""),
+                        )
+                        .await
+                    } else {
+                        self.fetch_text(&url, "document").await
+                    };
+                    let Ok((_, html)) = fetched else {
                         let _ = self.evaluate(&format!("__pt_frameFailed({id})")).await;
                         continue;
                     };
@@ -4545,7 +4586,7 @@ impl BrowserContext {
                     info.context = WORKER_RECORD_BASE + context;
                 }
                 let client = self.client.clone();
-                let handle = tokio::spawn(async move { client.send(req).await });
+                let handle = tokio::spawn(async move { client.send(*req).await });
                 if let Ok(mut v) = self.inflight.lock() {
                     v.push(InFlight { deliver, info, handle, doc: None });
                 }
@@ -4651,6 +4692,7 @@ impl BrowserContext {
         });
         let sent = body.clone().unwrap_or_default();
         let req = Request {
+            context: Some(context),
             method,
             url: url.clone(),
             headers,
@@ -4662,7 +4704,7 @@ impl BrowserContext {
             user_activated: false,
         };
         let method = req_method(&req);
-        Prepared::Send(req, FetchInfo { context, id, url, method, kind, sent })
+        Prepared::Send(Box::new(req), FetchInfo { context, id, url, method, kind, sent })
     }
 
     fn settle_fetch(&self, info: &FetchInfo, res: Result<nokk_net::Response, NetError>) -> String {
@@ -4855,7 +4897,8 @@ impl BrowserContext {
         resource_type: &str,
         referrer: Option<&str>,
     ) -> Result<(String, String), EngineError> {
-        let req = self.get_request(url, resource_type, referrer);
+        let mut req = self.get_request(url, resource_type, referrer);
+        req.context = Some(context);
         let started = std::time::Instant::now();
         let sent = self.client.send(req).await;
         self.finish_text(context, url, resource_type, started, sent)
@@ -4902,6 +4945,7 @@ impl BrowserContext {
             headers.insert("Referer".to_string(), r);
         }
         Request {
+            context: None,
             method: "GET".into(),
             url: url.to_string(),
             headers,
@@ -5036,6 +5080,11 @@ impl BrowserContext {
         let duration_ms = measured_ms.unwrap_or(12.0);
         let started_ms = now - duration_ms;
         let announced = self.client.hold.take_id(url);
+        let frame = self.frame_of_context(context).or_else(|| {
+            (resource_type == "document")
+                .then(|| self.frame_docs.lock().ok().and_then(|mut d| d.remove(url)))
+                .flatten()
+        });
         let rec = NetworkRecord {
             request_id: announced.clone().unwrap_or_else(next_request_id),
             announced: announced.is_some(),
@@ -5052,6 +5101,7 @@ impl BrowserContext {
             content_encoding: content_encoding.to_string(),
             redirect_ms,
             context,
+            frame,
         };
         if let Ok(mut log) = self.requests.lock() {
             log.push(rec.clone());
@@ -10060,6 +10110,55 @@ mod tests {
             return __ptJSON.stringify({ calls: n });
         })()"#).await;
         assert_eq!(out["calls"], serde_json::json!({}), "{out}");
+    }
+
+    /// A form aimed at a frame (`target` = the frame's name) loads its response in
+    /// that frame; the page stays. Facebook's pixel posts this way, and nokk moved
+    /// the whole page to facebook.com/tr.
+    #[tokio::test]
+    async fn a_form_aimed_at_a_frame_navigates_the_frame_not_the_page() {
+        let _serial = serial().await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let posts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = posts.clone();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                let body = if req.starts_with("POST /tr") {
+                    seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    "<html><body>ok</body></html>"
+                } else {
+                    "<html><head><title>home</title></head><body><iframe name=sink></iframe>\
+                     <form id=f method=post action=/tr target=sink><input name=a value=1></form>\
+                     <script>document.querySelector('iframe').addEventListener('load', () => { document.title += ' loaded'; });\
+                     setTimeout(() => document.getElementById('f').submit(), 10);</script></body></html>"
+                };
+                let resp = format!("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+                let _ = stream.write_all(resp.as_bytes()).await;
+            }
+        });
+        let engine = Engine::new(EngineConfig {
+            pool: PoolConfig { workers: 1, max_live_contexts: 2, max_heap_mb: None },
+            use_real_network: true,
+            ..Default::default()
+        })
+        .expect("engine");
+        let ctx = engine.new_context().await.unwrap();
+        let home = format!("http://127.0.0.1:{}/", addr.port());
+        let _ = ctx.navigate(&home).await;
+        let t = std::time::Instant::now();
+        while t.elapsed() < std::time::Duration::from_secs(5)
+            && ctx.evaluate("document.title").await.unwrap_or_default() != Value::String("home loaded".into())
+        {
+            let _ = ctx.run_event_loop().await;
+        }
+        assert_eq!(ctx.evaluate("document.title").await.unwrap(), Value::String("home loaded".into()));
+        assert_eq!(ctx.evaluate("location.href").await.unwrap(), Value::String(home));
+        assert_eq!(posts.load(std::sync::atomic::Ordering::SeqCst), 1, "the form was posted once");
     }
 
     /// A driver that intercepts (Playwright `page.route`) decides every request before it

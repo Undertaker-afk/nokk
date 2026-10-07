@@ -1238,7 +1238,12 @@ impl Conn {
                         } else {
                             None
                         };
-                        for m in network_events(&rec, &frame, &loader_id, held_id.as_deref(), &sess) {
+                        // A frame's requests belong to that frame and its own document.
+                        let (fid, lid) = match rec.frame {
+                            Some(f) => (child_frame_id(&frame, f), format!("LF{f}")),
+                            None => (frame.clone(), loader_id),
+                        };
+                        for m in network_events(&rec, &fid, &lid, held_id.as_deref(), &sess) {
                             if out.send(Message::Text(m.to_string())).is_err() {
                                 return;
                             }
@@ -1252,6 +1257,7 @@ impl Conn {
             // until the driver continues, fails or fulfills it.
             "Fetch.enable" => {
                 let mut rx = self.targets[idx].ctx.intercept_requests();
+                let page = self.targets[idx].ctx.clone();
                 let (frame, sess, out, loader, held, ids) = (
                     self.targets[idx].target_id.clone(),
                     session.clone(),
@@ -1264,8 +1270,15 @@ impl Conn {
                     // A navigation's document request carries its loader's id, once.
                     let mut loader_taken = String::new();
                     while let Some(p) = rx.recv().await {
-                        let loader_id = loader.lock().map(|l| l.clone()).unwrap_or_default();
-                        let net_id = if p.resource_type == "Document" && !loader_id.is_empty() && loader_taken != loader_id {
+                        // A frame's request belongs to that frame and its own document.
+                        let in_frame = p.context.and_then(|c| page.frame_of_context(c)).or_else(|| {
+                            (p.resource_type == "Document").then(|| page.frame_for_document(&p.url)).flatten()
+                        });
+                        let (frame, loader_id) = match in_frame {
+                            Some(f) => (child_frame_id(&frame, f), format!("LF{f}")),
+                            None => (frame.clone(), loader.lock().map(|l| l.clone()).unwrap_or_default()),
+                        };
+                        let net_id = if in_frame.is_none() && p.resource_type == "Document" && !loader_id.is_empty() && loader_taken != loader_id {
                             loader_taken.clone_from(&loader_id);
                             loader_id.clone()
                         } else {

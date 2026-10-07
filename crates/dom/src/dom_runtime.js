@@ -1315,9 +1315,29 @@
       const enc = (s) => __s_replace(__s_replace(encodeURIComponent(s), /%20/g, '+'), /[!'()~]/g, (c) => '%' + __s_toUpperCase(__s_charCodeAt(c, 0).toString(16)));
       const query = pairs.map(([k, v]) => enc(k) + '=' + enc(v)).join('&');
       if (typeof globalThis.__pt_navSubmit !== 'function') return;
+      let getUrl = null;
+      if (method !== 'post') {
+        try { const u = new URL(action); u.search = query ? '?' + query : ''; u.hash = ''; getUrl = u.href; } catch (e) { return; }
+      }
+      // Where the response goes: `formtarget`, `target`, then `<base target>`.
+      // Only this window (or the top, which it is for the page) navigates.
+      let target = submitter && __ptHasA(submitter, 'formtarget') ? __ptGetA(submitter, 'formtarget') : __ptGetA(this, 'target');
+      if (!target) {
+        const base = __docTags(this.ownerDocument || document, 'base').find((b) => __ptHasA(b, 'target'));
+        target = base ? __ptGetA(base, 'target') : '';
+      }
+      const kw = __s_toLowerCase(target || '');
+      if (kw && kw !== '_self' && kw !== '_top' && kw !== '_parent') {
+        // A frame of that name loads the response; the page stays. A new window
+        // (`_blank`, an unknown name) without a user's click is a blocked popup.
+        const frame = kw === '_blank' ? null : __docTags(this.ownerDocument || document, 'iframe').find((f) => __ptGetA(f, 'name') === target);
+        if (!frame) return;
+        if (method === 'post') frame.__ptNavigate(action, 'POST', query, 'application/x-www-form-urlencoded');
+        else frame.__ptNavigate(getUrl, 'GET', null, '');
+        return;
+      }
       if (method === 'post') { __pt_navSubmit(action, 'POST', query, 'application/x-www-form-urlencoded'); return; }
-      let u; try { u = new URL(action); u.search = query ? '?' + query : ''; u.hash = ''; } catch (e) { return; }
-      __pt_navSubmit(u.href, 'GET', '', '');
+      __pt_navSubmit(getUrl, 'GET', '', '');
     }
     submit() { this.__ptSubmit(null); }
     requestSubmit(submitter) {
@@ -1673,6 +1693,25 @@
       st.win = __frameWindow(id, st);
       __frames.set(id, st);
       __frameOps.push({ op: 'open', id, src, name: __ptGetA(this, 'name') || '', w: box[0] || 300, h: box[1] || 150 });
+    }
+
+    // A form aimed at this frame (`target` = its name) navigates it, as `src`
+    // does, with the form's method and body; `src` itself is not touched.
+    __ptNavigate(url, method, body, contentType) {
+      if (this.__ptLocal !== 'iframe' || !this.isConnected) return;
+      if (this.__ptFrameId) __ptDisconnectFrame(this);
+      if (this.__ptRealm) {
+        try { if (typeof this.__ptRealm.__pt_detach === 'function') this.__ptRealm.__pt_detach(); } catch (e) {}
+        try { __realmFrames.delete(this); } catch (e) {}
+        try { delete this.__ptRealm; } catch (e) {}
+      }
+      const id = __nextFrameId++;
+      Object.defineProperty(this, '__ptFrameId', { value: id, configurable: true, enumerable: false });
+      const box = __ptJSON.parse(globalThis.__pt_frameBoxOf ? __pt_frameBoxOf(this) : '[300,150]');
+      const st = { el: this, ready: false, sameOrigin: false, win: null, doc: null, pending: [] };
+      st.win = __frameWindow(id, st);
+      __frames.set(id, st);
+      __frameOps.push({ op: 'open', id, src: String(url), name: __ptGetA(this, 'name') || '', w: box[0] || 300, h: box[1] || 150, method, body, contentType });
     }
 
     // Shadow DOM. A widget that draws itself into a shadow root — Cloudflare's

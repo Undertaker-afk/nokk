@@ -274,6 +274,9 @@ pub struct Request {
     /// Chrome adds `sec-fetch-storage-access` there; the Cloudflare challenge
     /// runs in such a frame and its deciding first POST carries the header.
     pub third_party: bool,
+    /// The engine's own tag for who asked (a frame's context); the network
+    /// layer does not read it.
+    pub context: Option<usize>,
 }
 
 /// The destination a request is for, in the sense `Sec-Fetch-Dest` means it.
@@ -890,6 +893,7 @@ mod tests {
 
     fn req(method: &str, url: &str) -> Request {
         Request {
+            context: None,
             method: method.into(),
             url: url.into(),
             headers: BTreeMap::new(),

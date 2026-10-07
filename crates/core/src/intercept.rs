@@ -19,6 +19,8 @@ pub struct PausedRequest {
     pub body: Vec<u8>,
     /// CDP's resource type: `Document`, `Script`, `Image`, `Fetch`, …
     pub resource_type: &'static str,
+    /// The requesting context, for `BrowserContext::frame_of_context`.
+    pub context: Option<usize>,
     pub reply: oneshot::Sender<Decision>,
 }
 
@@ -119,6 +121,7 @@ impl PageClient {
             headers: req.headers.clone(),
             body: req.body.clone().unwrap_or_default(),
             resource_type: resource_type(req.kind),
+            context: req.context,
             reply,
         };
         if tx.send(paused).is_err() {
