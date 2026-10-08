@@ -152,8 +152,10 @@ impl PoolInner {
                 tracing::debug!(worker = index, "isolate worker started");
                 // Blocking receive: isolate threads are OS threads, not tokio
                 // tasks, since V8 work is CPU-bound and thread-affine.
+                let mut pressure = isolate::MemoryPressure::default();
                 while let Some(job) = rx.blocking_recv() {
                     job(&mut isolate);
+                    pressure.after_job(&mut isolate);
                 }
                 // Dispose under the global V8 lock rather than letting the
                 // isolate drop implicitly (concurrent disposal segfaults).

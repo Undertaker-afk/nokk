@@ -420,6 +420,7 @@
       if (i < 0) this.__ptKids.push(child); else this.__ptKids.splice(i, 0, child);
       child.__ptParent = this;
       __markDirty();
+      __styleTouch(this);
       __mutation(__childListRecord(this, [child], [], child.previousSibling, child.nextSibling));
       // A frame only becomes a browsing context once it is in the document — and
       // the frame is rarely the node being inserted. A widget builds its tree
@@ -440,7 +441,7 @@
           'NotFoundError');
       }
       const prev = this.__ptKids[i - 1] || null, next = this.__ptKids[i + 1] || null;
-      this.__ptKids.splice(i, 1); child.__ptParent = null; __markDirty();
+      this.__ptKids.splice(i, 1); child.__ptParent = null; __markDirty(); __styleTouch(this);
       __mutation(__childListRecord(this, [], [child], prev, next));
       // A removed frame is a closed browsing context. Without this its V8 context
       // outlives the element forever — a widget that replaces its iframe on a
@@ -787,7 +788,8 @@
   class Text extends Node {
     constructor(data) { super(TEXT_NODE); this.__ptData = String(data); }
     get data() { return this.__ptData; }
-    set data(v) { this.__ptData = String(v); }
+    // New text means new layout, and `:empty` sees it in the parent's style.
+    set data(v) { this.__ptData = String(v); if (this.__ptParent) { __markDirty(); __styleTouch(this.__ptParent); } }
     get nodeName() { return '#text'; }
     get nodeValue() { return this.data; }
     set nodeValue(v) { this.data = String(v); }
@@ -1028,6 +1030,7 @@
       if (name === 'src' && this.__ptLocal === 'script') v = __pt_ttSink('TrustedScriptURL', 'HTMLScriptElement src', v, "Failed to execute 'setAttribute' on 'Element'");
       else if (name === 'srcdoc' && this.__ptLocal === 'iframe') v = __pt_ttSink('TrustedHTML', 'HTMLIFrameElement srcdoc', v, "Failed to execute 'setAttribute' on 'Element'");
       this.__ptAttrs.set(name, String(v));
+      __styleTouch(this);
       if (this.__ptUpgraded) {
         const watched = this.constructor && this.constructor.observedAttributes;
         if (Array.isArray(watched) && __s_indexOf(watched, name) >= 0) {
@@ -1044,6 +1047,7 @@
       const name = __attrName(this, n), old = this.__ptAttrs.get(name);
       this.__ptAttrs.delete(name);
       __markDirty();
+      __styleTouch(this);
       __mutation({ type: 'attributes', target: this, attributeName: name, attributeNamespace: null,
         oldValue: old === undefined ? null : old, addedNodes: [], removedNodes: [],
         previousSibling: null, nextSibling: null });
@@ -1731,6 +1735,7 @@
       sr.__ptSlotAssignment = init.slotAssignment === 'manual' ? 'manual' : 'named';
       this.__ptShadow = sr;
       __markDirty();
+      __styleTouch(this);
       return sr;
     }
     getAnimations() { return []; }
@@ -1898,7 +1903,8 @@
     // Form-field value (reflects the `value` attribute until edited). Generic so
     // input/textarea typing works; harmless on other elements.
     get value() { return this.__ptValue !== undefined ? this.__ptValue : (__ptGetA(this, 'value') || ''); }
-    set value(v) { this.__ptValue = String(v); }
+    // Form state is styled (`:checked ~ x`, `:placeholder-shown`): new layout.
+    set value(v) { this.__ptValue = String(v); __markDirty(); }
     // Common form-field surface, reflected from attributes — drivers gate `fill`
     // and `select` on these (an input with no `type`/`disabled`/`readOnly` fails
     // Playwright's fillability check).
@@ -1952,7 +1958,7 @@
       try { return globalThis.__pt_imageSizeOf ? __pt_imageSizeOf(this.__ptImgAt) : null; } catch (e) { return null; }
     }
     get checked() { return this.__ptChecked !== undefined ? this.__ptChecked : __ptHasA(this, 'checked'); }
-    set checked(v) { this.__ptChecked = !!v; }
+    set checked(v) { this.__ptChecked = !!v; __markDirty(); }
     get selectionStart() { return String(this.value || '').length; }
     get selectionEnd() { return String(this.value || '').length; }
     select() {}
@@ -3486,37 +3492,74 @@
     return out;
   };
 
+  // A stylesheet rule's declaration: the same shape as an element's `style`
+  // (own data properties, shared accessors keyed by `this`), backed by the
+  // rule's declaration map, which the cascade reads directly. Per-instance
+  // accessors cost two closures per property, ~700 per rule.
   function __cssDeclaration(map) {
     const dash = (p) => __s_replace(String(p), /[A-Z]/g, (c) => '-' + __s_toLowerCase(c));
-    const target = Object.create(__shapeStyleProto(__styleProto()));
+    const target = Object.create(__inlineStyleProto(), __styleDescs());
     __cssMaps.set(target, map);
-    // Property names are own properties, in Chrome's order.
-    for (const name of CSS_PROPS) {
-      const key = __s_toLowerCase(dash(name));
-      Object.defineProperty(target, name, {
-        get() { return map.get(key) || __longhandFrom(map, key); },
-        set(v) { if (v === '' || v == null) map.delete(key); else map.set(key, __cssValue(key, v)); },
-        enumerable: true, configurable: true,
-      });
-    }
+    let indexed = 0;
+    const reindex = (names) => {
+      for (let i = 0; i < names.length; i++) {
+        try { Object.defineProperty(target, String(i), { value: names[i], enumerable: true, configurable: true }); } catch (e) {}
+      }
+      for (let i = names.length; i < indexed; i++) { try { delete target[String(i)]; } catch (e) {} }
+      indexed = names.length;
+    };
+    const read = () => map;
+    const write = (m) => {
+      // Edited in place: the rule keeps its map.
+      if (m !== map) {
+        map.clear();
+        for (const [k, v] of m) map.set(k, v);
+        const imp = __cssImp(map);
+        imp.clear();
+        if (m.__ptImp) for (const k of m.__ptImp) imp.add(k);
+      }
+      reindex(__styleNames(map));
+      // Any cascade may differ now.
+      __styleAllStale = true;
+      __markDirty();
+    };
+    __cssReaders.set(target, { read, write, el: null });
+    reindex(__styleNames(map));
     const px = __ptProxy(target, {
+      ...__declTraps((t, p) => { const k = dash(p); return map.get(k) || __longhandFrom(map, k); }),
       get: (t, p) => {
-        if (typeof p === 'string' && !(p in t)) return map.get(__s_toLowerCase(dash(p))) || '';
+        if (typeof p === 'string' && EPUB_SET.has(p)) return undefined;
+        if (typeof p === 'string' && !(p in t)) {
+          const k = dash(p);
+          return map.get(k) || __longhandFrom(map, k);
+        }
         const v = t[p];
         return typeof v === 'function' ? v.bind(t) : v;
       },
       set: (t, p, v) => {
-        if (typeof p === 'string' && !(p in t)) {
-          const k = __s_toLowerCase(dash(p));
-          if (v === '' || v == null) map.delete(k); else map.set(k, __cssValue(k, v));
-          return true;
-        }
-        t[p] = v; return true;
+        if (p === 'cssText') { t.cssText = v; return true; }
+        const k = dash(String(p));
+        if (__cssImportantIn(v)) return true;
+        if (v === '' || v == null) __cssDrop(map, k); else { __cssStore(map, k, v); __cssImp(map).delete(k); }
+        write(map); return true;
       },
     });
-    __declRaw.set(px, () => map);
+    __declRaw.set(px, read);
     return px;
   }
+
+  // A declaration built on first read: thousands of rules, few ever asked.
+  const __lazyStyle = (r, decls) => {
+    Object.defineProperty(r, 'style', {
+      get() {
+        const d = __cssDeclaration(decls);
+        Object.defineProperty(this, 'style', { value: d, enumerable: true, configurable: true });
+        return d;
+      },
+      enumerable: true, configurable: true,
+    });
+    return r;
+  };
 
   const __ruleListProto = {
     get [Symbol.toStringTag]() { return 'CSSRuleList'; },
@@ -3603,7 +3646,7 @@
       const kids = __cssParse(parsed.body || '').map((p) => {
         const k = common(Object.create(__ruleProto('CSSKeyframeRule')), RULE_TYPE.keyframe);
         const decls = __cssDecls(p.body || '');
-        return own(k, { keyText: __cssPrelude(p.prelude), style: __cssDeclaration(decls),
+        return own(__lazyStyle(k, decls), { keyText: __cssPrelude(p.prelude),
                         cssText: __cssPrelude(p.prelude) + ' { '
                           + __styleEntries(decls).map(([a2, b2]) => a2 + ': ' + b2 + ';').join(' ') + ' }' });
       });
@@ -3615,7 +3658,7 @@
     if (at === '@font-face') {
       const r = common(Object.create(__ruleProto('CSSFontFaceRule')), RULE_TYPE['font-face']);
       const decls = __cssDecls(parsed.body || '');
-      return own(r, { style: __cssDeclaration(decls),
+      return own(__lazyStyle(r, decls), {
                       cssText: '@font-face { '
                         + __styleEntries(decls).map(([a2, b2]) => a2 + ': ' + b2 + ';').join(' ') + ' }' });
     }
@@ -3767,7 +3810,8 @@
       if (own) return own;
       const map = __cssMaps.get(o);
       if (!map) return null;
-      return { read: () => map, write: () => {}, computed: false, map, el: null };
+      // A rule's declarations changed: every cascade may differ.
+      return { read: () => map, write: () => { __styleAllStale = true; }, computed: false, map, el: null };
     };
     const nat = (f, n) => { try { Object.defineProperty(f, 'name', { value: n, configurable: true }); } catch (e) {} return globalThis.__pt_native ? __pt_native(f) : f; };
     const def = (name, value) => {
@@ -3961,6 +4005,8 @@
       // The trailing semicolon is required; Chrome adds it.
       const text = __styleText(m);
       cachedText = text; cachedMap = m;
+      // A rule's declarations changed through CSSOM: every cascade may differ.
+      if (!el) __styleAllStale = true;
       if (el && el.setAttribute) __ptSetA(el, 'style', text);
       reindex(__styleNames(m));
       __markDirty();
@@ -4774,6 +4820,7 @@
     node.__ptKids = [];
     for (const c of old) c.__ptParent = null;
     __markDirty();
+    __styleTouch(node);
     __mutation(__childListRecord(node, [], old, null, null));
     for (const c of old) __walkTree(c, (f) => {
       if (f.__ptFrameId) __ptDisconnectFrame(f);
@@ -5276,6 +5323,7 @@
     const O_ = proto('HTMLOptionElement');
     defAcc(O_, 'selected', function () { return isSelected(this); }, function (v) {
       this.__ptSelected = !!v;
+      __markDirty();
       if (v) { let p = this.parentNode; if (p && isTag(p, 'optgroup')) p = p.parentNode; if (p && isTag(p, 'select') && !__ptHasA(p, 'multiple')) for (const o of selOptions(p)) if (o !== this) o.__ptSelected = false; }
     });
     defAcc(O_, 'value', function () { return optValue(this); }, function (v) { __ptSetA(this, 'value', String(v)); });
@@ -7705,6 +7753,56 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
   let __rules = [];                       // {root, sel, spec, order, style}
   let __foreignRules = new WeakMap();     // document -> its rules
   let __styleCache = new WeakMap();
+  // Cascades are kept from one layout pass to the next and dropped only where
+  // a mutation can change them, as browsers invalidate style: recomputing all
+  // of them after every class toggle made a page's layout passes allocate
+  // ~25 MB each. A mutation at a node drops the subtree of its parent (the
+  // node, its siblings for `+`/`~`, and everything below: inheritance and
+  // custom properties flow down). Focus, the URL fragment and custom element
+  // definitions are compared at each pass and drop everything when changed.
+  // Cascades that a form control's state can change (`:checked`, `:invalid`...),
+  // those below them, and another document's live for one pass only.
+  let __stylePass = new WeakMap();
+  let __styleVolatile = new WeakSet();
+  let __styleTouched = [];
+  let __styleAllStale = true;
+  let __styleRulesSeen = null;
+  function __styleTouch(node) {
+    if (__styleAllStale || !node) return;
+    const root = node.parentNode || node;
+    if (__styleTouched.length >= 2000) { __styleAllStale = true; __styleTouched = []; return; }
+    __styleTouched.push(root);
+  }
+  const __STATE_PSEUDO = /:(checked|indeterminate|valid|invalid|user-valid|user-invalid|in-range|out-of-range|placeholder-shown)\b/i;
+  let __styleWorld = '';
+  let __styleActive = null;
+  // At the start of a pass: drop what mutations since the last one reached.
+  function __styleRevalidate() {
+    __stylePass = new WeakMap();
+    __styleVolatile = new WeakSet();
+    if (__styleRulesSeen !== __rules || __rules.__ptHasHas) __styleAllStale = true;
+    const doc = globalThis.document;
+    let hash = '';
+    try { hash = String(globalThis.location && globalThis.location.hash || ''); } catch (e) {}
+    const world = hash + '|' + __customs.size;
+    if (world !== __styleWorld || (doc && doc.__ptActive !== __styleActive)) __styleAllStale = true;
+    __styleWorld = world;
+    __styleActive = doc ? doc.__ptActive : null;
+    __styleRulesSeen = __rules;
+    if (__styleAllStale) {
+      __styleCache = new WeakMap();
+      __styleTouched = [];
+      __styleAllStale = false;
+      return;
+    }
+    const drop = (n) => {
+      __styleCache.delete(n);
+      for (const k of (n.__ptKids || [])) if (k.nodeType === ELEMENT_NODE) drop(k);
+      if (n.__ptShadow) for (const k of (n.__ptShadow.__ptKids || [])) if (k.nodeType === ELEMENT_NODE) drop(k);
+    };
+    for (const r of __styleTouched) drop(r);
+    __styleTouched = [];
+  }
   // Font size and inherited values walk the ancestors and are asked many
   // times per pass; cache them for the cascade's lifetime.
   let __passFont = new WeakMap();
@@ -7848,7 +7946,6 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
 
   function __collectHidden() {
     __rules = [];
-    __styleCache = new WeakMap();
     __passBloom = new WeakMap();
     __passFont = new WeakMap();
     __passInherit = new WeakMap();
@@ -7859,6 +7956,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     const doc = globalThis.document;
     if (!doc || !doc.documentElement) return;
     __rules = __gatherRulesCached(doc.documentElement);
+    __styleRevalidate();
     // Hiding is collected in the same pass; it is just another declaration.
     // One walk per tree, testing only the hiding rules an element's keys and
     // ancestors allow: the same sets as querying each rule over the tree.
@@ -7923,6 +8021,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     if (old && old.length === key.length && old.every((v, i) => v === key[i])) return __gatherHit;
     __gatherKey = key;
     __gatherHit = __gatherRules(docEl, []);
+    __gatherHit.__ptHasHas = __gatherHit.some((r) => /:has\(/i.test(r.sel));
     return __gatherHit;
   }
 
@@ -7948,8 +8047,12 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
   const __CASCADE_CTX = Object.freeze({ scope: null });
   function __cascadeFor(el) {
     if (!el || el.nodeType !== ELEMENT_NODE) return new Map();
-    const hit = __styleCache.get(el);
+    const hit = __styleCache.get(el) || __stylePass.get(el);
     if (hit) return hit;
+    // State-dependent ancestors make this one state-dependent too.
+    let volatile = el.ownerDocument !== globalThis.document;
+    const up = el.parentNode;
+    if (!volatile && up && up.nodeType === ELEMENT_NODE) { __cascadeFor(up); volatile = __styleVolatile.has(up); }
     const out = new Map();
     // SVG presentation attributes are declarations of the lowest weight:
     // `<text font-size="150">` measures at 150px, not 16.
@@ -7972,7 +8075,10 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       // reparse selectors per element per layout.
       try {
         if (r.__ptSel === undefined) r.__ptSel = __selCompiled(r.sel) || null;
-        ok = !!r.__ptSel && __bloomMayMatch(r.__ptSel, bloom) && __selAny(r.__ptSel, el, __CASCADE_CTX);
+        if (r.__ptVol === undefined) r.__ptVol = __STATE_PSEUDO.test(r.sel);
+        ok = !!r.__ptSel && __bloomMayMatch(r.__ptSel, bloom);
+        if (ok && r.__ptVol) volatile = true;
+        ok = ok && __selAny(r.__ptSel, el, __CASCADE_CTX);
       } catch (e) {}
       if (ok) won.push(r);
     }
@@ -8027,7 +8133,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       const sub = __ptSubstVars(v, vars);
       if (sub != null) take(n, sub);
     }
-    __styleCache.set(el, out);
+    if (volatile) { __styleVolatile.add(el); __stylePass.set(el, out); } else __styleCache.set(el, out);
     return out;
   }
 

@@ -392,6 +392,56 @@ fn pump_platform(isolate: &mut v8::Isolate) -> bool {
     ran
 }
 
+/// The browser's answer to a machine running out of memory: Chrome forwards
+/// the OS's memory pressure to every renderer, and V8 collects and gives
+/// pages back. With several isolates each growing its heap at leisure (V8
+/// sizes it from physical memory), a busy server was killed by the OOM
+/// killer instead. Checked after jobs, at most once a second per thread.
+#[derive(Default)]
+pub(crate) struct MemoryPressure {
+    checked: Option<std::time::Instant>,
+    collected: Option<std::time::Instant>,
+}
+
+impl MemoryPressure {
+    /// Below this share of physical memory available, collect.
+    const LOW: f64 = 0.20;
+
+    pub(crate) fn after_job(&mut self, isolate: &mut Isolate) {
+        let now = std::time::Instant::now();
+        if self.checked.is_some_and(|t| now.duration_since(t) < std::time::Duration::from_secs(1)) {
+            return;
+        }
+        self.checked = Some(now);
+        if self.collected.is_some_and(|t| now.duration_since(t) < std::time::Duration::from_secs(2)) {
+            return;
+        }
+        let Some(share) = available_share() else { return };
+        if share < Self::LOW {
+            isolate.isolate.memory_pressure_notification(v8::MemoryPressureLevel::Critical);
+            self.collected = Some(std::time::Instant::now());
+            tracing::debug!(target: "nokk::heap", share, "memory pressure: collected");
+        }
+    }
+}
+
+/// `MemAvailable / MemTotal`, where the OS reports it.
+fn available_share() -> Option<f64> {
+    #[cfg(target_os = "linux")]
+    {
+        let s = std::fs::read_to_string("/proc/meminfo").ok()?;
+        let field = |name: &str| -> Option<f64> {
+            s.lines().find_map(|l| l.strip_prefix(name)).and_then(|r| r.split_whitespace().next()).and_then(|v| v.parse::<f64>().ok())
+        };
+        let (avail, total) = (field("MemAvailable:")?, field("MemTotal:")?);
+        (total > 0.0).then(|| avail / total)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
 /// One JS isolate plus its contexts.
 ///
 /// Field order is load-bearing: `contexts` is declared before `isolate` so the
