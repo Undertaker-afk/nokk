@@ -490,6 +490,11 @@ fn build_bootstrap(profile: &StealthProfile) -> String {
         base.push_str(&js);
         base.push_str(&mark(name));
     }
+    // `NOKK_DUMP_BOOT=<path>`: the assembled bootstrap, to map profile and heap
+    // snapshot line numbers back to sources.
+    if let Ok(path) = std::env::var("NOKK_DUMP_BOOT") {
+        let _ = std::fs::write(path, &base);
+    }
     if timed {
         base.push_str("\n;try { const t = globalThis.__pt_bootT; const d = []; for (let i = 1; i < t.length; i++) d.push(t[i][0] + '=' + (t[i][1] - t[i - 1][1])); console.error('[boot] ' + d.join(' ') + ' total=' + (t[t.length - 1][1] - t[0][1])); } catch (e) {}\n");
     }

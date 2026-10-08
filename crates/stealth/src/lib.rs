@@ -2132,13 +2132,20 @@ const NATURALIZE_TEMPLATE: &str = r#"(() => {
     const label = guard ? guard.name + '.' + name : name;
     // Chrome's number of required args; too few throws, as there.
     const need = guard && Object.prototype.hasOwnProperty.call(LENGTHS, label) ? LENGTHS[label] : fn.length;
-    const holder = guard
-      ? { [name]() {
-          if (!ownerOk(guard, P, this)) throw illegal(label, this);
-          if (arguments.length < need) throw fewArgs(label, need, arguments.length);
-          return fn.apply(asThis(P, this), arguments);
-        } }
-      : { [name]() { return fn.apply(this, arguments); } };
+    // Born with Chrome's `length`: one literal per arity, since writing
+    // `length` afterwards moves the function to dictionary mode (~290 bytes,
+    // thousands of methods per context). Rare longer ones are fixed after.
+    let holder;
+    switch (need) {
+      case 0: holder = guard ? { [name]() { if (!ownerOk(guard, P, this)) throw illegal(label, this); if (arguments.length < need) throw fewArgs(label, need, arguments.length); return fn.apply(asThis(P, this), arguments); } } : { [name]() { return fn.apply(this, arguments); } }; break;
+      case 1: holder = guard ? { [name]($0) { if (!ownerOk(guard, P, this)) throw illegal(label, this); if (arguments.length < need) throw fewArgs(label, need, arguments.length); return fn.apply(asThis(P, this), arguments); } } : { [name]($0) { return fn.apply(this, arguments); } }; break;
+      case 2: holder = guard ? { [name]($0, $1) { if (!ownerOk(guard, P, this)) throw illegal(label, this); if (arguments.length < need) throw fewArgs(label, need, arguments.length); return fn.apply(asThis(P, this), arguments); } } : { [name]($0, $1) { return fn.apply(this, arguments); } }; break;
+      case 3: holder = guard ? { [name]($0, $1, $2) { if (!ownerOk(guard, P, this)) throw illegal(label, this); if (arguments.length < need) throw fewArgs(label, need, arguments.length); return fn.apply(asThis(P, this), arguments); } } : { [name]($0, $1, $2) { return fn.apply(this, arguments); } }; break;
+      case 4: holder = guard ? { [name]($0, $1, $2, $3) { if (!ownerOk(guard, P, this)) throw illegal(label, this); if (arguments.length < need) throw fewArgs(label, need, arguments.length); return fn.apply(asThis(P, this), arguments); } } : { [name]($0, $1, $2, $3) { return fn.apply(this, arguments); } }; break;
+      case 5: holder = guard ? { [name]($0, $1, $2, $3, $4) { if (!ownerOk(guard, P, this)) throw illegal(label, this); if (arguments.length < need) throw fewArgs(label, need, arguments.length); return fn.apply(asThis(P, this), arguments); } } : { [name]($0, $1, $2, $3, $4) { return fn.apply(this, arguments); } }; break;
+      case 6: holder = guard ? { [name]($0, $1, $2, $3, $4, $5) { if (!ownerOk(guard, P, this)) throw illegal(label, this); if (arguments.length < need) throw fewArgs(label, need, arguments.length); return fn.apply(asThis(P, this), arguments); } } : { [name]($0, $1, $2, $3, $4, $5) { return fn.apply(this, arguments); } }; break;
+      default: holder = guard ? { [name]() { if (!ownerOk(guard, P, this)) throw illegal(label, this); if (arguments.length < need) throw fewArgs(label, need, arguments.length); return fn.apply(asThis(P, this), arguments); } } : { [name]() { return fn.apply(this, arguments); } };
+    }
     const m = holder[name];
     return setNL(m, typeof key === 'symbol' ? name : key, need);
   };
@@ -3725,17 +3732,20 @@ const IFACE_KINDS_TEMPLATE: &str = r#"(() => {
     return f;
   };
   // Stub accessor get/set: the value lives on the object itself, as in the
-  // browser, not shared across the prototype.
+  // browser, not shared across the prototype. One store for all of them (a
+  // WeakMap per property was thousands per context), and accessors born with
+  // their names (writing `name` later moves a function to dictionary mode).
+  const slots = new WeakMap();
   const pair = (name, dflt) => {
-    const slots = new WeakMap();
-    return [
-      nat(named(function () { const s = slots.get(this); return s ? s.v : dflt; }, 'get ' + name)),
-      nat(named(function (v) {
+    const d = Object.getOwnPropertyDescriptor({
+      get [name]() { const s = slots.get(this); return s && name in s ? s[name] : dflt; },
+      set [name](v) {
         let s = slots.get(this);
-        if (!s) { s = {}; try { slots.set(this, s); } catch (e) { return; } }
-        s.v = v;
-      }, 'set ' + name)),
-    ];
+        if (!s) { s = Object.create(null); try { slots.set(this, s); } catch (e) { return; } }
+        s[name] = v;
+      },
+    }, name);
+    return [nat(d.get), nat(d.set)];
   };
   // The engine still needs removed setters: the browser writes these fields
   // internally, the page cannot. The store was created earlier (constructors
@@ -6222,7 +6232,7 @@ const IFACE_STATICS_TEMPLATE: &str = r#"(() => {
     // The canvas layer's helper is not visible here, and the method name must
     // look native: `__pt_native` does the same.
     const mask = (f, name) => {
-      try { Object.defineProperty(f, 'name', { value: name, configurable: true }); } catch (e) {}
+      try { if (f.name !== name) Object.defineProperty(f, 'name', { value: name, configurable: true }); } catch (e) {}
       return globalThis.__pt_native ? globalThis.__pt_native(f) : f;
     };
     // Our own canvas, not via `document.createElement`, which a page may have
@@ -8949,8 +8959,10 @@ const FINGERPRINT_TEMPLATE: &str = r#"(() => {
 
   const mask = (fn, name) => {
     const m = asMethod(fn, name);
+    // Only when it differs: writing `name` moves a function to dictionary
+    // mode (~260 bytes), and there are thousands.
     try {
-      if (name) Object.defineProperty(m, 'name', { value: name, configurable: true });
+      if (name && m.name !== name) Object.defineProperty(m, 'name', { value: name, configurable: true });
     } catch (e) {}
     if (typeof m === 'function') __ptNative.add(m);
     return m;
