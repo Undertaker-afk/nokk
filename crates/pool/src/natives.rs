@@ -38,6 +38,22 @@ pub struct RealmBootstrap(pub String);
 #[derive(Default)]
 pub struct SpareRealms(pub Vec<v8::Global<v8::Context>>);
 
+/// Realms pages on this isolate asked for: when last, and how many since the
+/// demand began. Spares are kept in proportion and dropped when it has gone
+/// quiet: each is a whole context (~8 MB), and frames that never asked kept
+/// eight apiece.
+pub struct RealmDemand {
+    pub last: std::time::Instant,
+    pub recent: usize,
+}
+
+/// When spares were built ahead of any request (a cross-origin frame
+/// opening), so they expire if none comes.
+pub struct RealmPrewarm(pub std::time::Instant);
+
+/// How long realm demand counts.
+pub const REALM_DEMAND_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Prebuilt worker contexts, see `Isolate::prewarm_contexts`.
 #[derive(Default)]
 pub struct SpareContexts(pub Vec<v8::Global<v8::Context>>);
@@ -1710,6 +1726,11 @@ fn make_realm(
     if scope.get_slot::<SpareRealms>().is_none() {
         scope.set_slot(SpareRealms::default());
     }
+    let recent = scope
+        .get_slot::<RealmDemand>()
+        .filter(|d| d.last.elapsed() <= REALM_DEMAND_TTL)
+        .map_or(0, |d| d.recent);
+    scope.set_slot(RealmDemand { last: std::time::Instant::now(), recent: recent + 1 });
     let spare = scope.get_slot_mut::<SpareRealms>().and_then(|s| s.0.pop());
     tracing::debug!(target: "nokk::realm", from_spare = spare.is_some(), "a page asked for a fresh realm");
     if let Some(ready) = spare {

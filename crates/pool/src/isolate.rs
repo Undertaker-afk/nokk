@@ -573,8 +573,28 @@ impl Isolate {
     /// Top up the spare realms to `n`, building at most `step` at a time, so an
     /// idle-time refill does not hold the thread long.
     pub fn top_up_realms(&mut self, n: usize, step: usize) {
-        // Only refill where realms were already requested: a page without blank
-        // frames does not need them.
+        // Refill only after pages asked for realms recently, as many as they
+        // asked for plus one; once demand (and any prewarm) has gone quiet, the
+        // spares are memory nobody uses, so let them go.
+        let ttl = crate::natives::REALM_DEMAND_TTL;
+        let demand = self
+            .isolate
+            .get_slot::<crate::natives::RealmDemand>()
+            .filter(|d| d.last.elapsed() <= ttl)
+            .map(|d| d.recent);
+        let Some(recent) = demand else {
+            let prewarm_fresh = self
+                .isolate
+                .get_slot::<crate::natives::RealmPrewarm>()
+                .is_some_and(|p| p.0.elapsed() <= ttl);
+            if !prewarm_fresh {
+                if let Some(s) = self.isolate.get_slot_mut::<crate::natives::SpareRealms>() {
+                    s.0.clear();
+                }
+            }
+            return;
+        };
+        let n = n.min(recent + 1);
         let Some(have) = self
             .isolate
             .get_slot::<crate::natives::SpareRealms>()
@@ -597,6 +617,9 @@ impl Isolate {
     /// Fill the spare realms up to `n` (see [`crate::natives::SpareRealms`]).
     /// Called at context creation, before the page measures anything.
     pub fn prewarm_realms(&mut self, bootstrap: &str, n: usize) {
+        // Built ahead of a request that may not come: they expire if none does
+        // (see `top_up_realms`).
+        self.isolate.set_slot(crate::natives::RealmPrewarm(std::time::Instant::now()));
         if self.isolate.get_slot::<crate::natives::RealmBootstrap>().is_none() {
             self.isolate
                 .set_slot(crate::natives::RealmBootstrap(bootstrap.to_string()));
