@@ -765,6 +765,7 @@ impl Engine {
             network_tx: std::sync::Mutex::new(None),
             frames: std::sync::Mutex::new(HashMap::new()),
             frame_docs: std::sync::Mutex::new(HashMap::new()),
+            doc_types: std::sync::Mutex::new(HashMap::new()),
             workers: std::sync::Mutex::new(HashMap::new()),
             bootstrap,
             frame_init_scripts: std::sync::Mutex::new(Vec::new()),
@@ -972,6 +973,9 @@ pub struct BrowserContext {
     frames: std::sync::Mutex<HashMap<u32, FrameState>>,
     /// Documents being fetched for frames that have no context yet, by URL.
     frame_docs: std::sync::Mutex<HashMap<String, u32>>,
+    /// The type of a text or JSON document just fetched, by URL, for its
+    /// `document.contentType`.
+    doc_types: std::sync::Mutex<HashMap<String, String>>,
     /// Live workers, by the id the page's DOM assigned. A worker is a context of
     /// its own — a different global object, not a window with pieces removed —
     /// which is exactly what code that fingerprints inside one is checking.
@@ -1636,6 +1640,14 @@ impl BrowserContext {
     ) -> Result<(), EngineError> {
         // Reflect the real URL into `window.location` before any script runs.
         if let Some(js) = location_setter(base_url) {
+            let _ = self.eval_in(index, &js).await;
+        }
+        let doc_type = self.doc_types.lock().ok().and_then(|mut t| t.remove(base_url));
+        if let Some(mime) = doc_type {
+            let js = format!(
+                "Object.defineProperty(document, '__ptDocType', {{ value: {}, writable: true, configurable: true }});",
+                serde_json::to_string(&mime).unwrap_or_default()
+            );
             let _ = self.eval_in(index, &js).await;
         }
         // Then the client's own "on new document" scripts, still before the
@@ -5005,7 +5017,24 @@ impl BrowserContext {
                 } else {
                     resp.url.clone()
                 };
-                Ok((final_url, String::from_utf8_lossy(&resp.body).into_owned()))
+                let mut body = String::from_utf8_lossy(&resp.body).into_owned();
+                // A text or JSON document is shown the way Chrome builds it; the
+                // document then reports its real type.
+                if resource_type == "document" {
+                    let mime = resp
+                        .headers
+                        .iter()
+                        .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+                        .map(|(_, v)| v.split(';').next().unwrap_or("").trim().to_ascii_lowercase())
+                        .unwrap_or_default();
+                    if let Some(markup) = text_document_markup(&mime, &body) {
+                        body = markup;
+                        if let Ok(mut t) = self.doc_types.lock() {
+                            t.insert(final_url.clone(), mime);
+                        }
+                    }
+                }
+                Ok((final_url, body))
             }
             Err(NetError::Unimplemented) => Err(EngineError::NavNotImplemented),
             Err(e) => {
@@ -5150,6 +5179,46 @@ impl BrowserContext {
 
 /// Request ids are unique per process, so a client that watches several pages
 /// never sees two requests share one.
+/// The document Chrome 151 builds for a text or JSON response, or `None` for
+/// types it renders otherwise (HTML, XML, images) or downloads (CSV, YAML).
+/// The parser drops one newline right after `<pre>`; Chrome builds this
+/// document directly and keeps it, hence the extra one.
+fn text_document_markup(mime: &str, body: &str) -> Option<String> {
+    let json = mime == "application/json" || mime == "text/json" || (mime.starts_with("application/") && mime.ends_with("+json"));
+    const SCRIPT: [&str; 4] = ["application/javascript", "application/x-javascript", "application/ecmascript", "application/x-ecmascript"];
+    // Chrome downloads these instead of showing them.
+    const DOWNLOADED: [&str; 19] = [
+        "text/calendar", "text/x-calendar", "text/x-vcalendar", "text/vcalendar", "text/vcard", "text/x-vcard",
+        "text/directory", "text/ldif", "text/qif", "text/x-qif", "text/x-csv", "text/x-vcf", "text/rtf",
+        "text/comma-separated-values", "text/csv", "text/tab-separated-values", "text/tsv", "text/ofx",
+        "text/vnd.sun.j2me.app-descriptor",
+    ];
+    let text = SCRIPT.contains(&mime)
+        || (mime.starts_with("text/")
+            && !matches!(mime, "text/html" | "text/xml" | "text/xsl")
+            && !DOWNLOADED.contains(&mime));
+    if !json && !text {
+        return None;
+    }
+    let mut esc = String::with_capacity(body.len() + 16);
+    if body.starts_with('\n') {
+        esc.push('\n');
+    }
+    for c in body.chars() {
+        match c {
+            '&' => esc.push_str("&amp;"),
+            '<' => esc.push_str("&lt;"),
+            '>' => esc.push_str("&gt;"),
+            _ => esc.push(c),
+        }
+    }
+    Some(if json {
+        format!("<html><head><meta name=\"color-scheme\" content=\"light dark\"><meta charset=\"utf-8\"></head><body><pre>{esc}</pre><div class=\"json-formatter-container\"></div></body></html>")
+    } else {
+        format!("<html><head><meta name=\"color-scheme\" content=\"light dark\"></head><body><pre style=\"word-wrap: break-word; white-space: pre-wrap;\">{esc}</pre></body></html>")
+    })
+}
+
 static REQUEST_IDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 pub(crate) fn next_request_id() -> String {
@@ -10164,6 +10233,21 @@ mod tests {
         assert_eq!(ctx.evaluate("document.title").await.unwrap(), Value::String("home loaded".into()));
         assert_eq!(ctx.evaluate("location.href").await.unwrap(), Value::String(home));
         assert_eq!(posts.load(std::sync::atomic::Ordering::SeqCst), 1, "the form was posted once");
+    }
+
+    /// Text and JSON responses are shown as Chrome 151 builds them: a `<pre>` (styled
+    /// for text, bare plus a formatter container for JSON), the leading newline
+    /// kept, and the real `contentType`. Scrapers read this serialized DOM.
+    #[test]
+    fn text_and_json_documents_have_chromes_markup() {
+        let t = text_document_markup("text/plain", "\nlead <b>&amp;</b>").unwrap();
+        assert_eq!(t, "<html><head><meta name=\"color-scheme\" content=\"light dark\"></head><body><pre style=\"word-wrap: break-word; white-space: pre-wrap;\">\n\nlead &lt;b&gt;&amp;amp;&lt;/b&gt;</pre></body></html>");
+        let j = text_document_markup("application/ld+json", "{\"a\":1}").unwrap();
+        assert_eq!(j, "<html><head><meta name=\"color-scheme\" content=\"light dark\"><meta charset=\"utf-8\"></head><body><pre>{\"a\":1}</pre><div class=\"json-formatter-container\"></div></body></html>");
+        assert!(text_document_markup("text/javascript", "x").is_some());
+        for other in ["text/html", "text/xml", "application/xml", "text/csv", "image/png", "application/octet-stream"] {
+            assert!(text_document_markup(other, "x").is_none(), "{other}");
+        }
     }
 
     /// A driver that intercepts (Playwright `page.route`) decides every request before it

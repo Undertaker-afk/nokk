@@ -2116,7 +2116,7 @@
     }
     get charset() { return this.characterSet; }
     get inputEncoding() { return this.characterSet; }
-    get contentType() { return this.__ptContentType || 'text/html'; }
+    get contentType() { return this.__ptContentType || this.__ptDocType || 'text/html'; }
     get xmlVersion() { return this.__ptXml ? '1.0' : null; }
     // A page without `<!DOCTYPE>` is in quirks mode: `BackCompat` and
     // `doctype === null`.
