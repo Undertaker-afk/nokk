@@ -245,7 +245,9 @@ impl Edge {
             self.x = self.x.wrapping_add(self.dx);
             self.y = y;
         } else if y != self.y {
-            self.x = self.upper_x.wrapping_add(fixed_mul(self.dx, y.wrapping_sub(self.upper_y)));
+            self.x = self
+                .upper_x
+                .wrapping_add(fixed_mul(self.dx, y.wrapping_sub(self.upper_y)));
             self.y = y;
         }
     }
@@ -298,7 +300,14 @@ impl Edge {
     }
 
     /// `SkAnalyticEdge::updateLine`.
-    fn update_line(&mut self, mut x0: Fixed, mut y0: Fixed, mut x1: Fixed, mut y1: Fixed, slope: Fixed) -> bool {
+    fn update_line(
+        &mut self,
+        mut x0: Fixed,
+        mut y0: Fixed,
+        mut x1: Fixed,
+        mut y1: Fixed,
+        slope: Fixed,
+    ) -> bool {
         if y0 > y1 {
             std::mem::swap(&mut x0, &mut x1);
             std::mem::swap(&mut y0, &mut y1);
@@ -430,7 +439,9 @@ impl Edge {
             if count > 0 {
                 newx = oldx.wrapping_add(dx >> shift);
                 newy = oldy.wrapping_add(dy >> shift);
-                if abs32(dy >> shift) >= FIXED_1 * 2 && left_shift64(abs32(dy) as i64, 6) > abs32(dx) as i64 {
+                if abs32(dy >> shift) >= FIXED_1 * 2
+                    && left_shift64(abs32(dy) as i64, 6) > abs32(dx) as i64
+                {
                     let diff_y = fixed_to_fdot6(newy.wrapping_sub(self.snapped_y));
                     slope = if diff_y != 0 {
                         quick_div(fixed_to_fdot6(newx.wrapping_sub(self.snapped_x)), diff_y)
@@ -438,7 +449,8 @@ impl Edge {
                         MAX_S32
                     };
                     new_snapped_y = self.qlast_y.min(fixed_round_to_fixed(newy));
-                    new_snapped_x = newx.wrapping_sub(fixed_mul(slope, newy.wrapping_sub(new_snapped_y)));
+                    new_snapped_x =
+                        newx.wrapping_sub(fixed_mul(slope, newy.wrapping_sub(new_snapped_y)));
                 } else {
                     new_snapped_y = self.qlast_y.min(snap_y(newy));
                     new_snapped_x = newx;
@@ -851,7 +863,12 @@ impl EdgeBuilder {
                             let mut mono = [Point::default(); 10];
                             let n = chop_cubic_at_y_extrema(&pts, &mut mono);
                             for i in 0..n {
-                                let c = [mono[i * 3], mono[i * 3 + 1], mono[i * 3 + 2], mono[i * 3 + 3]];
+                                let c = [
+                                    mono[i * 3],
+                                    mono[i * 3 + 1],
+                                    mono[i * 3 + 2],
+                                    mono[i * 3 + 3],
+                                ];
                                 b.add_cubic(&c);
                             }
                         }
@@ -886,7 +903,14 @@ pub struct EdgeIter<'a> {
 
 impl<'a> EdgeIter<'a> {
     pub fn new(path: &'a Path) -> Self {
-        EdgeIter { path, vi: 0, pi: 0, ci: 0, move_to: Point::default(), needs_close_line: false }
+        EdgeIter {
+            path,
+            vi: 0,
+            pi: 0,
+            ci: 0,
+            move_to: Point::default(),
+            needs_close_line: false,
+        }
     }
     fn closeline(&mut self) -> EdgeSeg {
         let last = self.path.pts[self.pi - 1];
@@ -900,7 +924,11 @@ impl<'a> Iterator for EdgeIter<'a> {
     fn next(&mut self) -> Option<EdgeSeg> {
         loop {
             if self.vi >= self.path.verbs.len() {
-                return if self.needs_close_line { Some(self.closeline()) } else { None };
+                return if self.needs_close_line {
+                    Some(self.closeline())
+                } else {
+                    None
+                };
             }
             let verb = self.path.verbs[self.vi];
             self.vi += 1;
@@ -946,7 +974,12 @@ impl<'a> Iterator for EdgeIter<'a> {
                 Verb::Cubic => {
                     self.needs_close_line = true;
                     let p = &self.path.pts;
-                    let r = EdgeSeg::Cubic([p[self.pi - 1], p[self.pi], p[self.pi + 1], p[self.pi + 2]]);
+                    let r = EdgeSeg::Cubic([
+                        p[self.pi - 1],
+                        p[self.pi],
+                        p[self.pi + 1],
+                        p[self.pi + 2],
+                    ]);
                     self.pi += 3;
                     return Some(r);
                 }
@@ -989,7 +1022,12 @@ fn sect_with_horizontal(src: &[Point; 2], y: f32) -> f32 {
     if dy.abs() <= SCALAR_NEARLY_ZERO {
         midpoint(src[0].x, src[1].x)
     } else {
-        let (x0, y0, x1, y1) = (src[0].x as f64, src[0].y as f64, src[1].x as f64, src[1].y as f64);
+        let (x0, y0, x1, y1) = (
+            src[0].x as f64,
+            src[0].y as f64,
+            src[1].x as f64,
+            src[1].y as f64,
+        );
         let result = x0 + (y as f64 - y0) * (x1 - x0) / (y1 - y0);
         pin_unsorted(result, x0, x1) as f32
     }
@@ -999,7 +1037,12 @@ fn sect_with_vertical(src: &[Point; 2], x: f32) -> f32 {
     if dx.abs() <= SCALAR_NEARLY_ZERO {
         midpoint(src[0].y, src[1].y)
     } else {
-        let (x0, y0, x1, y1) = (src[0].x as f64, src[0].y as f64, src[1].x as f64, src[1].y as f64);
+        let (x0, y0, x1, y1) = (
+            src[0].x as f64,
+            src[0].y as f64,
+            src[1].x as f64,
+            src[1].y as f64,
+        );
         (y0 + (x as f64 - x0) * (y1 - y0) / (x1 - x0)) as f32
     }
 }
@@ -1024,7 +1067,11 @@ pub fn clip_line(pts: [Point; 2], clip: &Rect, can_cull_to_the_right: bool) -> (
     }
     let mut result_storage = [Point::default(); 4];
     let mut line_count = 1usize;
-    let (index0, index1, mut reverse) = if pts[0].x < pts[1].x { (0, 1, false) } else { (1, 0, true) };
+    let (index0, index1, mut reverse) = if pts[0].x < pts[1].x {
+        (0, 1, false)
+    } else {
+        (1, 0, true)
+    };
     let result: &[Point];
     if tmp[index1].x <= clip.left {
         tmp[0].x = clip.left;
@@ -1079,7 +1126,11 @@ pub struct EdgeClipper {
 
 impl EdgeClipper {
     pub fn new(can_cull_to_the_right: bool) -> Self {
-        EdgeClipper { can_cull_to_the_right, verbs: Vec::new(), pts: Vec::new() }
+        EdgeClipper {
+            can_cull_to_the_right,
+            verbs: Vec::new(),
+            pts: Vec::new(),
+        }
     }
     fn reset(&mut self) {
         self.verbs.clear();
@@ -1269,17 +1320,31 @@ impl EdgeClipper {
         let bounds = Rect::bounds(src);
         if bounds.bottom > clip.top && bounds.top < clip.bottom {
             let limit = (1 << 22) as f32;
-            if bounds.left < -limit || bounds.top < -limit || bounds.right > limit || bounds.bottom > limit {
+            if bounds.left < -limit
+                || bounds.top < -limit
+                || bounds.right > limit
+                || bounds.bottom > limit
+            {
                 return self.clip_line(src[0], src[3], clip);
             }
             let mut mono_y = [Point::default(); 10];
             let ny = chop_cubic_at_y_extrema(src, &mut mono_y);
             for y in 0..ny {
-                let c = [mono_y[y * 3], mono_y[y * 3 + 1], mono_y[y * 3 + 2], mono_y[y * 3 + 3]];
+                let c = [
+                    mono_y[y * 3],
+                    mono_y[y * 3 + 1],
+                    mono_y[y * 3 + 2],
+                    mono_y[y * 3 + 3],
+                ];
                 let mut mono_x = [Point::default(); 10];
                 let nx = chop_cubic_at_x_extrema(&c, &mut mono_x);
                 for x in 0..nx {
-                    let cc = [mono_x[x * 3], mono_x[x * 3 + 1], mono_x[x * 3 + 2], mono_x[x * 3 + 3]];
+                    let cc = [
+                        mono_x[x * 3],
+                        mono_x[x * 3 + 1],
+                        mono_x[x * 3 + 2],
+                        mono_x[x * 3 + 3],
+                    ];
                     self.clip_mono_cubic(&cc, clip);
                 }
             }
@@ -1386,7 +1451,13 @@ fn mono_cubic_closest_t(src: &[f32; 4], mut x: f32) -> f32 {
 /// `SkChopMonoCubicAtY` via the double root (`SkBezierCubic`): first
 /// crossing with y on [0,1], split in double.
 fn chop_mono_cubic_at_axis(src: &[Point; 4], vertical_axis: bool, value: f32) -> [Point; 7] {
-    let coord = |p: &Point| if vertical_axis { p.y as f64 } else { p.x as f64 };
+    let coord = |p: &Point| {
+        if vertical_axis {
+            p.y as f64
+        } else {
+            p.x as f64
+        }
+    };
     let p0 = coord(&src[0]);
     let p1 = coord(&src[1]);
     let p2 = coord(&src[2]);

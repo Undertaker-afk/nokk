@@ -35,7 +35,11 @@ pub enum Decision {
     /// Fail as a network error (`net::ERR_FAILED` to the page).
     Fail,
     /// Answer with this response; nothing goes out.
-    Fulfill { status: u16, headers: BTreeMap<String, String>, body: Vec<u8> },
+    Fulfill {
+        status: u16,
+        headers: BTreeMap<String, String>,
+        body: Vec<u8>,
+    },
 }
 
 #[derive(Default)]
@@ -90,7 +94,10 @@ fn resource_type(kind: RequestKind) -> &'static str {
 
 impl PageClient {
     pub(crate) fn new(client: Client) -> Self {
-        PageClient { client, hold: Arc::default() }
+        PageClient {
+            client,
+            hold: Arc::default(),
+        }
     }
 
     pub(crate) fn intercept(&self) -> mpsc::UnboundedReceiver<PausedRequest> {
@@ -134,7 +141,12 @@ impl PageClient {
             body: None,
         });
         match decision {
-            Decision::Continue { url, method, headers, body } => {
+            Decision::Continue {
+                url,
+                method,
+                headers,
+                body,
+            } => {
                 if let Some(u) = url {
                     req.url = u;
                 }
@@ -154,7 +166,11 @@ impl PageClient {
                 self.hold.remember(&req.url, id);
                 Err(NetError::Connect("net::ERR_FAILED".into()))
             }
-            Decision::Fulfill { status, headers, body } => {
+            Decision::Fulfill {
+                status,
+                headers,
+                body,
+            } => {
                 self.hold.remember(&req.url, id);
                 Ok(Response {
                     status,

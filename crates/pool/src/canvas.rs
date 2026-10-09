@@ -38,20 +38,59 @@ const FONT_DIRS: &[&str] = &[
 /// `16px "Liberation Sans"` measure the same. An unlisted family is skipped;
 /// if none matches, Chrome falls back to Liberation Serif.
 const FAMILIES: &[(&str, &[&str])] = &[
-    ("sans-serif", &["LiberationSans-Regular.ttf", "Arimo-Regular.ttf", "DejaVuSans.ttf"]),
-    ("arial", &["LiberationSans-Regular.ttf", "Arimo-Regular.ttf"]),
-    ("helvetica", &["LiberationSans-Regular.ttf", "Arimo-Regular.ttf"]),
+    (
+        "sans-serif",
+        &[
+            "LiberationSans-Regular.ttf",
+            "Arimo-Regular.ttf",
+            "DejaVuSans.ttf",
+        ],
+    ),
+    (
+        "arial",
+        &["LiberationSans-Regular.ttf", "Arimo-Regular.ttf"],
+    ),
+    (
+        "helvetica",
+        &["LiberationSans-Regular.ttf", "Arimo-Regular.ttf"],
+    ),
     ("liberation sans", &["LiberationSans-Regular.ttf"]),
     // Chrome resolves generic `serif` to Liberation Serif here, not DejaVu:
     // "mmmmmmmmmmlli" at 72px is 620.05 vs DejaVu's 751.82, which any
     // text-measuring page sees.
-    ("serif", &["LiberationSerif-Regular.ttf", "Tinos-Regular.ttf", "DejaVuSerif.ttf"]),
-    ("times new roman", &["LiberationSerif-Regular.ttf", "Tinos-Regular.ttf"]),
-    ("times", &["LiberationSerif-Regular.ttf", "Tinos-Regular.ttf"]),
+    (
+        "serif",
+        &[
+            "LiberationSerif-Regular.ttf",
+            "Tinos-Regular.ttf",
+            "DejaVuSerif.ttf",
+        ],
+    ),
+    (
+        "times new roman",
+        &["LiberationSerif-Regular.ttf", "Tinos-Regular.ttf"],
+    ),
+    (
+        "times",
+        &["LiberationSerif-Regular.ttf", "Tinos-Regular.ttf"],
+    ),
     ("liberation serif", &["LiberationSerif-Regular.ttf"]),
-    ("monospace", &["NotoSansMono-Regular.ttf", "LiberationMono-Regular.ttf", "DejaVuSansMono.ttf"]),
-    ("courier new", &["LiberationMono-Regular.ttf", "Cousine-Regular.ttf"]),
-    ("courier", &["LiberationMono-Regular.ttf", "Cousine-Regular.ttf"]),
+    (
+        "monospace",
+        &[
+            "NotoSansMono-Regular.ttf",
+            "LiberationMono-Regular.ttf",
+            "DejaVuSansMono.ttf",
+        ],
+    ),
+    (
+        "courier new",
+        &["LiberationMono-Regular.ttf", "Cousine-Regular.ttf"],
+    ),
+    (
+        "courier",
+        &["LiberationMono-Regular.ttf", "Cousine-Regular.ttf"],
+    ),
     ("liberation mono", &["LiberationMono-Regular.ttf"]),
     ("dejavu sans", &["DejaVuSans.ttf"]),
     ("dejavu serif", &["DejaVuSerif.ttf"]),
@@ -63,7 +102,14 @@ const FAMILIES: &[(&str, &[&str])] = &[
     ("tinos", &["LiberationSerif-Regular.ttf"]),
     ("cousine", &["LiberationMono-Regular.ttf"]),
     // `system-ui` is the desktop font; Chrome gets Cantarell here.
-    ("system-ui", &["Cantarell-Regular.otf", "NotoSans-Regular.ttf", "DejaVuSans.ttf"]),
+    (
+        "system-ui",
+        &[
+            "Cantarell-Regular.otf",
+            "NotoSans-Regular.ttf",
+            "DejaVuSans.ttf",
+        ],
+    ),
     ("cantarell", &["Cantarell-Regular.otf"]),
 ];
 
@@ -153,8 +199,9 @@ thread_local! {
 /// table missed most installed families, so measurement-based font
 /// enumeration found far fewer fonts than in Chrome.
 fn font_index() -> &'static std::collections::HashMap<String, (std::path::PathBuf, bool)> {
-    static INDEX: std::sync::OnceLock<std::collections::HashMap<String, (std::path::PathBuf, bool)>> =
-        std::sync::OnceLock::new();
+    static INDEX: std::sync::OnceLock<
+        std::collections::HashMap<String, (std::path::PathBuf, bool)>,
+    > = std::sync::OnceLock::new();
     INDEX.get_or_init(|| {
         let mut out = std::collections::HashMap::new();
         for dir in FONT_DIRS {
@@ -191,7 +238,9 @@ fn font_index() -> &'static std::collections::HashMap<String, (std::path::PathBu
                         if name.name_id != 1 && name.name_id != 16 {
                             continue;
                         }
-                        let Some(text) = name.to_string() else { continue };
+                        let Some(text) = name.to_string() else {
+                            continue;
+                        };
                         let key = text.to_lowercase();
                         match out.entry(key) {
                             std::collections::hash_map::Entry::Vacant(v) => {
@@ -400,14 +449,22 @@ fn shape_run(
     }
     for ch in text.chars() {
         let id = font.glyph_id(ch);
-        out.push(Shaped { font, id, x: *caret });
+        out.push(Shaped {
+            font,
+            id,
+            x: *caret,
+        });
         *caret += ft_px(font.h_advance_unscaled(id) as i32, upem, size_px);
     }
 }
 
 /// Advance of a bitmap glyph: strike chosen by size, width from its ppem.
 /// None for outline fonts.
-fn raster_advance(face: &rustybuzz::Face<'static>, id: ttf_parser::GlyphId, size_px: f32) -> Option<f64> {
+fn raster_advance(
+    face: &rustybuzz::Face<'static>,
+    id: ttf_parser::GlyphId,
+    size_px: f32,
+) -> Option<f64> {
     let img = raster_image(face, id, size_px)?;
     // Keep the width as a fraction over 65536, truncated: emoji at 16px gives
     // 19.963302612304688, not 19.96330275229358.
@@ -452,7 +509,13 @@ fn shape(chain: &[&'static FontVec], text: &str, size_px: f32) -> (Vec<Shaped>, 
         };
         let breaks = ch == ' ' || run_font.is_some_and(|f| !std::ptr::eq(f, cf));
         if breaks && !run.is_empty() {
-            shape_run(&mut out, &mut caret, run_font.unwrap_or(chain[0]), &run, size_px);
+            shape_run(
+                &mut out,
+                &mut caret,
+                run_font.unwrap_or(chain[0]),
+                &run,
+                size_px,
+            );
             run.clear();
         }
         run.push(ch);
@@ -464,7 +527,13 @@ fn shape(chain: &[&'static FontVec], text: &str, size_px: f32) -> (Vec<Shaped>, 
         }
     }
     if !run.is_empty() {
-        shape_run(&mut out, &mut caret, run_font.unwrap_or(chain[0]), &run, size_px);
+        shape_run(
+            &mut out,
+            &mut caret,
+            run_font.unwrap_or(chain[0]),
+            &run,
+            size_px,
+        );
     }
     (out, caret)
 }
@@ -472,13 +541,20 @@ fn shape(chain: &[&'static FontVec], text: &str, size_px: f32) -> (Vec<Shaped>, 
 /// Blink-style layout (see `skia::text`): same words and font chain as
 /// `shape`, but Skia advances (size to 1/100, truncated to 26.6) and HarfBuzz
 /// kerning in 16.16. `fonts` holds font bytes per glyph index.
-fn shape_blink(chain: &[&'static FontVec], text: &str, eff: f32) -> (Vec<crate::skia::text::ShapedGlyph>, f32, Vec<&'static [u8]>) {
+fn shape_blink(
+    chain: &[&'static FontVec],
+    text: &str,
+    eff: f32,
+) -> (Vec<crate::skia::text::ShapedGlyph>, f32, Vec<&'static [u8]>) {
     use crate::skia::text::{em_mult, to_hb_position, ShapedGlyph};
     let mut out: Vec<ShapedGlyph> = Vec::new();
     let mut fonts: Vec<&'static [u8]> = Vec::new();
     let mut font_index = |f: &'static FontVec| -> usize {
         let b = f.as_slice();
-        if let Some(i) = fonts.iter().position(|x| std::ptr::eq(x.as_ptr(), b.as_ptr())) {
+        if let Some(i) = fonts
+            .iter()
+            .position(|x| std::ptr::eq(x.as_ptr(), b.as_ptr()))
+        {
             i
         } else {
             fonts.push(b);
@@ -492,15 +568,24 @@ fn shape_blink(chain: &[&'static FontVec], text: &str, eff: f32) -> (Vec<crate::
         let Some(face) = shaper(font) else {
             return;
         };
-        let Ok(fref) = skrifa::FontRef::new(font.as_slice()) else { return };
+        let Ok(fref) = skrifa::FontRef::new(font.as_slice()) else {
+            return;
+        };
         use skrifa::MetadataProvider;
-        let metrics = fref.glyph_metrics(skrifa::prelude::Size::new(eff), skrifa::prelude::LocationRef::default());
+        let metrics = fref.glyph_metrics(
+            skrifa::prelude::Size::new(eff),
+            skrifa::prelude::LocationRef::default(),
+        );
         let upem = face.units_per_em() as i64;
         if upem <= 0 {
             return;
         }
         let x_scale = to_hb_position(eff) as i64;
-        let x_mult = (if x_scale < 0 { -((-x_scale) << 16) } else { x_scale << 16 }) / upem;
+        let x_mult = (if x_scale < 0 {
+            -((-x_scale) << 16)
+        } else {
+            x_scale << 16
+        }) / upem;
         let mut buf = rustybuzz::UnicodeBuffer::new();
         buf.push_str(run);
         buf.guess_segment_properties();
@@ -512,13 +597,25 @@ fn shape_blink(chain: &[&'static FontVec], text: &str, eff: f32) -> (Vec<crate::
             // Skia advance; bitmap glyphs use the chosen strike.
             let hb_adv = match raster_advance(face, tid, eff) {
                 Some(w) => (w * 65536.0).floor() as i32,
-                None => to_hb_position(metrics.advance_width(skrifa::GlyphId::from(gid)).unwrap_or(0.0)),
+                None => to_hb_position(
+                    metrics
+                        .advance_width(skrifa::GlyphId::from(gid))
+                        .unwrap_or(0.0),
+                ),
             };
             let hmtx = face.glyph_hor_advance(tid).unwrap_or(0) as i32;
             let kern = p.x_advance - hmtx;
             let x_advance = hb_adv.wrapping_add(if kern != 0 { em_mult(kern, x_mult) } else { 0 });
-            let x_offset = if p.x_offset != 0 { em_mult(p.x_offset, x_mult) } else { 0 };
-            out.push(ShapedGlyph { gid, font: fi, x: (total + x_offset as i64) as f32 / 65536.0 });
+            let x_offset = if p.x_offset != 0 {
+                em_mult(p.x_offset, x_mult)
+            } else {
+                0
+            };
+            out.push(ShapedGlyph {
+                gid,
+                font: fi,
+                x: (total + x_offset as i64) as f32 / 65536.0,
+            });
             total += x_advance as i64;
         }
     };
@@ -797,7 +894,9 @@ pub fn draw_image(id: u32, url: &str, dx: f32, dy: f32, dw: f32, dh: f32) -> boo
                         mul(b, a),
                         a,
                     )
-                    .unwrap_or_else(|| tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap());
+                    .unwrap_or_else(|| {
+                        tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap()
+                    });
                 }
             }
             true
@@ -830,13 +929,9 @@ pub fn blit(
     // Snapshot the source pixels first: two borrows of one map at once are not
     // possible, and a copy is simpler than splitting the storage.
     let src = CANVASES.with(|c| {
-        c.borrow().get(&src_id).map(|pm| {
-            (
-                pm.width() as i64,
-                pm.height() as i64,
-                pm.data().to_vec(),
-            )
-        })
+        c.borrow()
+            .get(&src_id)
+            .map(|pm| (pm.width() as i64, pm.height() as i64, pm.data().to_vec()))
     });
     let Some((full_w, full_h, src)) = src else {
         return false;
@@ -846,8 +941,16 @@ pub fn blit(
     }
     // Source rect, defaulting to the whole image.
     let (ox_s, oy_s) = (sx.round() as i64, sy.round() as i64);
-    let sw = if sw_in > 0.0 { sw_in.round() as i64 } else { full_w };
-    let sh = if sh_in > 0.0 { sh_in.round() as i64 } else { full_h };
+    let sw = if sw_in > 0.0 {
+        sw_in.round() as i64
+    } else {
+        full_w
+    };
+    let sh = if sh_in > 0.0 {
+        sh_in.round() as i64
+    } else {
+        full_h
+    };
     if sw <= 0 || sh <= 0 {
         return false;
     }
@@ -1138,7 +1241,11 @@ pub fn fill_path(id: u32, verbs: &[f32], even_odd: bool, rgba: [u8; 4], sh: &[f3
     };
     CANVASES.with(|c| {
         if let Some(pm) = c.borrow_mut().get_mut(&id) {
-            let rule0 = if even_odd { FillRule::EvenOdd } else { FillRule::Winding };
+            let rule0 = if even_odd {
+                FillRule::EvenOdd
+            } else {
+                FillRule::Winding
+            };
             paint_shadow(pm, sh, |sp, col| {
                 let mut p2 = Paint::default();
                 p2.set_color_rgba8(col[0], col[1], col[2], col[3]);
@@ -1160,24 +1267,62 @@ pub fn fill_path(id: u32, verbs: &[f32], even_odd: bool, rgba: [u8; 4], sh: &[f3
 }
 
 /// `fill()` from path ops and the canvas matrix, rasterized by Skia (see `crate::skia`).
-pub fn fill_ops(id: u32, ops: &[f32], ctm: [f32; 6], even_odd: bool, rgba: [u8; 4], sh: &[f32], mode: u32) {
+pub fn fill_ops(
+    id: u32,
+    ops: &[f32],
+    ctm: [f32; 6],
+    even_odd: bool,
+    rgba: [u8; 4],
+    sh: &[f32],
+    mode: u32,
+) {
     CANVASES.with(|c| {
         if let Some(pm) = c.borrow_mut().get_mut(&id) {
             let (w, h) = (pm.width(), pm.height());
             let shadow = crate::skia::Shadow::parse(sh);
-            crate::skia::fill_ops_paint(pm.data_mut(), w, h, ops, ctm, even_odd, &crate::skia::PaintKind::Solid(rgba), shadow, mode);
+            crate::skia::fill_ops_paint(
+                pm.data_mut(),
+                w,
+                h,
+                ops,
+                ctm,
+                even_odd,
+                &crate::skia::PaintKind::Solid(rgba),
+                shadow,
+                mode,
+            );
         }
     });
 }
 
 /// `fill()` with a gradient; descriptor as in `fill_path_grad`.
-pub fn fill_ops_grad(id: u32, ops: &[f32], ctm: [f32; 6], even_odd: bool, grad: &[f32], sh: &[f32], mode: u32) {
-    let Some(desc) = crate::skia::gradient::GradientDesc::parse(grad) else { return };
+pub fn fill_ops_grad(
+    id: u32,
+    ops: &[f32],
+    ctm: [f32; 6],
+    even_odd: bool,
+    grad: &[f32],
+    sh: &[f32],
+    mode: u32,
+) {
+    let Some(desc) = crate::skia::gradient::GradientDesc::parse(grad) else {
+        return;
+    };
     CANVASES.with(|c| {
         if let Some(pm) = c.borrow_mut().get_mut(&id) {
             let (w, h) = (pm.width(), pm.height());
             let shadow = crate::skia::Shadow::parse(sh);
-            crate::skia::fill_ops_paint(pm.data_mut(), w, h, ops, ctm, even_odd, &crate::skia::PaintKind::Gradient(desc), shadow, mode);
+            crate::skia::fill_ops_paint(
+                pm.data_mut(),
+                w,
+                h,
+                ops,
+                ctm,
+                even_odd,
+                &crate::skia::PaintKind::Gradient(desc),
+                shadow,
+                mode,
+            );
         }
     });
 }
@@ -1185,7 +1330,16 @@ pub fn fill_ops_grad(id: u32, ops: &[f32], ctm: [f32; 6], even_odd: bool, grad: 
 /// `stroke()` from path ops (Skia hairline/stroker). Returns false when the
 /// caller must use the old path.
 #[allow(clippy::too_many_arguments)]
-pub fn stroke_ops(id: u32, ops: &[f32], ctm: [f32; 6], line: &crate::skia::LineStyle, rgba: [u8; 4], grad: &[f32], sh: &[f32], mode: u32) -> bool {
+pub fn stroke_ops(
+    id: u32,
+    ops: &[f32],
+    ctm: [f32; 6],
+    line: &crate::skia::LineStyle,
+    rgba: [u8; 4],
+    grad: &[f32],
+    sh: &[f32],
+    mode: u32,
+) -> bool {
     let paint = match crate::skia::gradient::GradientDesc::parse(grad) {
         Some(desc) if !grad.is_empty() => crate::skia::PaintKind::Gradient(desc),
         _ => crate::skia::PaintKind::Solid(rgba),
@@ -1194,7 +1348,17 @@ pub fn stroke_ops(id: u32, ops: &[f32], ctm: [f32; 6], line: &crate::skia::LineS
         if let Some(pm) = c.borrow_mut().get_mut(&id) {
             let (w, h) = (pm.width(), pm.height());
             let shadow = crate::skia::Shadow::parse(sh);
-            return crate::skia::stroke_ops(pm.data_mut(), w, h, ops, ctm, line, &paint, shadow, mode);
+            return crate::skia::stroke_ops(
+                pm.data_mut(),
+                w,
+                h,
+                ops,
+                ctm,
+                line,
+                &paint,
+                shadow,
+                mode,
+            );
         }
         true
     })
@@ -1271,7 +1435,11 @@ pub fn fill_path_grad(id: u32, verbs: &[f32], even_odd: bool, grad: &[f32], sh: 
         if let Some(pm) = c.borrow_mut().get_mut(&id) {
             // Gradient fill shadow is solid shadow color: the browser blurs the shape's
             // silhouette, not its paint.
-            let rule0 = if even_odd { FillRule::EvenOdd } else { FillRule::Winding };
+            let rule0 = if even_odd {
+                FillRule::EvenOdd
+            } else {
+                FillRule::Winding
+            };
             paint_shadow(pm, sh, |sp, col| {
                 let mut p2 = Paint::default();
                 p2.set_color_rgba8(col[0], col[1], col[2], col[3]);
@@ -1377,9 +1545,8 @@ pub fn fill_text(
             for g in &glyphs_of {
                 let cf = g.font;
                 let cscale = px_scale(cf, size_px);
-                let glyph = g
-                    .id
-                    .with_scale_and_position(cscale, ab_glyph::point(x + g.x as f32, y));
+                let glyph =
+                    g.id.with_scale_and_position(cscale, ab_glyph::point(x + g.x as f32, y));
                 if let Some(og) = cf.outline_glyph(glyph) {
                     let bb = og.px_bounds();
                     og.draw(|gx, gy, coverage| {
@@ -1408,7 +1575,25 @@ pub fn fill_text(
 /// `fillText`/`strokeText` like Chrome; false means not supported yet
 /// (stroke) and the caller uses the old path.
 #[allow(clippy::too_many_arguments)]
-pub fn text_ops(id: u32, text: &str, x: f32, y: f32, ctm: [f32; 6], size: f32, families: &str, bold: bool, italic: bool, stroke: bool, line: &crate::skia::LineStyle, rgba: [u8; 4], grad: &[f32], sh: &[f32], mode: u32, align: u32, baseline: u32) -> bool {
+pub fn text_ops(
+    id: u32,
+    text: &str,
+    x: f32,
+    y: f32,
+    ctm: [f32; 6],
+    size: f32,
+    families: &str,
+    bold: bool,
+    italic: bool,
+    stroke: bool,
+    line: &crate::skia::LineStyle,
+    rgba: [u8; 4],
+    grad: &[f32],
+    sh: &[f32],
+    mode: u32,
+    align: u32,
+    baseline: u32,
+) -> bool {
     let chain = resolve_chain(families, bold, italic);
     if chain.is_empty() || text.is_empty() {
         return true;
@@ -1427,7 +1612,24 @@ pub fn text_ops(id: u32, text: &str, x: f32, y: f32, ctm: [f32; 6], size: f32, f
         if let Some(pm) = c.borrow_mut().get_mut(&id) {
             let (w, h) = (pm.width(), pm.height());
             let shadow = crate::skia::Shadow::parse(sh);
-            ok = crate::skia::draw_text(pm.data_mut(), w, h, &fonts, &glyphs, width, x, y, ctm, eff, align, baseline, if stroke { Some(line) } else { None }, &paint, shadow, mode);
+            ok = crate::skia::draw_text(
+                pm.data_mut(),
+                w,
+                h,
+                &fonts,
+                &glyphs,
+                width,
+                x,
+                y,
+                ctm,
+                eff,
+                align,
+                baseline,
+                if stroke { Some(line) } else { None },
+                &paint,
+                shadow,
+                mode,
+            );
         }
     });
     ok
@@ -1465,14 +1667,22 @@ pub fn measure_text(
     // Arial; unhinted ab_glyph gave 1 and 10.
     {
         use crate::skia::geometry::Matrix;
-        let refs: Vec<Option<skrifa::FontRef>> = bfonts.iter().map(|b| skrifa::FontRef::new(b).ok()).collect();
+        let refs: Vec<Option<skrifa::FontRef>> = bfonts
+            .iter()
+            .map(|b| skrifa::FontRef::new(b).ok())
+            .collect();
         let scalers: Vec<Option<crate::skia::text::Scaler>> = bfonts
             .iter()
             .zip(refs.iter())
-            .map(|(b, f)| f.as_ref().and_then(|f| crate::skia::text::Scaler::new(b, f, eff, &Matrix::IDENTITY)))
+            .map(|(b, f)| {
+                f.as_ref()
+                    .and_then(|f| crate::skia::text::Scaler::new(b, f, eff, &Matrix::IDENTITY))
+            })
             .collect();
         for g in &bglyphs {
-            let Some(Some(sc)) = scalers.get(g.font) else { continue };
+            let Some(Some(sc)) = scalers.get(g.font) else {
+                continue;
+            };
             let Some(path) = sc.path(g.gid) else { continue };
             if path.pts.is_empty() {
                 continue;
@@ -1495,11 +1705,12 @@ pub fn measure_text(
         // The ink box is rounded in the glyph's own space, then offset into place.
         // Chrome: "A" right edge 7 (whole), "AV" 12.928 (5.928 kerned origin of
         // "V" + its box 7). Rounding after the offset would make both whole.
-        let glyph = g.id.with_scale_and_position(cscale, ab_glyph::point(0.0, 0.0));
+        let glyph =
+            g.id.with_scale_and_position(cscale, ab_glyph::point(0.0, 0.0));
         if cf.outline_glyph(glyph).is_some() {
             // Outline glyphs were handled above via Skia.
-        } else if let Some(img) = shaper(cf)
-            .and_then(|f| raster_image(f, ttf_parser::GlyphId(g.id.0), size_px))
+        } else if let Some(img) =
+            shaper(cf).and_then(|f| raster_image(f, ttf_parser::GlyphId(g.id.0), size_px))
         {
             // Bitmap glyph: ink bounds are its edges scaled to the size and rounded
             // outward, like outline glyphs.
@@ -1523,8 +1734,7 @@ pub fn measure_text(
         descent: if flat { 0.0 } else { ink_b },
         font_ascent: (font.ascent_unscaled() / upem * size_px).round() as f64,
         font_descent: (-font.descent_unscaled() / upem * size_px).round() as f64,
-        line: ((font.ascent_unscaled() - font.descent_unscaled() + font.line_gap_unscaled())
-            / upem
+        line: ((font.ascent_unscaled() - font.descent_unscaled() + font.line_gap_unscaled()) / upem
             * size_px) as f64,
     }
 }
@@ -1613,7 +1823,18 @@ mod tests {
     fn fill_text_draws_real_glyph_pixels() {
         create(2, 40, 40);
         // Baseline near the bottom so a 24px 'H' lands inside the surface.
-        fill_text(2, "H", 4.0, 30.0, 24.0, [0, 0, 0, 255], "sans-serif", false, false, &[]);
+        fill_text(
+            2,
+            "H",
+            4.0,
+            30.0,
+            24.0,
+            [0, 0, 0, 255],
+            "sans-serif",
+            false,
+            false,
+            &[],
+        );
         let px = get_image_data(2, 0, 0, 40, 40);
         let opaque = px.chunks_exact(4).filter(|p| p[3] > 0).count();
         assert!(
@@ -1629,11 +1850,7 @@ mod tests {
         let av = measure_text("AV", 16.0, "Liberation Sans", false, false).width;
         let a = measure_text("A", 16.0, "Liberation Sans", false, false).width;
         let v = measure_text("V", 16.0, "Liberation Sans", false, false).width;
-        assert!(
-            av < a + v - 0.5,
-            "pair not kerned: {av} vs {} apart",
-            a + v
-        );
+        assert!(av < a + v - 0.5, "pair not kerned: {av} vs {} apart", a + v);
         // Chrome here: 20.156 vs 21.344 unkerned.
         assert!(
             (av - 20.15625).abs() < 0.001,
@@ -1663,10 +1880,7 @@ mod tests {
         let ffi = measure_text("ffi", 16.0, "DejaVu Sans", false, false).width;
         let apart = measure_text("f", 16.0, "DejaVu Sans", false, false).width * 2.0
             + measure_text("i", 16.0, "DejaVu Sans", false, false).width;
-        assert!(
-            ffi < apart - 0.2,
-            "ligature not applied: {ffi} vs {apart}"
-        );
+        assert!(ffi < apart - 0.2, "ligature not applied: {ffi} vs {apart}");
     }
 
     #[test]
@@ -1700,14 +1914,11 @@ mod tests {
     #[test]
     fn an_emoji_is_measured_by_the_colour_font() {
         let one = measure_text("😀", 16.0, "sans-serif", false, false);
-        assert_eq!(
-            one.width, 19.963302612304688,
-            "emoji width: {}",
-            one.width
-        );
+        assert_eq!(one.width, 19.963302612304688, "emoji width: {}", one.width);
         assert_eq!((one.ascent, one.descent), (15.0, 4.0), "ink box");
         assert_eq!(one.right, 20.0, "right bound");
-        for seq in ["👩‍❤️‍💋‍👨", "👨‍👩‍👧‍👦", "👨‍👩‍👦", "🇺🇦", "👍🏽"] {
+        for seq in ["👩‍❤️‍💋‍👨", "👨‍👩‍👧‍👦", "👨‍👩‍👦", "🇺🇦", "👍🏽"]
+        {
             let w = measure_text(seq, 16.0, "sans-serif", false, false).width;
             assert_eq!(w, one.width, "sequence {seq} must be one glyph");
         }
@@ -1793,9 +2004,16 @@ mod tests {
             "three families measured the same: {sans} {serif} {mono}"
         );
         // Unknown name is skipped for the next family.
-        assert_eq!(w("NoSuchFontXYZ, Arial"), sans, "fell through to the next family");
+        assert_eq!(
+            w("NoSuchFontXYZ, Arial"),
+            sans,
+            "fell through to the next family"
+        );
         // Bold is another file, hence another width.
         let bold = measure_text("mmmmmmmmmmlli", 16.0, "Times New Roman", true, false).width;
-        assert!(bold > serif, "bold is not wider than regular: {bold} vs {serif}");
+        assert!(
+            bold > serif,
+            "bold is not wider than regular: {bold} vs {serif}"
+        );
     }
 }

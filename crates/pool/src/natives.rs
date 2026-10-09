@@ -95,7 +95,11 @@ pub fn install(scope: &mut v8::PinScope) {
         bind(scope, "__pt_localFont", local_font);
         bind(scope, "__pt_canvasFillPath", canvas_fill_path);
         bind(scope, "__pt_canvasFillOps", canvas_fill_ops);
-        bind(scope, "__pt_canvasFillOpsGradient", canvas_fill_ops_gradient);
+        bind(
+            scope,
+            "__pt_canvasFillOpsGradient",
+            canvas_fill_ops_gradient,
+        );
         bind(scope, "__pt_canvasStrokeOps", canvas_stroke_ops);
         bind(scope, "__pt_canvasTextOps", canvas_text_ops);
         bind(
@@ -257,8 +261,16 @@ fn canvas_fill_rect(
         arg_usize(scope, args.get(7)) as u8,
         arg_usize(scope, args.get(8)) as u8,
     ];
-    crate::canvas::fill_rect(id, x, y, w, h, rgba, &arg_f32s(args.get(9)),
-        arg_usize(scope, args.get(10)) as u32);
+    crate::canvas::fill_rect(
+        id,
+        x,
+        y,
+        w,
+        h,
+        rgba,
+        &arg_f32s(args.get(9)),
+        arg_usize(scope, args.get(10)) as u32,
+    );
 }
 
 /// `__pt_canvasClearRect(id, x, y, w, h)`
@@ -300,8 +312,18 @@ fn canvas_fill_text(
     let families = arg_string(scope, args.get(9));
     let bold = args.get(10).boolean_value(scope);
     let italic = args.get(11).boolean_value(scope);
-    crate::canvas::fill_text(id, &text, x, y, size, rgba, &families, bold, italic,
-        &arg_f32s(args.get(12)));
+    crate::canvas::fill_text(
+        id,
+        &text,
+        x,
+        y,
+        size,
+        rgba,
+        &families,
+        bold,
+        italic,
+        &arg_f32s(args.get(12)),
+    );
 }
 
 /// `__pt_canvasTextOps(id, text, x, y, ctmF32, size, families, bold, italic,
@@ -337,9 +359,16 @@ fn canvas_text_ops(
     let mode = arg_usize(scope, args.get(17)) as u32;
     let align = arg_usize(scope, args.get(18)) as u32;
     let baseline = arg_usize(scope, args.get(19)) as u32;
-    let line = crate::skia::LineStyle::from_codes(lw, arg_usize(scope, args.get(20)) as u32,
-        arg_usize(scope, args.get(21)) as u32, arg_f32(scope, args.get(22)));
-    let ok = crate::canvas::text_ops(id, &text, x, y, ctm, size, &families, bold, italic, stroke, &line, rgba, &grad, &sh, mode, align, baseline);
+    let line = crate::skia::LineStyle::from_codes(
+        lw,
+        arg_usize(scope, args.get(20)) as u32,
+        arg_usize(scope, args.get(21)) as u32,
+        arg_f32(scope, args.get(22)),
+    );
+    let ok = crate::canvas::text_ops(
+        id, &text, x, y, ctm, size, &families, bold, italic, stroke, &line, rgba, &grad, &sh, mode,
+        align, baseline,
+    );
     rv.set_bool(ok);
 }
 
@@ -378,8 +407,8 @@ fn canvas_measure_text(
         m.font_descent,
         m.line,
     ]
-        .into_iter()
-        .enumerate()
+    .into_iter()
+    .enumerate()
     {
         let n = v8::Number::new(scope, v as f64);
         out.set_index(scope, i as u32, n.into());
@@ -403,8 +432,14 @@ fn canvas_fill_path(
         arg_usize(scope, args.get(5)) as u8,
         arg_usize(scope, args.get(6)) as u8,
     ];
-    crate::canvas::fill_path(id, &verbs, even_odd, rgba, &arg_f32s(args.get(7)),
-        arg_usize(scope, args.get(8)) as u32);
+    crate::canvas::fill_path(
+        id,
+        &verbs,
+        even_odd,
+        rgba,
+        &arg_f32s(args.get(7)),
+        arg_usize(scope, args.get(8)) as u32,
+    );
 }
 
 /// `__pt_canvasFillOps(id, opsF32, ctmF32, evenOdd, r, g, b, a, shF32, mode)` —
@@ -429,8 +464,15 @@ fn canvas_fill_ops(
         arg_usize(scope, args.get(6)) as u8,
         arg_usize(scope, args.get(7)) as u8,
     ];
-    crate::canvas::fill_ops(id, &ops, ctm, even_odd, rgba, &arg_f32s(args.get(8)),
-        arg_usize(scope, args.get(9)) as u32);
+    crate::canvas::fill_ops(
+        id,
+        &ops,
+        ctm,
+        even_odd,
+        rgba,
+        &arg_f32s(args.get(8)),
+        arg_usize(scope, args.get(9)) as u32,
+    );
 }
 
 /// `__pt_canvasFillOpsGradient(id, opsF32, ctmF32, evenOdd, gradF32, shF32, mode)`.
@@ -449,8 +491,15 @@ fn canvas_fill_ops_gradient(
     }
     let even_odd = arg_usize(scope, args.get(3)) != 0;
     let grad = arg_f32s(args.get(4));
-    crate::canvas::fill_ops_grad(id, &ops, ctm, even_odd, &grad, &arg_f32s(args.get(5)),
-        arg_usize(scope, args.get(6)) as u32);
+    crate::canvas::fill_ops_grad(
+        id,
+        &ops,
+        ctm,
+        even_odd,
+        &grad,
+        &arg_f32s(args.get(5)),
+        arg_usize(scope, args.get(6)) as u32,
+    );
 }
 
 /// `__pt_canvasStrokeOps(id, opsF32, ctmF32, lineWidth, r, g, b, a, gradF32, shF32, mode)` → bool.
@@ -475,10 +524,22 @@ fn canvas_stroke_ops(
         arg_usize(scope, args.get(7)) as u8,
     ];
     let grad = arg_f32s(args.get(8));
-    let line = crate::skia::LineStyle::from_codes(lw, arg_usize(scope, args.get(11)) as u32,
-        arg_usize(scope, args.get(12)) as u32, arg_f32(scope, args.get(13)));
-    let ok = crate::canvas::stroke_ops(id, &ops, ctm, &line, rgba, &grad, &arg_f32s(args.get(9)),
-        arg_usize(scope, args.get(10)) as u32);
+    let line = crate::skia::LineStyle::from_codes(
+        lw,
+        arg_usize(scope, args.get(11)) as u32,
+        arg_usize(scope, args.get(12)) as u32,
+        arg_f32(scope, args.get(13)),
+    );
+    let ok = crate::canvas::stroke_ops(
+        id,
+        &ops,
+        ctm,
+        &line,
+        rgba,
+        &grad,
+        &arg_f32s(args.get(9)),
+        arg_usize(scope, args.get(10)) as u32,
+    );
     rv.set_bool(ok);
 }
 
@@ -493,8 +554,14 @@ fn canvas_fill_path_gradient(
     let verbs = arg_f32s(args.get(1));
     let even_odd = arg_usize(scope, args.get(2)) != 0;
     let grad = arg_f32s(args.get(3));
-    crate::canvas::fill_path_grad(id, &verbs, even_odd, &grad, &arg_f32s(args.get(4)),
-        arg_usize(scope, args.get(5)) as u32);
+    crate::canvas::fill_path_grad(
+        id,
+        &verbs,
+        even_odd,
+        &grad,
+        &arg_f32s(args.get(4)),
+        arg_usize(scope, args.get(5)) as u32,
+    );
 }
 
 /// `__pt_canvasStrokePath(id, verbsF32, lineWidth, r, g, b, a, shadowF32)` — stroke a path.
@@ -513,8 +580,14 @@ fn canvas_stroke_path(
         arg_usize(scope, args.get(5)) as u8,
         arg_usize(scope, args.get(6)) as u8,
     ];
-    crate::canvas::stroke_path(id, &verbs, line_width, rgba, &arg_f32s(args.get(7)),
-        arg_usize(scope, args.get(8)) as u32);
+    crate::canvas::stroke_path(
+        id,
+        &verbs,
+        line_width,
+        rgba,
+        &arg_f32s(args.get(7)),
+        arg_usize(scope, args.get(8)) as u32,
+    );
 }
 
 /// `__pt_canvasPutImageData(id, x, y, w, h, data)` — overwrite from straight-alpha RGBA.
@@ -590,7 +663,9 @@ fn canvas_blit(
     let dy = arg_f32(scope, args.get(7));
     let dw = arg_f32(scope, args.get(8));
     let dh = arg_f32(scope, args.get(9));
-    rv.set_bool(crate::canvas::blit(dst, src, sx, sy, sw, sh, dx, dy, dw, dh));
+    rv.set_bool(crate::canvas::blit(
+        dst, src, sx, sy, sw, sh, dx, dy, dw, dh,
+    ));
 }
 
 /// Standard base64, decoded here so no crate feature has to reach the isolate.
@@ -697,11 +772,7 @@ mod opfs {
 
 /// `__pt_fsOpen(key)` → handle, or 0 when the file could not be opened.
 #[cfg(feature = "render")]
-fn fs_open(
-    scope: &mut v8::PinScope,
-    args: v8::FunctionCallbackArguments,
-    mut rv: v8::ReturnValue,
-) {
+fn fs_open(scope: &mut v8::PinScope, args: v8::FunctionCallbackArguments, mut rv: v8::ReturnValue) {
     let key = arg_string(scope, args.get(0));
     rv.set_uint32(opfs::open(&key));
 }
@@ -720,11 +791,7 @@ fn fs_flush(
 
 /// `__pt_fsRead(handle)` → everything the file holds.
 #[cfg(feature = "render")]
-fn fs_read(
-    scope: &mut v8::PinScope,
-    args: v8::FunctionCallbackArguments,
-    mut rv: v8::ReturnValue,
-) {
+fn fs_read(scope: &mut v8::PinScope, args: v8::FunctionCallbackArguments, mut rv: v8::ReturnValue) {
     let id = arg_usize(scope, args.get(0)) as u32;
     let bytes = opfs::read_all(id);
     set_bytes(scope, &mut rv, &bytes);
@@ -732,11 +799,7 @@ fn fs_read(
 
 /// `__pt_fsClose(handle)`
 #[cfg(feature = "render")]
-fn fs_close(
-    scope: &mut v8::PinScope,
-    args: v8::FunctionCallbackArguments,
-    _rv: v8::ReturnValue,
-) {
+fn fs_close(scope: &mut v8::PinScope, args: v8::FunctionCallbackArguments, _rv: v8::ReturnValue) {
     opfs::close(arg_usize(scope, args.get(0)) as u32);
 }
 
@@ -775,11 +838,7 @@ fn gl_available(
 
 /// `__pt_glCreate(id, w, h)`
 #[cfg(feature = "webgl")]
-fn gl_create(
-    scope: &mut v8::PinScope,
-    args: v8::FunctionCallbackArguments,
-    _rv: v8::ReturnValue,
-) {
+fn gl_create(scope: &mut v8::PinScope, args: v8::FunctionCallbackArguments, _rv: v8::ReturnValue) {
     crate::webgl::create(
         arg_usize(scope, args.get(0)) as u32,
         arg_usize(scope, args.get(1)) as u32,
@@ -789,11 +848,7 @@ fn gl_create(
 
 /// `__pt_glResize(id, w, h)`: canvas resized, drawing buffer follows.
 #[cfg(feature = "webgl")]
-fn gl_resize(
-    scope: &mut v8::PinScope,
-    args: v8::FunctionCallbackArguments,
-    _rv: v8::ReturnValue,
-) {
+fn gl_resize(scope: &mut v8::PinScope, args: v8::FunctionCallbackArguments, _rv: v8::ReturnValue) {
     crate::webgl::resize(
         arg_usize(scope, args.get(0)) as u32,
         arg_usize(scope, args.get(1)) as u32,
@@ -803,21 +858,13 @@ fn gl_resize(
 
 /// `__pt_glDestroy(id)`
 #[cfg(feature = "webgl")]
-fn gl_destroy(
-    scope: &mut v8::PinScope,
-    args: v8::FunctionCallbackArguments,
-    _rv: v8::ReturnValue,
-) {
+fn gl_destroy(scope: &mut v8::PinScope, args: v8::FunctionCallbackArguments, _rv: v8::ReturnValue) {
     crate::webgl::destroy(arg_usize(scope, args.get(0)) as u32);
 }
 
 /// `__pt_glClear(id, r, g, b, a, mask)`
 #[cfg(feature = "webgl")]
-fn gl_clear(
-    scope: &mut v8::PinScope,
-    args: v8::FunctionCallbackArguments,
-    _rv: v8::ReturnValue,
-) {
+fn gl_clear(scope: &mut v8::PinScope, args: v8::FunctionCallbackArguments, _rv: v8::ReturnValue) {
     crate::webgl::clear(
         arg_usize(scope, args.get(0)) as u32,
         [
@@ -848,11 +895,7 @@ fn gl_viewport(
 
 /// `__pt_glEnable(id, cap, on)`
 #[cfg(feature = "webgl")]
-fn gl_enable(
-    scope: &mut v8::PinScope,
-    args: v8::FunctionCallbackArguments,
-    _rv: v8::ReturnValue,
-) {
+fn gl_enable(scope: &mut v8::PinScope, args: v8::FunctionCallbackArguments, _rv: v8::ReturnValue) {
     crate::webgl::enable(
         arg_usize(scope, args.get(0)) as u32,
         arg_usize(scope, args.get(1)) as u32,
@@ -1429,11 +1472,7 @@ fn gl_bind_vertex_array(
 /// `__pt_glDelete(id, kind, handle)` — one binding for every `deleteX` (see the
 /// `OBJ_*` kinds in `crate::webgl`).
 #[cfg(feature = "webgl")]
-fn gl_delete(
-    scope: &mut v8::PinScope,
-    args: v8::FunctionCallbackArguments,
-    _rv: v8::ReturnValue,
-) {
+fn gl_delete(scope: &mut v8::PinScope, args: v8::FunctionCallbackArguments, _rv: v8::ReturnValue) {
     crate::webgl::delete_object(
         arg_usize(scope, args.get(0)) as u32,
         arg_usize(scope, args.get(1)) as u32,
@@ -1485,8 +1524,12 @@ pub fn external_refs() -> std::borrow::Cow<'static, [v8::ExternalReference]> {
         let ptrs = NATIVE_REFS.lock().map(|v| v.clone()).unwrap_or_default();
         let list: Vec<v8::ExternalReference> = ptrs
             .into_iter()
-            .map(|p| v8::ExternalReference { function: unsafe { std::mem::transmute::<usize, v8::FunctionCallback>(p) } })
-            .chain(std::iter::once(v8::ExternalReference { pointer: std::ptr::null_mut() }))
+            .map(|p| v8::ExternalReference {
+                function: unsafe { std::mem::transmute::<usize, v8::FunctionCallback>(p) },
+            })
+            .chain(std::iter::once(v8::ExternalReference {
+                pointer: std::ptr::null_mut(),
+            }))
             .collect();
         RefsSlice(Box::leak(list.into_boxed_slice()))
     });
@@ -1655,7 +1698,9 @@ fn atob_native(
         }
     }
     if body.len() % 4 == 1
-        || body.iter().any(|b| !(b.is_ascii_alphanumeric() || *b == b'+' || *b == b'/'))
+        || body
+            .iter()
+            .any(|b| !(b.is_ascii_alphanumeric() || *b == b'+' || *b == b'/'))
     {
         rv.set_null();
         return;
@@ -1667,10 +1712,12 @@ fn atob_native(
             .with_decode_allow_trailing_bits(true),
     );
     match engine.decode(&body) {
-        Ok(bytes) => match v8::String::new_from_one_byte(scope, &bytes, v8::NewStringType::Normal) {
-            Some(out) => rv.set(out.into()),
-            None => rv.set_null(),
-        },
+        Ok(bytes) => {
+            match v8::String::new_from_one_byte(scope, &bytes, v8::NewStringType::Normal) {
+                Some(out) => rv.set(out.into()),
+                None => rv.set_null(),
+            }
+        }
         Err(_) => rv.set_null(),
     }
 }
@@ -1730,7 +1777,10 @@ fn make_realm(
         .get_slot::<RealmDemand>()
         .filter(|d| d.last.elapsed() <= REALM_DEMAND_TTL)
         .map_or(0, |d| d.recent);
-    scope.set_slot(RealmDemand { last: std::time::Instant::now(), recent: recent + 1 });
+    scope.set_slot(RealmDemand {
+        last: std::time::Instant::now(),
+        recent: recent + 1,
+    });
     let spare = scope.get_slot_mut::<SpareRealms>().and_then(|s| s.0.pop());
     tracing::debug!(target: "nokk::realm", from_spare = spare.is_some(), "a page asked for a fresh realm");
     if let Some(ready) = spare {
@@ -1742,7 +1792,9 @@ fn make_realm(
             let inner = &mut v8::ContextScope::new(scope, context);
             v8::tc_scope!(inner, inner);
             // The new window's clock starts when handed out, not when built.
-            if let Some(src) = v8::String::new(inner, "globalThis.__pt_resetClock && __pt_resetClock()") {
+            if let Some(src) =
+                v8::String::new(inner, "globalThis.__pt_resetClock && __pt_resetClock()")
+            {
                 if let Some(script) = v8::Script::compile(inner, src, None) {
                     let _ = script.run(inner);
                 }
@@ -1854,11 +1906,7 @@ fn random_bytes(
 }
 
 /// `__pt_digest(alg, data)`
-fn digest(
-    scope: &mut v8::PinScope,
-    args: v8::FunctionCallbackArguments,
-    mut rv: v8::ReturnValue,
-) {
+fn digest(scope: &mut v8::PinScope, args: v8::FunctionCallbackArguments, mut rv: v8::ReturnValue) {
     let alg = arg_string(scope, args.get(0)).to_ascii_uppercase();
     let data = arg_bytes(args.get(1));
     let out = match alg.as_str() {
@@ -2125,9 +2173,13 @@ fn heap_stats(
 ) {
     let st = scope.get_heap_statistics();
     let out = v8::Array::new(scope, 3);
-    for (i, v) in [st.used_heap_size(), st.total_heap_size(), st.heap_size_limit()]
-        .into_iter()
-        .enumerate()
+    for (i, v) in [
+        st.used_heap_size(),
+        st.total_heap_size(),
+        st.heap_size_limit(),
+    ]
+    .into_iter()
+    .enumerate()
     {
         let n = v8::Number::new(scope, v as f64);
         out.set_index(scope, i as u32, n.into());
@@ -2149,7 +2201,8 @@ struct RtcJob {
 }
 
 fn rtc_jobs() -> &'static std::sync::Mutex<std::collections::HashMap<u32, RtcJob>> {
-    static JOBS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<u32, RtcJob>>> = std::sync::OnceLock::new();
+    static JOBS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<u32, RtcJob>>> =
+        std::sync::OnceLock::new();
     JOBS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
@@ -2215,7 +2268,8 @@ fn rtc_start(
     use std::net::{ToSocketAddrs, UdpSocket};
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
     let n = args.get(0).int32_value(scope).unwrap_or(1).clamp(1, 8) as usize;
-    let servers: Vec<String> = serde_json::from_str(&arg_string(scope, args.get(1))).unwrap_or_default();
+    let servers: Vec<String> =
+        serde_json::from_str(&arg_string(scope, args.get(1))).unwrap_or_default();
     let mut v4: Vec<UdpSocket> = Vec::new();
     let mut v6: Vec<UdpSocket> = Vec::new();
     for _ in 0..n {
@@ -2235,11 +2289,21 @@ fn rtc_start(
             }
         }
     }
-    let ports = |v: &Vec<UdpSocket>| v.iter().map(|s| s.local_addr().map(|a| a.port()).unwrap_or(0)).collect::<Vec<_>>();
+    let ports = |v: &Vec<UdpSocket>| {
+        v.iter()
+            .map(|s| s.local_addr().map(|a| a.port()).unwrap_or(0))
+            .collect::<Vec<_>>()
+    };
     let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let out = serde_json::json!({ "id": id, "v4": ports(&v4), "v6": ports(&v6) }).to_string();
     if let Ok(mut m) = rtc_jobs().lock() {
-        m.insert(id, RtcJob { results: Vec::new(), done: false });
+        m.insert(
+            id,
+            RtcJob {
+                results: Vec::new(),
+                done: false,
+            },
+        );
     }
     let off = std::env::var_os("NOKK_NO_STUN").is_some() || servers.is_empty();
     std::thread::spawn(move || {
@@ -2257,7 +2321,11 @@ fn rtc_start(
             for srv in &servers {
                 if let Ok(it) = srv.to_socket_addrs() {
                     for a in it {
-                        if a.is_ipv4() { addrs4.push(a) } else { addrs6.push(a) }
+                        if a.is_ipv4() {
+                            addrs4.push(a)
+                        } else {
+                            addrs6.push(a)
+                        }
                     }
                 }
             }
@@ -2265,7 +2333,14 @@ fn rtc_start(
             for (fam, i, s) in socks {
                 let mut tx = [0u8; 12];
                 for (k, b) in tx.iter_mut().enumerate() {
-                    *b = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0) >> (k % 4 * 8)) as u8 ^ (i as u8).wrapping_mul(31) ^ (k as u8).wrapping_mul(97) ^ fam;
+                    *b = (std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.subsec_nanos())
+                        .unwrap_or(0)
+                        >> (k % 4 * 8)) as u8
+                        ^ (i as u8).wrapping_mul(31)
+                        ^ (k as u8).wrapping_mul(97)
+                        ^ fam;
                 }
                 let targets = if fam == 4 { &addrs4 } else { &addrs6 };
                 for t in targets.iter() {
@@ -2385,11 +2460,7 @@ fn set_codegen(
 /// Cloudflare takes 5000 consecutive readings and checks the minimum positive
 /// delta (0.1 ms in Chrome). Hence a real monotonic source; JS coarsens it to
 /// the browser's step.
-fn hrtime(
-    scope: &mut v8::PinScope,
-    _args: v8::FunctionCallbackArguments,
-    mut rv: v8::ReturnValue,
-) {
+fn hrtime(scope: &mut v8::PinScope, _args: v8::FunctionCallbackArguments, mut rv: v8::ReturnValue) {
     static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
     let start = START.get_or_init(std::time::Instant::now);
     let ms = start.elapsed().as_nanos() as f64 / 1.0e6;
@@ -2424,7 +2495,11 @@ fn note_ref(p: usize) {
 
 /// Template functions are not visible to the page (interfaces have their own
 /// facades) but must not be constructible.
-fn template_ctor(scope: &mut v8::PinScope, _args: v8::FunctionCallbackArguments, _rv: v8::ReturnValue) {
+fn template_ctor(
+    scope: &mut v8::PinScope,
+    _args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue,
+) {
     if let Some(msg) = v8::String::new(scope, "Illegal constructor") {
         let err = v8::Exception::type_error(scope, msg);
         scope.throw_exception(err);
@@ -2475,7 +2550,10 @@ fn build_proto_templates(scope: &mut v8::PinScope<'_, '_, ()>) -> ProtoTemplates
     wpt.set_named_property_handler(
         v8::NamedPropertyHandlerConfiguration::new()
             .definer_raw(definer)
-            .flags(v8::PropertyHandlerFlags::ONLY_INTERCEPT_STRINGS | v8::PropertyHandlerFlags::NON_MASKING),
+            .flags(
+                v8::PropertyHandlerFlags::ONLY_INTERCEPT_STRINGS
+                    | v8::PropertyHandlerFlags::NON_MASKING,
+            ),
     );
     // No class name on Window on purpose: V8 would use it for the worker's
     // global too. Without it the error message takes the name from the
@@ -2510,19 +2588,31 @@ pub(crate) fn drop_proto_templates(iso: &mut v8::Isolate) {
 
 /// Page context: the global comes from the Window template (immutable
 /// prototype, Window -> WindowProperties -> EventTarget chain in place).
-pub(crate) fn new_page_context<'s>(scope: &mut v8::PinScope<'s, '_, ()>) -> v8::Local<'s, v8::Context> {
+pub(crate) fn new_page_context<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+) -> v8::Local<'s, v8::Context> {
     proto_templates_ready(scope);
     let t = scope.get_slot::<std::rc::Rc<ProtoTemplates>>().cloned();
     let global = t.map(|t| {
         let w = v8::Local::new(scope, &t.w);
         w.instance_template(scope)
     });
-    v8::Context::new(scope, v8::ContextOptions { global_template: global, ..Default::default() })
+    v8::Context::new(
+        scope,
+        v8::ContextOptions {
+            global_template: global,
+            ..Default::default()
+        },
+    )
 }
 
 /// `__pt_protoTemplates()` -> `{et, wp, w, loc, location}`: prototypes from
 /// this context's templates plus a Location instance. Called once by the loader.
-fn proto_templates_js(scope: &mut v8::PinScope, _args: v8::FunctionCallbackArguments, mut rv: v8::ReturnValue) {
+fn proto_templates_js(
+    scope: &mut v8::PinScope,
+    _args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
     let Some(t) = scope.get_slot::<std::rc::Rc<ProtoTemplates>>().cloned() else {
         return;
     };
@@ -2530,8 +2620,12 @@ fn proto_templates_js(scope: &mut v8::PinScope, _args: v8::FunctionCallbackArgum
     let proto_key = v8::String::new(scope, "prototype").unwrap();
     for (name, g) in [("et", &t.et), ("wp", &t.wp), ("w", &t.w), ("loc", &t.loc)] {
         let ft = v8::Local::new(scope, g);
-        let Some(f) = ft.get_function(scope) else { return };
-        let Some(p) = f.get(scope, proto_key.into()) else { return };
+        let Some(f) = ft.get_function(scope) else {
+            return;
+        };
+        let Some(p) = f.get(scope, proto_key.into()) else {
+            return;
+        };
         let k = v8::String::new(scope, name).unwrap();
         out.set(scope, k.into(), p);
         if name == "loc" {
@@ -2551,10 +2645,18 @@ pub(crate) const TRUSTED_SCRIPT_KEY: &str = "nokk::trustedScript";
 
 /// `__pt_codeLike(text)` -> empty object carrying script text hidden: eval and
 /// new Function run it as a string (the loader makes TrustedScript from it).
-fn code_like_js(scope: &mut v8::PinScope, args: v8::FunctionCallbackArguments, mut rv: v8::ReturnValue) {
-    let Some(text) = args.get(0).to_string(scope) else { return };
+fn code_like_js(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let Some(text) = args.get(0).to_string(scope) else {
+        return;
+    };
     let o = v8::Object::new(scope);
-    let Some(name) = v8::String::new(scope, TRUSTED_SCRIPT_KEY) else { return };
+    let Some(name) = v8::String::new(scope, TRUSTED_SCRIPT_KEY) else {
+        return;
+    };
     let key = v8::Private::for_api(scope, Some(name));
     o.set_private(scope, key, text.into());
     rv.set(o.into());

@@ -31,7 +31,15 @@ impl GradientDesc {
             if i + 5 > g.len() {
                 break;
             }
-            stops.push((g[i], [g[i + 1] / 255.0, g[i + 2] / 255.0, g[i + 3] / 255.0, g[i + 4] / 255.0]));
+            stops.push((
+                g[i],
+                [
+                    g[i + 1] / 255.0,
+                    g[i + 2] / 255.0,
+                    g[i + 3] / 255.0,
+                    g[i + 4] / 255.0,
+                ],
+            ));
             i += 5;
         }
         Some(GradientDesc {
@@ -206,7 +214,14 @@ fn linear(p0: Point, p1: Point, colors: Vec<[f32; 4]>, pos: Vec<f32>) -> Option<
     Some(s)
 }
 
-fn two_point_conical(c0: Point, r0: f32, c1: Point, r1: f32, colors: Vec<[f32; 4]>, pos: Vec<f32>) -> Option<Shader> {
+fn two_point_conical(
+    c0: Point,
+    r0: f32,
+    c1: Point,
+    r1: f32,
+    colors: Vec<[f32; 4]>,
+    pos: Vec<f32>,
+) -> Option<Shader> {
     if r0 < 0.0 || r1 < 0.0 {
         return None;
     }
@@ -245,8 +260,13 @@ fn two_point_conical(c0: Point, r0: f32, c1: Point, r1: f32, colors: Vec<[f32; 4
         gradient_matrix.post_scale(scale, scale);
         ty = ConicalType::Radial;
     } else {
-        gradient_matrix = Matrix::poly_to_poly2([c0, c1], [Point::new(0.0, 0.0), Point::new(1.0, 0.0)])?;
-        ty = if (r1 - r0).abs() <= SCALAR_NEARLY_ZERO { ConicalType::Strip } else { ConicalType::Focal };
+        gradient_matrix =
+            Matrix::poly_to_poly2([c0, c1], [Point::new(0.0, 0.0), Point::new(1.0, 0.0)])?;
+        ty = if (r1 - r0).abs() <= SCALAR_NEARLY_ZERO {
+            ConicalType::Strip
+        } else {
+            ConicalType::Focal
+        };
     }
     if ty == ConicalType::Focal {
         let d_center = length(c0.sub(c1));
@@ -254,7 +274,11 @@ fn two_point_conical(c0: Point, r0: f32, c1: Point, r1: f32, colors: Vec<[f32; 4
             return None;
         }
     }
-    let mut s = base(colors, if pos.is_empty() { vec![0.0, 1.0] } else { pos }, gradient_matrix);
+    let mut s = base(
+        colors,
+        if pos.is_empty() { vec![0.0, 1.0] } else { pos },
+        gradient_matrix,
+    );
     s.is_opaque = false;
     // appendGradientStages
     let d_radius = r1 - r0;
@@ -268,7 +292,9 @@ fn two_point_conical(c0: Point, r0: f32, c1: Point, r1: f32, colors: Vec<[f32; 4
         }
         ConicalType::Strip => {
             let scaled_r0 = r0 / length(c1.sub(c0));
-            s.stages.push(Stage::XyTo2ptConicalStrip { p0: scaled_r0 * scaled_r0 });
+            s.stages.push(Stage::XyTo2ptConicalStrip {
+                p0: scaled_r0 * scaled_r0,
+            });
             s.stages.push(Stage::Mask2ptConicalNan);
             s.post.push(Stage::ApplyVectorMask);
         }
@@ -357,13 +383,18 @@ impl FocalData {
         }
         let from = [Point::new(self.focal_x, 0.0), Point::new(1.0, 0.0)];
         let to = [Point::new(0.0, 0.0), Point::new(1.0, 0.0)];
-        let Some(focal_matrix) = Matrix::poly_to_poly2(from, to) else { return false };
+        let Some(focal_matrix) = Matrix::poly_to_poly2(from, to) else {
+            return false;
+        };
         matrix.post_concat(&focal_matrix);
         self.r1 = r1 / (1.0 - self.focal_x).abs();
         if self.is_focal_on_circle() {
             matrix.post_scale(0.5, 0.5);
         } else {
-            matrix.post_scale(self.r1 / (self.r1 * self.r1 - 1.0), 1.0 / (self.r1 * self.r1 - 1.0).abs().sqrt());
+            matrix.post_scale(
+                self.r1 / (self.r1 * self.r1 - 1.0),
+                1.0 / (self.r1 * self.r1 - 1.0).abs().sqrt(),
+            );
         }
         matrix.post_scale((1.0 - self.focal_x).abs(), (1.0 - self.focal_x).abs());
         true
@@ -387,7 +418,13 @@ pub fn append_matrix(stages: &mut Vec<Stage>, m: &Matrix) {
 /// `SkGradientBaseShader::appendStages` plus the paint colour pipeline: colour
 /// stages for the blitter (no clamp_01 or coverage). `ctm` is the canvas matrix,
 /// `paint_alpha` globalAlpha, `color_filter` the shadow colour (srcin), `dither`.
-pub fn color_stages(shader: &Shader, ctm: &Matrix, paint_alpha: f32, color_filter: Option<[f32; 4]>, dither: bool) -> Option<Vec<Stage>> {
+pub fn color_stages(
+    shader: &Shader,
+    ctm: &Matrix,
+    paint_alpha: f32,
+    color_filter: Option<[f32; 4]>,
+    dither: bool,
+) -> Option<Vec<Stage>> {
     let mut p: Vec<Stage> = Vec::new();
     if let Some(c) = shader.constant {
         // Constant colour: appendConstantColor premul.
@@ -415,7 +452,9 @@ pub fn color_stages(shader: &Shader, ctm: &Matrix, paint_alpha: f32, color_filte
         } else {
             let ts: Vec<f32> = match &shader.positions {
                 Some(pos) => pos.clone(),
-                None => (0..colors.len()).map(|i| i as f32 / (colors.len() - 1) as f32).collect(),
+                None => (0..colors.len())
+                    .map(|i| i as f32 / (colors.len() - 1) as f32)
+                    .collect(),
             };
             // init_stop_pos / init_stop_evenly: factor = (c_r - c_l)/gap, bias = c_l - factor·t_l;
             // index 0: colour before the first stop (factor 0).
@@ -447,7 +486,11 @@ pub fn color_stages(shader: &Shader, ctm: &Matrix, paint_alpha: f32, color_filte
             biases.push(last);
             let mut ts2 = ts.clone();
             ts2.push(1.0);
-            p.push(Stage::Gradient { ts: ts2, factors, biases });
+            p.push(Stage::Gradient {
+                ts: ts2,
+                factors,
+                biases,
+            });
         }
         if !shader.colors_are_opaque {
             p.push(Stage::Premul);
@@ -460,7 +503,12 @@ pub fn color_stages(shader: &Shader, ctm: &Matrix, paint_alpha: f32, color_filte
     if let Some(c) = color_filter {
         // SkBlendModeColorFilter (srcin): move_src_dst, premul colour, srcin.
         p.push(Stage::MoveSrcDst);
-        p.push(Stage::UniformColor([c[0] * c[3], c[1] * c[3], c[2] * c[3], c[3]]));
+        p.push(Stage::UniformColor([
+            c[0] * c[3],
+            c[1] * c[3],
+            c[2] * c[3],
+            c[3],
+        ]));
         p.push(Stage::Blend(BlendMode::SrcIn));
     }
     if dither && shader.constant.is_none() {

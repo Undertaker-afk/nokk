@@ -18,7 +18,10 @@ use super::blit::Blitter;
 use super::blur::{self, A8Blitter, Mask};
 use super::geometry::{IRect, Matrix, Point, Rect};
 use super::path::{Path, PathBuilder};
-use skrifa::outline::{DrawSettings, Engine, GlyphStyles, HintingInstance, HintingOptions, OutlinePen, SmoothMode, Target};
+use skrifa::outline::{
+    DrawSettings, Engine, GlyphStyles, HintingInstance, HintingOptions, OutlinePen, SmoothMode,
+    Target,
+};
 use skrifa::prelude::{LocationRef, Size};
 use skrifa::{FontRef, GlyphId, MetadataProvider};
 use std::cell::RefCell;
@@ -60,7 +63,10 @@ thread_local! {
 }
 
 /// Autohinter glyph styles (`GlyphStyles::new`): expensive, computed once per font.
-fn glyph_styles(bytes: &'static [u8], outlines: &skrifa::OutlineGlyphCollection) -> &'static GlyphStyles {
+fn glyph_styles(
+    bytes: &'static [u8],
+    outlines: &skrifa::OutlineGlyphCollection,
+) -> &'static GlyphStyles {
     STYLES.with(|m| {
         let key = bytes.as_ptr() as usize;
         if let Some(hit) = m.borrow().get(&key) {
@@ -151,7 +157,12 @@ struct SkPen {
 
 impl SkPen {
     fn new() -> SkPen {
-        SkPen { b: PathBuilder::new(), started: false, current: Point::default(), last_verb: 0 }
+        SkPen {
+            b: PathBuilder::new(),
+            started: false,
+            current: Point::default(),
+            last_verb: 0,
+        }
     }
     fn going_to(&mut self, p: Point) {
         if !self.started {
@@ -227,7 +238,14 @@ pub struct Scaler<'a> {
 /// `SkScalerContextRec::computeMatrices(kVertical)` for a non-perspective
 /// matrix: A = size * post2x2; s = |A.scaleY|; sA is the remainder.
 fn compute_matrices(text_size: f32, post: &Matrix) -> (f32, Matrix) {
-    let a = Matrix { sx: text_size * post.sx, kx: text_size * post.kx, ky: text_size * post.ky, sy: text_size * post.sy, tx: 0.0, ty: 0.0 };
+    let a = Matrix {
+        sx: text_size * post.sx,
+        kx: text_size * post.kx,
+        ky: text_size * post.ky,
+        sy: text_size * post.sy,
+        tx: 0.0,
+        ty: 0.0,
+    };
     let skewed_or_flipped = a.kx != 0.0 || a.ky != 0.0 || a.sx < 0.0 || a.sy < 0.0;
     if skewed_or_flipped {
         // Rotation/skew: Skia's scaler removes rotation via Givens; here we
@@ -252,7 +270,12 @@ fn compute_matrices(text_size: f32, post: &Matrix) -> (f32, Matrix) {
 
 impl<'a> Scaler<'a> {
     /// `text_size` is the rounded size, `post` the canvas matrix 2x2.
-    pub fn new(bytes: &'static [u8], font: &FontRef<'a>, text_size: f32, post: &Matrix) -> Option<Scaler<'a>> {
+    pub fn new(
+        bytes: &'static [u8],
+        font: &FontRef<'a>,
+        text_size: f32,
+        post: &Matrix,
+    ) -> Option<Scaler<'a>> {
         let (scale, remaining) = compute_matrices(text_size, post);
         let outlines = font.outline_glyphs();
         // kSlight -> light autohinter (`AutoHintingControl::ForceForGlyf`).
@@ -263,11 +286,20 @@ impl<'a> Scaler<'a> {
             LocationRef::default(),
             HintingOptions {
                 engine: Engine::Auto(Some(styles.clone())),
-                target: Target::Smooth { mode: SmoothMode::Light, symmetric_rendering: true, preserve_linear_metrics: false },
+                target: Target::Smooth {
+                    mode: SmoothMode::Light,
+                    symmetric_rendering: true,
+                    preserve_linear_metrics: false,
+                },
             },
         )
         .ok();
-        Some(Scaler { outlines, instance, remaining, scale })
+        Some(Scaler {
+            outlines,
+            instance,
+            remaining,
+            scale,
+        })
     }
 
     pub fn scale(&self) -> f32 {
@@ -311,11 +343,23 @@ impl<'a> Scaler<'a> {
 
 /// Stroke mask (`internalGetPath` with fFrameWidth >= 0): outline into text-size
 /// space by the inverse 2x2, SkStroke, back by the matrix, rasterized as a fill.
-pub fn stroke_mask(path: &Path, post: &Matrix, params: &super::stroke::StrokeParams) -> Option<GlyphMask> {
+pub fn stroke_mask(
+    path: &Path,
+    post: &Matrix,
+    params: &super::stroke::StrokeParams,
+) -> Option<GlyphMask> {
     let inverse = post.invert()?;
-    let local = if post.is_identity() { path.clone() } else { path.transform(&inverse) };
+    let local = if post.is_identity() {
+        path.clone()
+    } else {
+        path.transform(&inverse)
+    };
     let stroked = super::stroke::stroke_path(&local, params)?;
-    let dev = if post.is_identity() { stroked } else { stroked.transform(post) };
+    let dev = if post.is_identity() {
+        stroked
+    } else {
+        stroked.transform(post)
+    };
     mask_from_path(&dev)
 }
 
@@ -340,7 +384,13 @@ pub fn mask_from_path(path: &Path) -> Option<GlyphMask> {
         let mut a8 = A8Blitter::new(&mut image, width, height);
         aaa::anti_fill_path(&dev, &IRect::from_ltrb(0, 0, width, height), &mut a8);
     }
-    Some(GlyphMask { left, top, width, height, image })
+    Some(GlyphMask {
+        left,
+        top,
+        width,
+        height,
+        image,
+    })
 }
 
 /// `applyLUTToA8Mask` by paint luminance (index = top three bits).
@@ -355,7 +405,12 @@ pub fn apply_gamma(mask: &mut GlyphMask, lum: u8) {
 /// image already include the blur margins.
 pub fn blur_mask(mask: &GlyphMask, sigma: f64) -> Option<GlyphMask> {
     let src = Mask {
-        bounds: IRect::from_ltrb(mask.left, mask.top, mask.left + mask.width, mask.top + mask.height),
+        bounds: IRect::from_ltrb(
+            mask.left,
+            mask.top,
+            mask.left + mask.width,
+            mask.top + mask.height,
+        ),
         row_bytes: mask.width as usize,
         image: mask.image.clone(),
     };
@@ -366,9 +421,16 @@ pub fn blur_mask(mask: &GlyphMask, sigma: f64) -> Option<GlyphMask> {
     }
     let mut image = vec![0u8; (w * h) as usize];
     for y in 0..h as usize {
-        image[y * w as usize..(y + 1) * w as usize].copy_from_slice(&dst.image[y * dst.row_bytes..y * dst.row_bytes + w as usize]);
+        image[y * w as usize..(y + 1) * w as usize]
+            .copy_from_slice(&dst.image[y * dst.row_bytes..y * dst.row_bytes + w as usize]);
     }
-    Some(GlyphMask { left: dst.bounds.left, top: dst.bounds.top, width: w, height: h, image })
+    Some(GlyphMask {
+        left: dst.bounds.left,
+        top: dst.bounds.top,
+        width: w,
+        height: h,
+        image,
+    })
 }
 
 /// Glyph device position (`prepare_for_direct_mask_drawing`): position matrix
@@ -382,7 +444,12 @@ pub struct DevicePos {
 }
 
 /// `pos_matrix` = CTM.preTranslate(origin), without the rounding bias.
-pub fn device_position(pos_matrix: &Matrix, glyph_x: f32, axis_x_only: bool, axis_y_only: bool) -> Option<DevicePos> {
+pub fn device_position(
+    pos_matrix: &Matrix,
+    glyph_x: f32,
+    axis_x_only: bool,
+    axis_y_only: bool,
+) -> Option<DevicePos> {
     // halfAxisSampleFreq: subpixel x -> 1/8, y -> 1/2 (kX).
     let (hx, hy) = if axis_x_only {
         (0.125f32, 0.5f32)
@@ -403,7 +470,12 @@ pub fn device_position(pos_matrix: &Matrix, glyph_x: f32, axis_x_only: bool, axi
     let sub = |v: f32, f: f32| -> u32 { (((v - f) + 1.0) * 4.0) as i32 as u32 & 3 };
     let sub_x = if axis_y_only { 0 } else { sub(p.x, fx) };
     let sub_y = if axis_x_only { 0 } else { sub(p.y, fy) };
-    Some(DevicePos { x: fx as i32, y: fy as i32, sub_x, sub_y })
+    Some(DevicePos {
+        x: fx as i32,
+        y: fy as i32,
+        sub_x,
+        sub_y,
+    })
 }
 
 /// Axis alignment (`computeAxisAlignmentForHText`) for the canvas matrix.
@@ -419,7 +491,12 @@ pub fn axis_alignment(post: &Matrix) -> (bool, bool) {
 
 /// `paintMasks`: draw a glyph mask with the blitter inside the canvas clip.
 pub fn blit_glyph(blitter: &mut dyn Blitter, mask: &GlyphMask, x: i32, y: i32, clip: &IRect) {
-    let bounds = IRect::from_ltrb(mask.left + x, mask.top + y, mask.left + x + mask.width, mask.top + y + mask.height);
+    let bounds = IRect::from_ltrb(
+        mask.left + x,
+        mask.top + y,
+        mask.left + x + mask.width,
+        mask.top + y + mask.height,
+    );
     if let Some(cr) = bounds.intersect(clip) {
         blitter.blit_mask(&mask.image, &bounds, mask.width as usize, &cr);
     }

@@ -8,6 +8,7 @@ members = [
     "crates/pool",
     "crates/dom",
     "crates/cli",
+    "crates/nokk-captcha",
 ]
 
 [workspace.package]
@@ -25,6 +26,7 @@ nokk-cdp = { path = "crates/cdp" }
 nokk-stealth = { path = "crates/stealth" }
 nokk-pool = { path = "crates/pool" }
 nokk-dom = { path = "crates/dom" }
+nokk-captcha = { path = "crates/nokk-captcha" }
 
 # HTML parsing (Phase 3)
 html5ever = "0.39"

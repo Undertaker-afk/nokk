@@ -3,7 +3,7 @@
 //! coverage, convex and general edge walking, `AAAFillPath`.
 
 use super::blit::Blitter;
-use super::edge::{Edge, EdgeBuilder, IRectF, EdgeType, NIL};
+use super::edge::{Edge, EdgeBuilder, EdgeType, IRectF, NIL};
 use super::fixed::*;
 use super::geometry::IRect;
 use super::path::{FillType, Path};
@@ -18,7 +18,11 @@ pub struct AlphaRuns {
 
 impl AlphaRuns {
     pub fn new(width: usize) -> AlphaRuns {
-        let mut r = AlphaRuns { runs: vec![0; width + 1], alpha: vec![0; width + 1], width };
+        let mut r = AlphaRuns {
+            runs: vec![0; width + 1],
+            alpha: vec![0; width + 1],
+            width,
+        };
         r.reset(width);
         r
     }
@@ -69,7 +73,15 @@ impl AlphaRuns {
         }
     }
     /// `SkAlphaRuns::add`: returns the new offsetX.
-    pub fn add(&mut self, x: usize, start_alpha: u8, mut middle_count: usize, stop_alpha: u8, max_value: u8, offset_x: usize) -> usize {
+    pub fn add(
+        &mut self,
+        x: usize,
+        start_alpha: u8,
+        mut middle_count: usize,
+        stop_alpha: u8,
+        max_value: u8,
+        offset_x: usize,
+    ) -> usize {
         let mut off = offset_x;
         let mut last_alpha = off;
         let mut x = x - offset_x;
@@ -85,7 +97,8 @@ impl AlphaRuns {
             off += x;
             x = 0;
             loop {
-                self.alpha[off] = AlphaRuns::catch_overflow(self.alpha[off] as i32 + max_value as i32);
+                self.alpha[off] =
+                    AlphaRuns::catch_overflow(self.alpha[off] as i32 + max_value as i32);
                 let n = self.runs[off] as usize;
                 off += n;
                 middle_count = middle_count.saturating_sub(n);
@@ -177,7 +190,12 @@ impl<'a> Additive<'a> {
         }
     }
 
-    fn run_based(real: &'a mut dyn Blitter, ir: &IRect, clip_bounds: &IRect, safe: bool) -> Additive<'a> {
+    fn run_based(
+        real: &'a mut dyn Blitter,
+        ir: &IRect,
+        clip_bounds: &IRect,
+        safe: bool,
+    ) -> Additive<'a> {
         let sect = ir.intersect(clip_bounds).unwrap_or_default();
         let left = sect.left;
         let width = sect.right - left;
@@ -207,7 +225,8 @@ impl<'a> Additive<'a> {
     /// writing at x = left − 1 stays inside the buffer.
     #[inline]
     fn row_index(&self, y: i32) -> isize {
-        1 + (y - self.mask_bounds.top) as isize * self.mask_row_bytes as isize - self.mask_bounds.left as isize
+        1 + (y - self.mask_bounds.top) as isize * self.mask_row_bytes as isize
+            - self.mask_bounds.left as isize
     }
     #[inline]
     fn mask_at(&mut self, y: i32, x: i32) -> &mut u8 {
@@ -237,7 +256,9 @@ impl<'a> Additive<'a> {
                 if x < self.offset_x as i32 {
                     self.offset_x = 0;
                 }
-                self.offset_x = self.runs.add(x as usize, 0, len as usize, 0, 0, self.offset_x);
+                self.offset_x = self
+                    .runs
+                    .add(x as usize, 0, len as usize, 0, 0, self.offset_x);
                 let xu = x as usize;
                 let mut i = 0usize;
                 while i < len as usize {
@@ -304,7 +325,9 @@ impl<'a> Additive<'a> {
                     self.offset_x = 0;
                 }
                 if x >= 0 && x + width <= self.width {
-                    self.offset_x = self.runs.add(x as usize, 0, width as usize, 0, alpha, self.offset_x);
+                    self.offset_x =
+                        self.runs
+                            .add(x as usize, 0, width as usize, 0, alpha, self.offset_x);
                 }
             }
             Kind::SafeRun => {
@@ -314,7 +337,9 @@ impl<'a> Additive<'a> {
                     self.offset_x = 0;
                 }
                 if x >= 0 && x + width <= self.width {
-                    self.offset_x = self.runs.add(x as usize, 0, width as usize, 0, 0, self.offset_x);
+                    self.offset_x =
+                        self.runs
+                            .add(x as usize, 0, width as usize, 0, 0, self.offset_x);
                     let mut i = x as usize;
                     while (i as i32) < x + width {
                         safely_add_alpha(&mut self.runs.alpha[i], alpha);
@@ -437,7 +462,8 @@ impl<'a> Additive<'a> {
             }
             if !self.runs.is_empty() {
                 let (left, y) = (self.left, self.curr_y);
-                self.real.blit_anti_h(left, y, &self.runs.alpha, &self.runs.runs);
+                self.real
+                    .blit_anti_h(left, y, &self.runs.alpha, &self.runs.runs);
                 let w = self.width as usize;
                 self.runs.reset(w);
                 self.offset_x = 0;
@@ -462,7 +488,8 @@ impl<'a> Additive<'a> {
                 if !clip.is_empty() {
                     // The mask is stored with a +1 bias (see row_index).
                     let mask = &self.mask[1..];
-                    self.real.blit_mask(mask, &bounds, self.mask_row_bytes, &clip);
+                    self.real
+                        .blit_mask(mask, &bounds, self.mask_row_bytes, &clip);
                 }
             }
             _ => self.flush(),
@@ -548,7 +575,15 @@ fn compute_alpha_below_line(alphas: &mut [u8], l: Fixed, r: Fixed, d_y: Fixed, f
     }
 }
 
-fn blit_single_alpha(b: &mut Additive, y: i32, x: i32, alpha: u8, full_alpha: u8, use_mask_row: bool, no_real_blitter: bool) {
+fn blit_single_alpha(
+    b: &mut Additive,
+    y: i32,
+    x: i32,
+    alpha: u8,
+    full_alpha: u8,
+    use_mask_row: bool,
+    no_real_blitter: bool,
+) {
     if use_mask_row {
         if full_alpha == 0xFF && !no_real_blitter {
             *b.mask_at(y, x) = alpha;
@@ -562,7 +597,16 @@ fn blit_single_alpha(b: &mut Additive, y: i32, x: i32, alpha: u8, full_alpha: u8
     }
 }
 
-fn blit_two_alphas(b: &mut Additive, y: i32, x: i32, a1: u8, a2: u8, full_alpha: u8, use_mask_row: bool, no_real_blitter: bool) {
+fn blit_two_alphas(
+    b: &mut Additive,
+    y: i32,
+    x: i32,
+    a1: u8,
+    a2: u8,
+    full_alpha: u8,
+    use_mask_row: bool,
+    no_real_blitter: bool,
+) {
     if use_mask_row {
         safely_add_alpha(b.mask_at(y, x), a1);
         safely_add_alpha(b.mask_at(y, x + 1), a2);
@@ -574,7 +618,15 @@ fn blit_two_alphas(b: &mut Additive, y: i32, x: i32, a1: u8, a2: u8, full_alpha:
     }
 }
 
-fn blit_full_alpha(b: &mut Additive, y: i32, x: i32, len: i32, full_alpha: u8, use_mask_row: bool, no_real_blitter: bool) {
+fn blit_full_alpha(
+    b: &mut Additive,
+    y: i32,
+    x: i32,
+    len: i32,
+    full_alpha: u8,
+    use_mask_row: bool,
+    no_real_blitter: bool,
+) {
     if use_mask_row {
         for i in 0..len {
             safely_add_alpha(b.mask_at(y, x + i), full_alpha);
@@ -605,7 +657,15 @@ fn blit_aaa_trapezoid_row(
     let len = big_r - big_l;
     if len == 1 {
         let alpha = trapezoid_to_alpha(ur - ul, lr - ll);
-        blit_single_alpha(b, y, big_l, alpha, full_alpha, use_mask_row, no_real_blitter);
+        blit_single_alpha(
+            b,
+            y,
+            big_l,
+            alpha,
+            full_alpha,
+            use_mask_row,
+            no_real_blitter,
+        );
         return;
     }
     let lenu = len as usize;
@@ -625,7 +685,13 @@ fn blit_aaa_trapezoid_row(
         alphas[1] = if alphas[1] > a2 { alphas[1] - a2 } else { 0 };
     } else {
         let off = (u_l - big_l) as usize;
-        compute_alpha_below_line(&mut temp[off..], ul - int_to_fixed(u_l), ll - int_to_fixed(u_l), l_dy, full_alpha);
+        compute_alpha_below_line(
+            &mut temp[off..],
+            ul - int_to_fixed(u_l),
+            ll - int_to_fixed(u_l),
+            l_dy,
+            full_alpha,
+        );
         for i in u_l..l_l {
             let k = (i - big_l) as usize;
             if alphas[k] > temp[k] {
@@ -643,11 +709,25 @@ fn blit_aaa_trapezoid_row(
         let second = lr - ur - first;
         let a1 = partial_triangle_to_alpha(first, r_dy);
         let a2 = full_alpha.wrapping_sub(partial_triangle_to_alpha(second, r_dy));
-        alphas[lenu - 2] = if alphas[lenu - 2] > a1 { alphas[lenu - 2] - a1 } else { 0 };
-        alphas[lenu - 1] = if alphas[lenu - 1] > a2 { alphas[lenu - 1] - a2 } else { 0 };
+        alphas[lenu - 2] = if alphas[lenu - 2] > a1 {
+            alphas[lenu - 2] - a1
+        } else {
+            0
+        };
+        alphas[lenu - 1] = if alphas[lenu - 1] > a2 {
+            alphas[lenu - 1] - a2
+        } else {
+            0
+        };
     } else {
         let off = (u_r - big_l) as usize;
-        compute_alpha_above_line(&mut temp[off..], ur - int_to_fixed(u_r), lr - int_to_fixed(u_r), r_dy, full_alpha);
+        compute_alpha_above_line(
+            &mut temp[off..],
+            ur - int_to_fixed(u_r),
+            lr - int_to_fixed(u_r),
+            r_dy,
+            full_alpha,
+        );
         for i in u_r..l_r {
             let k = (i - big_l) as usize;
             if alphas[k] > temp[k] {
@@ -707,15 +787,44 @@ fn blit_trapezoid_row(
             let len = fixed_ceil_to_int(join_left - ul);
             if len == 1 {
                 let alpha = trapezoid_to_alpha(join_left - ul, join_left - ll);
-                blit_single_alpha(b, y, ul >> 16, alpha, full_alpha, use_mask_row, no_real_blitter);
+                blit_single_alpha(
+                    b,
+                    y,
+                    ul >> 16,
+                    alpha,
+                    full_alpha,
+                    use_mask_row,
+                    no_real_blitter,
+                );
             } else if len == 2 {
                 let first = join_left - FIXED_1 - ul;
                 let second = ll - ul - first;
                 let a1 = partial_triangle_to_alpha(first, l_dy);
                 let a2 = full_alpha.wrapping_sub(partial_triangle_to_alpha(second, l_dy));
-                blit_two_alphas(b, y, ul >> 16, a1, a2, full_alpha, use_mask_row, no_real_blitter);
+                blit_two_alphas(
+                    b,
+                    y,
+                    ul >> 16,
+                    a1,
+                    a2,
+                    full_alpha,
+                    use_mask_row,
+                    no_real_blitter,
+                );
             } else {
-                blit_aaa_trapezoid_row(b, y, ul, join_left, ll, join_left, l_dy, MAX_S32, full_alpha, use_mask_row, no_real_blitter);
+                blit_aaa_trapezoid_row(
+                    b,
+                    y,
+                    ul,
+                    join_left,
+                    ll,
+                    join_left,
+                    l_dy,
+                    MAX_S32,
+                    full_alpha,
+                    use_mask_row,
+                    no_real_blitter,
+                );
             }
         }
         if join_left < join_rite {
@@ -733,19 +842,60 @@ fn blit_trapezoid_row(
             let len = fixed_ceil_to_int(lr - join_rite);
             if len == 1 {
                 let alpha = trapezoid_to_alpha(ur - join_rite, lr - join_rite);
-                blit_single_alpha(b, y, join_rite >> 16, alpha, full_alpha, use_mask_row, no_real_blitter);
+                blit_single_alpha(
+                    b,
+                    y,
+                    join_rite >> 16,
+                    alpha,
+                    full_alpha,
+                    use_mask_row,
+                    no_real_blitter,
+                );
             } else if len == 2 {
                 let first = join_rite + FIXED_1 - ur;
                 let second = lr - ur - first;
                 let a1 = full_alpha.wrapping_sub(partial_triangle_to_alpha(first, r_dy));
                 let a2 = partial_triangle_to_alpha(second, r_dy);
-                blit_two_alphas(b, y, join_rite >> 16, a1, a2, full_alpha, use_mask_row, no_real_blitter);
+                blit_two_alphas(
+                    b,
+                    y,
+                    join_rite >> 16,
+                    a1,
+                    a2,
+                    full_alpha,
+                    use_mask_row,
+                    no_real_blitter,
+                );
             } else {
-                blit_aaa_trapezoid_row(b, y, join_rite, ur, join_rite, lr, MAX_S32, r_dy, full_alpha, use_mask_row, no_real_blitter);
+                blit_aaa_trapezoid_row(
+                    b,
+                    y,
+                    join_rite,
+                    ur,
+                    join_rite,
+                    lr,
+                    MAX_S32,
+                    r_dy,
+                    full_alpha,
+                    use_mask_row,
+                    no_real_blitter,
+                );
             }
         }
     } else {
-        blit_aaa_trapezoid_row(b, y, ul, ur, ll, lr, l_dy, r_dy, full_alpha, use_mask_row, no_real_blitter);
+        blit_aaa_trapezoid_row(
+            b,
+            y,
+            ul,
+            ur,
+            ll,
+            lr,
+            l_dy,
+            r_dy,
+            full_alpha,
+            use_mask_row,
+            no_real_blitter,
+        );
     }
 }
 
@@ -797,7 +947,11 @@ impl EdgeList {
         }
         edges.push(h);
         edges.push(t);
-        EdgeList { e: edges, head, tail }
+        EdgeList {
+            e: edges,
+            head,
+            tail,
+        }
     }
 
     #[inline]
@@ -851,7 +1005,13 @@ fn is_smooth_enough_edge(l: &mut EdgeList, this_e: usize, next_e: usize, _stop_y
     abs32(sat_sub(n.dx, e.dx)) <= FIXED_1 && n.lower_y.wrapping_sub(n.upper_y) >= FIXED_1
 }
 
-fn is_smooth_enough(l: &mut EdgeList, left_e: usize, rite_e: usize, curr_e: usize, stop_y: i32) -> bool {
+fn is_smooth_enough(
+    l: &mut EdgeList,
+    left_e: usize,
+    rite_e: usize,
+    curr_e: usize,
+    stop_y: i32,
+) -> bool {
     if l.e[curr_e].upper_y >= left_shift(stop_y, 16) {
         return false;
     }
@@ -868,7 +1028,8 @@ fn is_smooth_enough(l: &mut EdgeList, left_e: usize, rite_e: usize, curr_e: usiz
     if l.e[next_curr_e].upper_x < l.e[curr_e].upper_x {
         std::mem::swap(&mut curr_e, &mut next_curr_e);
     }
-    is_smooth_enough_edge(l, left_e, curr_e, stop_y) && is_smooth_enough_edge(l, rite_e, next_curr_e, stop_y)
+    is_smooth_enough_edge(l, left_e, curr_e, stop_y)
+        && is_smooth_enough_edge(l, rite_e, next_curr_e, stop_y)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -910,7 +1071,9 @@ fn aaa_walk_convex_edges(
         }
         l.e[left_e].go_y(y);
         l.e[rite_e].go_y(y);
-        if l.e[left_e].x > l.e[rite_e].x || (l.e[left_e].x == l.e[rite_e].x && l.e[left_e].dx > l.e[rite_e].dx) {
+        if l.e[left_e].x > l.e[rite_e].x
+            || (l.e[left_e].x == l.e[rite_e].x && l.e[left_e].dx > l.e[rite_e].dx)
+        {
             std::mem::swap(&mut left_e, &mut rite_e);
         }
         let mut local_bot_fixed = l.e[left_e].lower_y.min(l.e[rite_e].lower_y);
@@ -939,16 +1102,31 @@ fn aaa_walk_convex_edges(
             if full_rite >= full_left {
                 if partial_top > 0 {
                     if partial_left > 0 {
-                        b.blit_anti_h1(full_left - 1, full_top - 1, fixed_to_alpha(fixed_mul(partial_top, partial_left)));
+                        b.blit_anti_h1(
+                            full_left - 1,
+                            full_top - 1,
+                            fixed_to_alpha(fixed_mul(partial_top, partial_left)),
+                        );
                     }
-                    b.blit_anti_h_w(full_left, full_top - 1, full_rite - full_left, fixed_to_alpha(partial_top));
+                    b.blit_anti_h_w(
+                        full_left,
+                        full_top - 1,
+                        full_rite - full_left,
+                        fixed_to_alpha(partial_top),
+                    );
                     if partial_rite > 0 {
-                        b.blit_anti_h1(full_rite, full_top - 1, fixed_to_alpha(fixed_mul(partial_top, partial_rite)));
+                        b.blit_anti_h1(
+                            full_rite,
+                            full_top - 1,
+                            fixed_to_alpha(fixed_mul(partial_top, partial_rite)),
+                        );
                     }
                     b.flush_if_y_changed(y, y + partial_top);
                 }
                 if full_bot > full_top
-                    && (full_rite > full_left || fixed_to_alpha(partial_left) > 0 || fixed_to_alpha(partial_rite) > 0)
+                    && (full_rite > full_left
+                        || fixed_to_alpha(partial_left) > 0
+                        || fixed_to_alpha(partial_rite) > 0)
                 {
                     b.real_blit_anti_rect(
                         full_left - 1,
@@ -961,25 +1139,53 @@ fn aaa_walk_convex_edges(
                 }
                 if partial_bot > 0 {
                     if partial_left > 0 {
-                        b.blit_anti_h1(full_left - 1, full_bot, fixed_to_alpha(fixed_mul(partial_bot, partial_left)));
+                        b.blit_anti_h1(
+                            full_left - 1,
+                            full_bot,
+                            fixed_to_alpha(fixed_mul(partial_bot, partial_left)),
+                        );
                     }
-                    b.blit_anti_h_w(full_left, full_bot, full_rite - full_left, fixed_to_alpha(partial_bot));
+                    b.blit_anti_h_w(
+                        full_left,
+                        full_bot,
+                        full_rite - full_left,
+                        fixed_to_alpha(partial_bot),
+                    );
                     if partial_rite > 0 {
-                        b.blit_anti_h1(full_rite, full_bot, fixed_to_alpha(fixed_mul(partial_bot, partial_rite)));
+                        b.blit_anti_h1(
+                            full_rite,
+                            full_bot,
+                            fixed_to_alpha(fixed_mul(partial_bot, partial_rite)),
+                        );
                     }
                 }
             } else {
                 let width = rite - left;
                 if width > 0 {
                     if partial_top > 0 {
-                        b.blit_anti_h_w(full_left - 1, full_top - 1, 1, fixed_to_alpha(fixed_mul(partial_top, width)));
+                        b.blit_anti_h_w(
+                            full_left - 1,
+                            full_top - 1,
+                            1,
+                            fixed_to_alpha(fixed_mul(partial_top, width)),
+                        );
                         b.flush_if_y_changed(y, y + partial_top);
                     }
                     if full_bot > full_top {
-                        b.real_blit_v(full_left - 1, full_top, full_bot - full_top, fixed_to_alpha(width));
+                        b.real_blit_v(
+                            full_left - 1,
+                            full_top,
+                            full_bot - full_top,
+                            fixed_to_alpha(width),
+                        );
                     }
                     if partial_bot > 0 {
-                        b.blit_anti_h_w(full_left - 1, full_bot, 1, fixed_to_alpha(fixed_mul(partial_bot, width)));
+                        b.blit_anti_h_w(
+                            full_left - 1,
+                            full_bot,
+                            1,
+                            fixed_to_alpha(fixed_mul(partial_bot, width)),
+                        );
                     }
                 }
             }
@@ -1076,7 +1282,11 @@ fn aaa_walk_convex_edges(
 
 #[inline]
 fn update_next_next_y(y: Fixed, next_y: Fixed, next_next_y: &mut Fixed) {
-    *next_next_y = if y > next_y && y < *next_next_y { y } else { *next_next_y };
+    *next_next_y = if y > next_y && y < *next_next_y {
+        y
+    } else {
+        *next_next_y
+    };
 }
 
 fn check_intersection(l: &EdgeList, i: usize, next_y: Fixed, next_next_y: &mut Fixed) {
@@ -1182,7 +1392,11 @@ fn aaa_walk_edges(
         }
         update_next_next_y(l.e[edge].upper_y, y, &mut next_next_y);
     }
-    let winding_mask: i32 = if fill_type == FillType::EvenOdd { 1 } else { -1 };
+    let winding_mask: i32 = if fill_type == FillType::EvenOdd {
+        1
+    } else {
+        -1
+    };
     let is_inverse = false;
 
     loop {
@@ -1222,7 +1436,8 @@ fn aaa_walk_edges(
                 let next_rite = right_clip.min(l.e[curr_e].x);
                 let cn = l.e[curr_e].next;
                 let too_close = full_alpha == 0xFF
-                    && (edges_too_close_int(prev_rite, left, l.e[left_e].x) || edges_too_close(l, curr_e, cn, next_y));
+                    && (edges_too_close_int(prev_rite, left, l.e[left_e].x)
+                        || edges_too_close(l, curr_e, cn, next_y));
                 let curr_dy = l.e[curr_e].dy;
                 blit_trapezoid_row(
                     b,
@@ -1324,7 +1539,14 @@ fn aaa_fill_path(
     force_rle: bool,
 ) {
     let clip_f = IRectF(clip_rect.to_rect());
-    let builder = EdgeBuilder::build(path, if path_contained_in_clip { None } else { Some(&clip_f) });
+    let builder = EdgeBuilder::build(
+        path,
+        if path_contained_in_clip {
+            None
+        } else {
+            Some(&clip_f)
+        },
+    );
     let count = builder.edges.len();
     if count == 0 {
         return;
@@ -1344,7 +1566,15 @@ fn aaa_fill_path(
         right_bound = right_bound.min(int_to_fixed(ir.right));
     }
     if path.convexity.is_convex() && count >= 2 {
-        aaa_walk_convex_edges(&mut list, b, start_y, stop_y, left_bound, right_bound, is_using_mask);
+        aaa_walk_convex_edges(
+            &mut list,
+            b,
+            start_y,
+            stop_y,
+            left_bound,
+            right_bound,
+            is_using_mask,
+        );
     } else {
         let skip_intersect = path.pts.len() > ((stop_y - start_y) * 2) as usize;
         aaa_walk_edges(
@@ -1363,7 +1593,12 @@ fn aaa_fill_path(
 }
 
 /// `SkScan::AAAFillPath(path, blitter, ir, clipBounds, forceRLE=false)`.
-pub fn aaa_fill_path_entry(path: &Path, blitter: &mut dyn Blitter, ir: &IRect, clip_bounds: &IRect) {
+pub fn aaa_fill_path_entry(
+    path: &Path,
+    blitter: &mut dyn Blitter,
+    ir: &IRect,
+    clip_bounds: &IRect,
+) {
     let contained_in_clip = clip_bounds.contains(ir);
     if Additive::can_handle_rect(ir) {
         // try_blit_fat_anti_rect
@@ -1379,15 +1614,42 @@ pub fn aaa_fill_path_entry(path: &Path, blitter: &mut dyn Blitter, ir: &IRect, c
             }
         }
         let mut add = Additive::mask(blitter, ir, clip_bounds);
-        aaa_fill_path(path, clip_bounds, &mut add, ir.top, ir.bottom, contained_in_clip, true, false);
+        aaa_fill_path(
+            path,
+            clip_bounds,
+            &mut add,
+            ir.top,
+            ir.bottom,
+            contained_in_clip,
+            true,
+            false,
+        );
         add.finish();
     } else if path.convexity.is_convex() {
         let mut add = Additive::run_based(blitter, ir, clip_bounds, false);
-        aaa_fill_path(path, clip_bounds, &mut add, ir.top, ir.bottom, contained_in_clip, false, false);
+        aaa_fill_path(
+            path,
+            clip_bounds,
+            &mut add,
+            ir.top,
+            ir.bottom,
+            contained_in_clip,
+            false,
+            false,
+        );
         add.finish();
     } else {
         let mut add = Additive::run_based(blitter, ir, clip_bounds, true);
-        aaa_fill_path(path, clip_bounds, &mut add, ir.top, ir.bottom, contained_in_clip, false, false);
+        aaa_fill_path(
+            path,
+            clip_bounds,
+            &mut add,
+            ir.top,
+            ir.bottom,
+            contained_in_clip,
+            false,
+            false,
+        );
         add.finish();
     }
 }
@@ -1401,7 +1663,9 @@ pub fn anti_fill_path(path: &Path, clip: &IRect, blitter: &mut dyn Blitter) {
     if ir.is_empty() {
         return;
     }
-    let Some(_clipped) = ir.intersect(clip) else { return };
+    let Some(_clipped) = ir.intersect(clip) else {
+        return;
+    };
     // SkScanClipper: when the path bounds exceed the window horizontally,
     // the blitter is wrapped in SkRectClipBlitter, which changes the arithmetic
     // (blitAntiH2/V2 go through blitAntiH with runs).

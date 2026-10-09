@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "family": "hcaptcha",
+  "active": "hcaptcha-v1",
+  "models": [
+    {
+      "name": "hcaptcha-v1",
+      "path": "hcaptcha-v1/model.onnx",
+      "sha256": "",
+      "labels": "canonical top-30, see src/taxonomy.rs",
+      "thresholds": "see taxonomy::threshold_for",
+      "notes": "placeholder entry, no weights shipped"
+    }
+  ]
+}

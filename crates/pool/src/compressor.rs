@@ -232,7 +232,11 @@ pub fn process(
         for _ in 0..DIVISION_FRAMES {
             let undelayed = input[frame_index];
             pre_delay[write_index] = undelayed;
-            let abs_input = if undelayed > 0.0 { undelayed } else { -undelayed };
+            let abs_input = if undelayed > 0.0 {
+                undelayed
+            } else {
+                -undelayed
+            };
             let shaped_input = saturate(abs_input, k, &curve);
             let attenuation = if abs_input <= 0.0001 {
                 1.0
@@ -298,7 +302,11 @@ mod tests {
         let silence = vec![0.0f32; 1024];
         let got = process(&silence, 44100.0, -50.0, 40.0, 12.0, 0.0, 0.25);
         assert_eq!(got.samples.len(), 1024);
-        assert!(got.reduction.is_finite(), "reduction is finite: {}", got.reduction);
+        assert!(
+            got.reduction.is_finite(),
+            "reduction is finite: {}",
+            got.reduction
+        );
         assert!(
             got.samples.iter().all(|v| v.abs() < 1e-6),
             "silence in, silence out"

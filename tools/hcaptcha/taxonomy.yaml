@@ -1,0 +1,126 @@
+# hCaptcha taxonomy: canonical top-30 first (must match LABELS in
+# crates/nokk-captcha/src/taxonomy.rs + manifest.json "canonical top-30"),
+# then extended prompts (OOV fallback: strict threshold, CLIP path only).
+# Key: canonical prompt_norm. Aliases map raw prompt words to the key.
+# threshold_init mirrors taxonomy::threshold_for; train.py refines per-label
+# thresholds on the calib split (sweep 0.05..0.95, argmax F1) + temperature.
+# Prompt templates for CLIP fallback (see MODEL_CARD.md): mean-pool over
+#   "a photo of a {label} on street" (primary), "a photo of a {label}", ...
+# Augmentation note: train.py applies RandomMaskOverlay (Circle/Square/Bar,
+# p=0.5) because mask overlays drop plain ViT 50-80pp; do not remove it.
+# Mining note: round-1 oversamples mined FP/FN (topk 256/class, hard_ratio 0.5).
+- key: truck
+  aliases: [truck, trucks, lorry, lorries, pickup, fire truck]
+  threshold_init: 0.60
+- key: car
+  aliases: [car, cars, automobile, sedan]
+  threshold_init: 0.55
+- key: bus
+  aliases: [bus, buses, coach]
+  threshold_init: 0.60
+- key: motorcycle
+  aliases: [motorcycle, motorbike, motorbikes, motor bike, bike-motor]
+  threshold_init: 0.60
+- key: bicycle
+  aliases: [bicycle, bike, bikes, cycle]
+  threshold_init: 0.60
+- key: airplane
+  aliases: [airplane, airplanes, aeroplane, aeroplanes, plane, planes, aircraft]
+  threshold_init: 0.60
+- key: helicopter
+  aliases: [helicopter, chopper]
+  threshold_init: 0.70
+- key: boat
+  aliases: [boat, ship, ships, ferry, yacht]
+  threshold_init: 0.60
+- key: train
+  aliases: [train, subway, locomotive]
+  threshold_init: 0.60
+- key: tram
+  aliases: [tram, streetcar, trolley]
+  threshold_init: 0.70
+- key: dog
+  aliases: [dog, dogs, puppy, puppies, hound]
+  threshold_init: 0.55
+- key: cat
+  aliases: [cat, cats, kitten, kittens]
+  threshold_init: 0.55
+- key: bird
+  aliases: [bird, birds, seagull, dove]
+  threshold_init: 0.60
+- key: horse
+  aliases: [horse, horses, pony]
+  threshold_init: 0.60
+- key: cow
+  aliases: [cow, cows, calf]
+  threshold_init: 0.60
+- key: sheep
+  aliases: [sheep, lamb]
+  threshold_init: 0.60
+- key: lion
+  aliases: [lion, lions]
+  threshold_init: 0.65
+- key: tiger
+  aliases: [tiger, tigers]
+  threshold_init: 0.65
+- key: bear
+  aliases: [bear, bears, cub]
+  threshold_init: 0.65
+- key: elephant
+  aliases: [elephant, elephants]
+  threshold_init: 0.65
+- key: zebra
+  aliases: [zebra, zebras]
+  threshold_init: 0.65
+- key: giraffe
+  aliases: [giraffe, giraffes]
+  threshold_init: 0.65
+- key: monkey
+  aliases: [monkey, monkeys, ape]
+  threshold_init: 0.65
+- key: rabbit
+  aliases: [rabbit, rabbits, bunny]
+  threshold_init: 0.70
+- key: deer
+  aliases: [deer, stag]
+  threshold_init: 0.70
+- key: frog
+  aliases: [frog, frogs, toad]
+  threshold_init: 0.70
+- key: fish
+  aliases: [fish, fishes]
+  threshold_init: 0.70
+- key: shark
+  aliases: [shark, sharks]
+  threshold_init: 0.75
+- key: whale
+  aliases: [whale, whales, dolphin]
+  threshold_init: 0.75
+- key: snake
+  aliases: [snake, snakes, crocodile]
+  threshold_init: 0.75
+# Extended (less frequent / OOV: strict 0.80 default, CLIP fallback only).
+- key: traffic_light
+  aliases: [traffic light, stoplight, signal]
+  threshold_init: 0.80
+- key: bicycle_rack
+  aliases: [bicycle rack]
+  threshold_init: 0.80
+- key: bridge
+  aliases: [bridge]
+  threshold_init: 0.80
+- key: motorbus_stop
+  aliases: [bus stop]
+  threshold_init: 0.80
+- key: pedestrian
+  aliases: [pedestrian, person, people, walker]
+  threshold_init: 0.80
+- key: tree
+  aliases: [tree, trees, palm]
+  threshold_init: 0.80
+- key: building
+  aliases: [building, house, skyscraper]
+  threshold_init: 0.80
+- key: mountain
+  aliases: [mountain, hill]
+  threshold_init: 0.80

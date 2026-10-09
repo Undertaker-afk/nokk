@@ -101,7 +101,9 @@ fn snapshot_for(bootstrap: &str) -> bool {
     if std::env::var_os("NOKK_SNAP_CUT").is_some() {
         return SNAPSHOT.get().is_some();
     }
-    SNAPSHOT.get().is_some_and(|s| s.bootstrap.len() == bootstrap.len() && s.bootstrap == bootstrap)
+    SNAPSHOT
+        .get()
+        .is_some_and(|s| s.bootstrap.len() == bootstrap.len() && s.bootstrap == bootstrap)
 }
 
 const NORMALIZE_FOR_SNAPSHOT: &str = r#"(() => {
@@ -171,7 +173,10 @@ pub fn build_snapshot(bootstrap: &str) -> Result<usize, String> {
             let key = format!("push(['{layer}'");
             match bootstrap.find(&key) {
                 Some(i) => {
-                    let end = bootstrap[i..].find('\n').map(|j| i + j).unwrap_or(bootstrap.len());
+                    let end = bootstrap[i..]
+                        .find('\n')
+                        .map(|j| i + j)
+                        .unwrap_or(bootstrap.len());
                     cut = bootstrap[..end].to_string();
                     &cut
                 }
@@ -188,7 +193,10 @@ pub fn build_snapshot(bootstrap: &str) -> Result<usize, String> {
             if bytes.len() > 1024 {
                 let data: &'static [u8] = Box::leak(bytes.into_boxed_slice());
                 let size = data.len();
-                let _ = SNAPSHOT.set(Snapshot { bootstrap: bootstrap.to_string(), data });
+                let _ = SNAPSHOT.set(Snapshot {
+                    bootstrap: bootstrap.to_string(),
+                    data,
+                });
                 tracing::info!(bytes = size, ms = t0.elapsed().as_millis() as u64, path = %path.display(), "v8 snapshot loaded from cache");
                 return Ok(size);
             }
@@ -206,7 +214,8 @@ pub fn build_snapshot(bootstrap: &str) -> Result<usize, String> {
             let context = crate::natives::new_page_context(scope);
             {
                 let cs = &mut v8::ContextScope::new(scope, context);
-                let here: Vec<String> = serde_json::from_str(&run_script(cs, GLOBAL_NAMES)?).unwrap_or_default();
+                let here: Vec<String> =
+                    serde_json::from_str(&run_script(cs, GLOBAL_NAMES)?).unwrap_or_default();
                 let late: Vec<&String> = plain_names.iter().filter(|n| !here.contains(n)).collect();
                 tracing::debug!(?late, "names V8 adds after restore");
                 let late = serde_json::to_string(&late).unwrap_or_else(|_| "[]".into());
@@ -231,8 +240,15 @@ pub fn build_snapshot(bootstrap: &str) -> Result<usize, String> {
     };
     let data: &'static [u8] = Box::leak(blob.to_vec().into_boxed_slice());
     let size = data.len();
-    let _ = SNAPSHOT.set(Snapshot { bootstrap: bootstrap.to_string(), data });
-    tracing::info!(bytes = size, ms = t0.elapsed().as_millis() as u64, "v8 snapshot built");
+    let _ = SNAPSHOT.set(Snapshot {
+        bootstrap: bootstrap.to_string(),
+        data,
+    });
+    tracing::info!(
+        bytes = size,
+        ms = t0.elapsed().as_millis() as u64,
+        "v8 snapshot built"
+    );
     if let Some(path) = cache {
         // Atomic: a process starting at the same moment reads either the whole file
         // or none.
@@ -252,16 +268,23 @@ pub fn build_snapshot(bootstrap: &str) -> Result<usize, String> {
 /// just written.
 fn prune_snapshot_cache(current: &std::path::Path, keep: usize) {
     let Some(dir) = current.parent() else { return };
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
     let mut files: Vec<(std::time::SystemTime, std::path::PathBuf)> = rd
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("snapshot-") && (n.ends_with(".bin") || n.contains(".tmp")))
+            p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                n.starts_with("snapshot-") && (n.ends_with(".bin") || n.contains(".tmp"))
+            })
         })
-        .filter_map(|p| std::fs::metadata(&p).and_then(|m| m.modified()).ok().map(|t| (t, p)))
+        .filter_map(|p| {
+            std::fs::metadata(&p)
+                .and_then(|m| m.modified())
+                .ok()
+                .map(|t| (t, p))
+        })
         .collect();
     files.sort_by(|a, b| b.0.cmp(&a.0));
     for (_, p) in files.into_iter().skip(keep) {
@@ -283,22 +306,46 @@ fn snapshot_cache_path(bootstrap: &str) -> Option<std::path::PathBuf> {
     }
     let dir = std::env::var_os("NOKK_CACHE_DIR")
         .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("XDG_CACHE_HOME").map(|d| std::path::PathBuf::from(d).join("nokk")))
-        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache").join("nokk")))
-        .or_else(|| std::env::var_os("LOCALAPPDATA").map(|d| std::path::PathBuf::from(d).join("nokk")))?;
+        .or_else(|| {
+            std::env::var_os("XDG_CACHE_HOME").map(|d| std::path::PathBuf::from(d).join("nokk"))
+        })
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(|h| std::path::PathBuf::from(h).join(".cache").join("nokk"))
+        })
+        .or_else(|| {
+            std::env::var_os("LOCALAPPDATA").map(|d| std::path::PathBuf::from(d).join("nokk"))
+        })?;
     let exe = std::env::current_exe().ok()?;
     let meta = std::fs::metadata(&exe).ok()?;
-    let mtime = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
+    let mtime = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
     let mut h = Sha256::new();
     h.update(bootstrap.as_bytes());
-    h.update(std::env::var("NOKK_V8_FLAGS").unwrap_or_default().as_bytes());
+    h.update(
+        std::env::var("NOKK_V8_FLAGS")
+            .unwrap_or_default()
+            .as_bytes(),
+    );
     h.update(format!("{}|{}|{}", exe.display(), meta.len(), mtime).as_bytes());
-    let hex: String = h.finalize().iter().take(12).map(|b| format!("{b:02x}")).collect();
+    let hex: String = h
+        .finalize()
+        .iter()
+        .take(12)
+        .map(|b| format!("{b:02x}"))
+        .collect();
     Some(dir.join(format!("snapshot-{hex}.bin")))
 }
 
 /// Context from the snapshot (if the bootstrap matches), with natives and bootstrap already applied.
-fn context_from_snapshot<'s>(scope: &mut v8::PinScope<'s, '_, ()>, bootstrap: &str) -> Option<v8::Local<'s, v8::Context>> {
+fn context_from_snapshot<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    bootstrap: &str,
+) -> Option<v8::Local<'s, v8::Context>> {
     if !snapshot_for(bootstrap) {
         return None;
     }
@@ -330,7 +377,8 @@ pub(crate) fn init_platform() {
             if std::env::var_os("TZ").is_some_and(|v| v.is_empty()) {
                 std::env::remove_var("TZ");
             }
-            if std::env::var_os("TZ").is_none() && !std::path::Path::new("/etc/localtime").exists() {
+            if std::env::var_os("TZ").is_none() && !std::path::Path::new("/etc/localtime").exists()
+            {
                 std::env::set_var("TZ", "America/New_York");
             }
         }
@@ -338,7 +386,9 @@ pub(crate) fn init_platform() {
         // date/number formats, and the stub answers differently from Chrome. An
         // external file wins, so the data can follow a V8 upgrade without a rebuild.
         for path in icu_candidates() {
-            let Ok(bytes) = std::fs::read(&path) else { continue };
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
             let leaked: &'static [u8] = Box::leak(bytes.into_boxed_slice());
             match v8::icu::set_common_data_78(leaked) {
                 Ok(()) => {
@@ -409,16 +459,26 @@ impl MemoryPressure {
 
     pub(crate) fn after_job(&mut self, isolate: &mut Isolate) {
         let now = std::time::Instant::now();
-        if self.checked.is_some_and(|t| now.duration_since(t) < std::time::Duration::from_secs(1)) {
+        if self
+            .checked
+            .is_some_and(|t| now.duration_since(t) < std::time::Duration::from_secs(1))
+        {
             return;
         }
         self.checked = Some(now);
-        if self.collected.is_some_and(|t| now.duration_since(t) < std::time::Duration::from_secs(2)) {
+        if self
+            .collected
+            .is_some_and(|t| now.duration_since(t) < std::time::Duration::from_secs(2))
+        {
             return;
         }
-        let Some(share) = available_share() else { return };
+        let Some(share) = available_share() else {
+            return;
+        };
         if share < Self::LOW {
-            isolate.isolate.memory_pressure_notification(v8::MemoryPressureLevel::Critical);
+            isolate
+                .isolate
+                .memory_pressure_notification(v8::MemoryPressureLevel::Critical);
             self.collected = Some(std::time::Instant::now());
             tracing::debug!(target: "nokk::heap", share, "memory pressure: collected");
         }
@@ -431,7 +491,10 @@ fn available_share() -> Option<f64> {
     {
         let s = std::fs::read_to_string("/proc/meminfo").ok()?;
         let field = |name: &str| -> Option<f64> {
-            s.lines().find_map(|l| l.strip_prefix(name)).and_then(|r| r.split_whitespace().next()).and_then(|v| v.parse::<f64>().ok())
+            s.lines()
+                .find_map(|l| l.strip_prefix(name))
+                .and_then(|r| r.split_whitespace().next())
+                .and_then(|v| v.parse::<f64>().ok())
         };
         let (avail, total) = (field("MemAvailable:")?, field("MemTotal:")?);
         (total > 0.0).then(|| avail / total)
@@ -520,7 +583,10 @@ impl Isolate {
         if let Ok(s) = std::fs::read_to_string("/proc/meminfo") {
             for line in s.lines() {
                 if let Some(rest) = line.strip_prefix("MemTotal:") {
-                    if let Some(kb) = rest.split_whitespace().next().and_then(|n| n.parse::<u64>().ok())
+                    if let Some(kb) = rest
+                        .split_whitespace()
+                        .next()
+                        .and_then(|n| n.parse::<u64>().ok())
                     {
                         return kb * 1024;
                     }
@@ -669,8 +735,13 @@ impl Isolate {
     pub fn prewarm_realms(&mut self, bootstrap: &str, n: usize) {
         // Built ahead of a request that may not come: they expire if none does
         // (see `top_up_realms`).
-        self.isolate.set_slot(crate::natives::RealmPrewarm(std::time::Instant::now()));
-        if self.isolate.get_slot::<crate::natives::RealmBootstrap>().is_none() {
+        self.isolate
+            .set_slot(crate::natives::RealmPrewarm(std::time::Instant::now()));
+        if self
+            .isolate
+            .get_slot::<crate::natives::RealmBootstrap>()
+            .is_none()
+        {
             self.isolate
                 .set_slot(crate::natives::RealmBootstrap(bootstrap.to_string()));
         }
@@ -704,8 +775,13 @@ impl Isolate {
                 }
             };
             tracing::debug!(target: "nokk::build", kind = "spare realm", ms = t0.elapsed().as_millis() as u64, thread = ?std::thread::current().name(), "context built");
-            if self.isolate.get_slot::<crate::natives::SpareRealms>().is_none() {
-                self.isolate.set_slot(crate::natives::SpareRealms::default());
+            if self
+                .isolate
+                .get_slot::<crate::natives::SpareRealms>()
+                .is_none()
+            {
+                self.isolate
+                    .set_slot(crate::natives::SpareRealms::default());
             }
             if let Some(s) = self.isolate.get_slot_mut::<crate::natives::SpareRealms>() {
                 s.0.push(ready);
@@ -746,8 +822,13 @@ impl Isolate {
                 }
             };
             tracing::debug!(target: "nokk::build", kind = "spare context", ms = t0.elapsed().as_millis() as u64, thread = ?std::thread::current().name(), "context built");
-            if self.isolate.get_slot::<crate::natives::SpareContexts>().is_none() {
-                self.isolate.set_slot(crate::natives::SpareContexts::default());
+            if self
+                .isolate
+                .get_slot::<crate::natives::SpareContexts>()
+                .is_none()
+            {
+                self.isolate
+                    .set_slot(crate::natives::SpareContexts::default());
             }
             if let Some(s) = self.isolate.get_slot_mut::<crate::natives::SpareContexts>() {
                 s.0.push(ready);
@@ -766,7 +847,11 @@ impl Isolate {
         let Some(global) = spare else {
             return self.create_context(bootstrap);
         };
-        if self.isolate.get_slot::<crate::natives::RealmBootstrap>().is_none() {
+        if self
+            .isolate
+            .get_slot::<crate::natives::RealmBootstrap>()
+            .is_none()
+        {
             self.isolate
                 .set_slot(crate::natives::RealmBootstrap(bootstrap.to_string()));
         }
@@ -806,7 +891,11 @@ impl Isolate {
         // into one for pristine natives (`contentWindow.eval`); building that
         // realm has to happen synchronously, inside the property access, which is
         // why it is a native binding rather than a round trip through the driver.
-        if self.isolate.get_slot::<crate::natives::RealmBootstrap>().is_none() {
+        if self
+            .isolate
+            .get_slot::<crate::natives::RealmBootstrap>()
+            .is_none()
+        {
             self.isolate
                 .set_slot(crate::natives::RealmBootstrap(bootstrap.to_string()));
         }
@@ -830,7 +919,8 @@ impl Isolate {
                 }
                 run_script(scope, bootstrap)?;
                 if audit {
-                    if let Ok(v) = run_script(scope, "JSON.stringify(globalThis.__pt_auditCounts)") {
+                    if let Ok(v) = run_script(scope, "JSON.stringify(globalThis.__pt_auditCounts)")
+                    {
                         eprintln!("[audit natives] {v}");
                     }
                 }
@@ -853,7 +943,10 @@ impl Isolate {
         if let Ok(at) = std::env::var("NOKK_HEAP_SNAPSHOT_AT") {
             if at.parse::<usize>().ok() == Some(self.contexts.len()) {
                 let mut out = Vec::new();
-                self.isolate.take_heap_snapshot(|chunk| { out.extend_from_slice(chunk); true });
+                self.isolate.take_heap_snapshot(|chunk| {
+                    out.extend_from_slice(chunk);
+                    true
+                });
                 let _ = std::fs::write(format!("nokk-heap-{at}.heapsnapshot"), out);
             }
         }
@@ -928,8 +1021,12 @@ impl Isolate {
         let requests = module.get_module_requests();
         let mut out = Vec::new();
         for i in 0..requests.length() {
-            let Some(req) = requests.get(scope, i) else { continue };
-            let Ok(req) = v8::Local::<v8::ModuleRequest>::try_from(req) else { continue };
+            let Some(req) = requests.get(scope, i) else {
+                continue;
+            };
+            let Ok(req) = v8::Local::<v8::ModuleRequest>::try_from(req) else {
+                continue;
+            };
             out.push(req.get_specifier().to_rust_string_lossy(scope));
         }
         let hash = module.get_identity_hash().get();
@@ -970,12 +1067,16 @@ impl Isolate {
     /// Same, but only for the listed contexts; the rest stay queued. One thread
     /// hosts contexts of different pages, and a frame moved to another thread must
     /// not take their `import()`s.
-    pub fn drain_dynamic_imports_for(&mut self, indices: &[usize]) -> Vec<(u32, usize, String, String)> {
+    pub fn drain_dynamic_imports_for(
+        &mut self,
+        indices: &[usize],
+    ) -> Vec<(u32, usize, String, String)> {
         let Some(d) = self.isolate.get_slot_mut::<DynamicImports>() else {
             return Vec::new();
         };
-        let (mine, rest): (Vec<_>, Vec<_>) =
-            std::mem::take(&mut d.queue).into_iter().partition(|e| indices.contains(&e.1));
+        let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut d.queue)
+            .into_iter()
+            .partition(|e| indices.contains(&e.1));
         d.queue = rest;
         mine
     }
@@ -1018,8 +1119,9 @@ impl Isolate {
                         resolver.resolve(scope, namespace);
                     }
                     None => {
-                        let msg = v8::String::new(scope, &format!("module {url} was never compiled"))
-                            .ok_or("string")?;
+                        let msg =
+                            v8::String::new(scope, &format!("module {url} was never compiled"))
+                                .ok_or("string")?;
                         let err = v8::Exception::type_error(scope, msg);
                         resolver.reject(scope, err);
                     }
@@ -1117,7 +1219,10 @@ impl Isolate {
         // A callback that ran past the limit is stopped, not the page: Chrome
         // lets a slow script finish, and failing the turn failed the whole load.
         if stopped && result.is_err() {
-            tracing::warn!(limit_ms = Self::eval_timeout().as_millis() as u64, "a page timer ran too long and was stopped");
+            tracing::warn!(
+                limit_ms = Self::eval_timeout().as_millis() as u64,
+                "a page timer ran too long and was stopped"
+            );
             return Ok(1);
         }
         result
@@ -1330,7 +1435,10 @@ fn compile_module<'s>(
     v8::script_compiler::compile_module(scope, &mut src)
 }
 
-fn trusted_script_text<'s>(scope: &mut v8::PinScope<'s, '_>, source: v8::Local<'s, v8::Value>) -> Option<v8::Local<'s, v8::String>> {
+fn trusted_script_text<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Value>,
+) -> Option<v8::Local<'s, v8::String>> {
     if source.is_string() || !source.is_object() {
         return None;
     }
@@ -1338,7 +1446,11 @@ fn trusted_script_text<'s>(scope: &mut v8::PinScope<'s, '_>, source: v8::Local<'
     let name = v8::String::new(scope, crate::natives::TRUSTED_SCRIPT_KEY)?;
     let key = v8::Private::for_api(scope, Some(name));
     let v = obj.get_private(scope, key)?;
-    if v.is_string() { v.to_string(scope) } else { None }
+    if v.is_string() {
+        v.to_string(scope)
+    } else {
+        None
+    }
 }
 
 /// What to compile instead of an `eval`/`Function` string in a CSP context
@@ -1372,14 +1484,24 @@ fn modify_codegen<'s, 'i>(
                     // throw goes inside it (fires on call); direct eval throws immediately.
                     let src = source.to_rust_string_lossy(scope);
                     let throw = "throw new EvalError(\"Evaluating a string as JavaScript violates this document's Trusted Type assignment requirements.\");";
-                    let js = if src.starts_with("(function anonymous(") || src.starts_with("(async function anonymous(") || src.starts_with("(function* anonymous(") || src.starts_with("(async function* anonymous(") {
-                        let head = src.find("\n) {\n").map(|i| &src[..i + 5]).unwrap_or("(function anonymous(\n) {\n");
+                    let js = if src.starts_with("(function anonymous(")
+                        || src.starts_with("(async function anonymous(")
+                        || src.starts_with("(function* anonymous(")
+                        || src.starts_with("(async function* anonymous(")
+                    {
+                        let head = src
+                            .find("\n) {\n")
+                            .map(|i| &src[..i + 5])
+                            .unwrap_or("(function anonymous(\n) {\n");
                         format!("{head}{throw}\n}})")
                     } else {
                         format!("(function () {{ {throw} }})()")
                     };
                     let modified = v8::String::new(scope, &js);
-                    return v8::ModifyCodeGenerationFromStringsResult { codegen_allowed: true, modified_source: modified };
+                    return v8::ModifyCodeGenerationFromStringsResult {
+                        codegen_allowed: true,
+                        modified_source: modified,
+                    };
                 }
             }
         }
@@ -1394,7 +1516,10 @@ fn modify_codegen<'s, 'i>(
         // natives::TRUSTED_SCRIPT_KEY); eval returns other objects unchanged.
         let _ = is_code_like;
         let modified = tt_source.or_else(|| trusted_script_text(scope, source));
-        return v8::ModifyCodeGenerationFromStringsResult { codegen_allowed: true, modified_source: modified };
+        return v8::ModifyCodeGenerationFromStringsResult {
+            codegen_allowed: true,
+            modified_source: modified,
+        };
     };
     let mut quoted = String::with_capacity(msg.len() + 2);
     quoted.push('"');
@@ -1412,10 +1537,17 @@ fn modify_codegen<'s, 'i>(
     quoted.push('"');
     // Under Trusted Types the EvalError text is always TT's: Blink sets the
     // codegen message once per document and TT overrides it.
-    let quoted = if tt_on { "\"Evaluating a string as JavaScript violates this document's Trusted Type assignment requirements.\"".to_string() } else { quoted };
+    let quoted = if tt_on {
+        "\"Evaluating a string as JavaScript violates this document's Trusted Type assignment requirements.\"".to_string()
+    } else {
+        quoted
+    };
     let js = format!("(function () {{ try {{ if (typeof __pt_cspEvalViolation === 'function') __pt_cspEvalViolation(); }} catch (e) {{}} throw new EvalError({quoted}); }})()");
     let modified = v8::String::new(scope, &js);
-    v8::ModifyCodeGenerationFromStringsResult { codegen_allowed: true, modified_source: modified }
+    v8::ModifyCodeGenerationFromStringsResult {
+        codegen_allowed: true,
+        modified_source: modified,
+    }
 }
 
 /// The error stack as the page sees it. V8 calls this on the first read of
@@ -1500,12 +1632,18 @@ unsafe extern "C" fn import_meta(
 ) {
     v8::callback_scope!(unsafe scope, context);
     let hash = module.get_identity_hash().get();
-    let Some(key) = scope.get_slot::<ModuleRegistry>().and_then(|r| r.by_hash.get(&hash).cloned())
+    let Some(key) = scope
+        .get_slot::<ModuleRegistry>()
+        .and_then(|r| r.by_hash.get(&hash).cloned())
     else {
         return;
     };
     // The key is "{context index}:{url}"; the page only ever sees the URL.
-    let url = key.split_once(':').map(|(_, u)| u).unwrap_or(&key).to_string();
+    let url = key
+        .split_once(':')
+        .map(|(_, u)| u)
+        .unwrap_or(&key)
+        .to_string();
     let (Some(name), Some(value)) = (v8::String::new(scope, "url"), v8::String::new(scope, &url))
     else {
         return;
@@ -1605,10 +1743,18 @@ fn exception_message(
                 .and_then(|o| {
                     let key = v8::String::new(tc, "stack")?;
                     let v = o.get(tc, key.into())?;
-                    if v.is_string() { Some(v.to_rust_string_lossy(tc)) } else { None }
+                    if v.is_string() {
+                        Some(v.to_rust_string_lossy(tc))
+                    } else {
+                        None
+                    }
                 })
                 .unwrap_or_default();
-            if stack.len() > msg.len() { stack } else { msg }
+            if stack.len() > msg.len() {
+                stack
+            } else {
+                msg
+            }
         }
         None => "unknown JS error".to_string(),
     }
@@ -1624,16 +1770,20 @@ fn exception_message(
 fn gc_hint_due() -> bool {
     use std::cell::Cell;
     thread_local! { static LAST: Cell<Option<std::time::Instant>> = const { Cell::new(None) }; }
-    let Some(every) = std::env::var("NOKK_GC_HINT_MS").ok().and_then(|v| v.parse::<u64>().ok()) else {
+    let Some(every) = std::env::var("NOKK_GC_HINT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+    else {
         return false;
     };
     LAST.with(|last| {
         let now = std::time::Instant::now();
-        let due = last.get().map_or(true, |t| now.duration_since(t).as_millis() as u64 >= every);
+        let due = last
+            .get()
+            .map_or(true, |t| now.duration_since(t).as_millis() as u64 >= every);
         if due {
             last.set(Some(now));
         }
         due
     })
 }
-

@@ -29,11 +29,11 @@ use tokio::sync::{mpsc, oneshot, OwnedSemaphorePermit, Semaphore};
 
 #[cfg(feature = "render")]
 mod canvas;
-pub mod skia;
 mod compressor;
-mod wavetable;
 mod isolate;
 mod natives;
+pub mod skia;
+mod wavetable;
 // Some GL ops (viewport, …) are the API surface the `__pt_gl*` natives wire next;
 // allow them ahead of that so the backend can land and be tested on its own.
 #[cfg(feature = "webgl")]
@@ -556,10 +556,16 @@ mod tests {
         let next = pool.pick_worker();
         assert_eq!(next, second, "the surviving worker serves the next context");
         // A gone id fails dispatch instead of landing somewhere else.
-        let gone = if next.0 == 0 { WorkerId(1) } else { WorkerId(0) };
+        let gone = if next.0 == 0 {
+            WorkerId(1)
+        } else {
+            WorkerId(0)
+        };
         let out = pool.dispatch(gone, |iso| iso.worker_id().0).await;
-        assert!(matches!(out, Err(PoolError::WorkerGone(_)) | Ok(_)),
-            "a drained id must never run on another worker's isolate");
+        assert!(
+            matches!(out, Err(PoolError::WorkerGone(_)) | Ok(_)),
+            "a drained id must never run on another worker's isolate"
+        );
     }
 
     #[tokio::test]
@@ -655,7 +661,10 @@ mod tests {
             .await
             .expect("worker hung: run_event_loop was not terminated")
             .unwrap();
-        assert!(out.is_ok(), "a stopped callback must not fail the turn: {out:?}");
+        assert!(
+            out.is_ok(),
+            "a stopped callback must not fail the turn: {out:?}"
+        );
         let after = pool
             .dispatch(worker, move |iso| {
                 let _ = iso.run_event_loop(idx, 100, std::time::Duration::from_secs(1));

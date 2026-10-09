@@ -5,6 +5,19 @@ nokk's fingerprinted transport is backed by BoringSSL (via
 on the first build. That step needs a C/C++ toolchain, **CMake**, and **libclang**
 (bindgen uses it to parse BoringSSL's headers).
 
+> **Windows: `git` must be on `PATH`.** The vendored `btls-sys` build script
+> runs `git init`, and a default Git-for-Windows install lands outside `PATH`
+> (e.g. `%LocalAppData%\Programs\Git\bin\git.exe`). Prepend that directory for
+> the build shell instead of installing anything heavy:
+> ```powershell
+> $env:PATH = "$env:LOCALAPPDATA\Programs\Git\bin;$env:PATH"
+> cargo check -p nokk-captcha   # no native deps; passes without cmake/VS
+> ```
+> `cargo check -p nokk` additionally needs CMake + the VS C++ workload +
+> libclang (failure mode: `cmake-0.1.58: failed to execute command`). Light
+> crates (`nokk-captcha`, `nokk-stealth`, `nokk-net --lib blocklist`) build and
+> test without that toolchain.
+
 ## With root (recommended)
 
 Debian / Ubuntu:

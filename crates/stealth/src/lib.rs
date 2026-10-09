@@ -53,6 +53,9 @@ pub struct StealthProfile {
     pub avail_height: u32,
     /// `screen.colorDepth`/`.pixelDepth`.
     pub color_depth: u32,
+    /// `window.devicePixelRatio`. Retina Mac reports 2, plain desktop 1.
+    #[serde(default = "default_dpr")]
+    pub device_pixel_ratio: f64,
     /// `navigator.userAgentData.platform` — the Client Hints platform
     /// (`"Windows"`/`"macOS"`/`"Linux"`), which must agree with the UA and
     /// `navigator.platform`.
@@ -74,6 +77,11 @@ impl Default for StealthProfile {
     fn default() -> Self {
         FingerprintProfile::ChromeLinux.stealth()
     }
+}
+
+/// Default `devicePixelRatio` for deserialized profiles that predate the field.
+fn default_dpr() -> f64 {
+    1.0
 }
 
 impl StealthProfile {
@@ -166,38 +174,27 @@ impl FingerprintProfile {
         let (timezone, timezone_offset_minutes, timezone_dst, timezone_name_std, timezone_name_dst) =
             tz();
         // OS-derived, coherent by construction: navigator.platform, the Client
-        // Hints platform, and a plausible screen for each OS.
-        let (platform, ua_platform, sw, sh, avail_height, color_depth) = match self.os() {
-            ProfileOs::Linux => ("Linux x86_64", "Linux", 1920u32, 1080u32, 1053u32, 24u32),
-            ProfileOs::Windows => ("Win32", "Windows", 1920, 1080, 1032, 24),
-            ProfileOs::Mac => ("MacIntel", "macOS", 1512, 982, 944, 30),
+        // Hints platform, a plausible screen + DPR for each OS. Retina Mac is 2.
+        let (platform, ua_platform, sw, sh, avail_height, color_depth, dpr) = match self.os() {
+            ProfileOs::Linux => (
+                "Linux x86_64",
+                "Linux",
+                1920u32,
+                1080u32,
+                1053u32,
+                24u32,
+                1.0f64,
+            ),
+            ProfileOs::Windows => ("Win32", "Windows", 1920, 1080, 1032, 24, 1.0),
+            ProfileOs::Mac => ("MacIntel", "macOS", 1512, 982, 944, 30, 2.0),
         };
-        // `navigator.deviceMemory` is not a constant 8: Chrome rounds physical
-        // memory to the nearest power of two. Chrome 151 on a 16 GB machine
-        // reports 16; the spec's cap of 8 is gone.
-        fn device_memory_gb() -> u32 {
-            // The pool asks the same question separately
-            // (`nokk_pool::Isolate::physical_memory_bytes`); not worth linking
-            // two crates for one line.
-            #[cfg(target_os = "linux")]
-            let bytes = std::fs::read_to_string("/proc/meminfo")
-                .ok()
-                .and_then(|s| {
-                    s.lines()
-                        .find_map(|l| l.strip_prefix("MemTotal:"))
-                        .and_then(|r| r.split_whitespace().next()?.parse::<u64>().ok())
-                        .map(|kb| kb * 1024)
-                })
-                .unwrap_or(8 * 1024 * 1024 * 1024);
-            #[cfg(not(target_os = "linux"))]
-            let bytes: u64 = 8 * 1024 * 1024 * 1024;
-            let gb = (bytes as f64) / (1024.0 * 1024.0 * 1024.0);
-            let mut v = 1u32;
-            while (v as f64) * 1.5 < gb && v < 64 {
-                v *= 2;
-            }
-            v
-        }
+        // `navigator.deviceMemory` comes from the preset, never the host: reading
+        // /proc/meminfo ties the fingerprint to the machine running the engine.
+        let device_memory_gb = match self.os() {
+            ProfileOs::Linux => 8,
+            ProfileOs::Windows => 16,
+            ProfileOs::Mac => 8,
+        };
 
         let common = |ua: &str, hw: u32, webgl_vendor: &str, webgl_renderer: &str| StealthProfile {
             user_agent: ua.to_string(),
@@ -206,7 +203,7 @@ impl FingerprintProfile {
             chrome_major: CHROME_MAJOR.parse().unwrap_or(151),
             languages: vec!["en-US".into(), "en".into()],
             hardware_concurrency: hw,
-            device_memory_gb: device_memory_gb(),
+            device_memory_gb,
             vendor: "Google Inc.".into(),
             webgl_vendor: webgl_vendor.to_string(),
             webgl_renderer: webgl_renderer.to_string(),
@@ -214,6 +211,7 @@ impl FingerprintProfile {
             screen_height: sh,
             avail_height,
             color_depth,
+            device_pixel_ratio: dpr,
             timezone: timezone.clone(),
             timezone_offset_minutes,
             timezone_dst: timezone_dst.clone(),
@@ -474,6 +472,24 @@ pub fn apply_geo(profile: &StealthProfile, timezone: &str, country_code: &str) -
     p
 }
 
+/// The wire `Accept-Language` for `languages` (in `navigator.languages` order),
+/// Chrome-style with descending q-values: `de-DE,de;q=0.9,en;q=0.8`. The engine
+/// sends this on the wire whenever `--geoip-timezone` moves the JS locale, so the
+/// header and `navigator.languages` come from the same profile and never disagree.
+pub fn accept_language_header(languages: &[String]) -> String {
+    if languages.is_empty() {
+        return "en-US,en;q=0.9".to_string();
+    }
+    let mut out = languages[0].clone();
+    for (i, lang) in languages.iter().skip(1).enumerate() {
+        let q = 0.9 - i as f64 * 0.1;
+        let q = if q < 0.1 { 0.1 } else { q };
+        out.push(',');
+        out.push_str(&format!("{lang};q={q:.1}"));
+    }
+    out
+}
+
 /// Produce the JavaScript that must run before any page script. In Phase 5 this
 /// is delivered via `Page.addScriptToEvaluateOnNewDocument`.
 ///
@@ -629,7 +645,8 @@ pub fn bootstrap_script(profile: &StealthProfile) -> String {
         .replace("__SCREEN_W__", &profile.screen_width.to_string())
         .replace("__SCREEN_H__", &profile.screen_height.to_string())
         .replace("__AVAIL_H__", &profile.avail_height.to_string())
-        .replace("__COLOR_DEPTH__", &profile.color_depth.to_string());
+        .replace("__COLOR_DEPTH__", &profile.color_depth.to_string())
+        .replace("__DPR__", &profile.device_pixel_ratio.to_string());
 
     // The Intl shim shadows the prebuilt V8's native Intl/Date-locale APIs, which
     // ICU-abort the whole process (this build lacks working ICU data). It also
@@ -793,7 +810,7 @@ const ENVIRONMENT_TEMPLATE: &str = r#"(() => {
   // it, and its content is 111 px shorter (Chrome's tab strip and toolbar).
   win.outerWidth = __SCREEN_W__; win.outerHeight = __AVAIL_H__;
   win.innerWidth = __SCREEN_W__; win.innerHeight = __AVAIL_H__ - 111;
-  win.devicePixelRatio = 1;
+  win.devicePixelRatio = __DPR__;
   // Window position: a maximized full-width window starts at 0, so compute it.
   {
     const w = win.screen.width || win.outerWidth, h = win.screen.height || win.outerHeight;
@@ -1845,7 +1862,14 @@ pub fn proto_shape_script() -> String {
     PROTO_SHAPE_TEMPLATE
         .replace("__SHAPE_SKIP__", &skip)
         .replace("__SHAPE__", PROTO_SHAPE)
-        .replace("__BRAND_TRACE__", if std::env::var_os("NOKK_TRACE_BRAND").is_some() { "true" } else { "false" })
+        .replace(
+            "__BRAND_TRACE__",
+            if std::env::var_os("NOKK_TRACE_BRAND").is_some() {
+                "true"
+            } else {
+                "false"
+            },
+        )
 }
 
 const PROTO_SHAPE: &str = include_str!("proto_shape.json");
@@ -2015,7 +2039,14 @@ pub fn naturalize_script() -> String {
         .replace("__CTOR_TABLE__", CTOR_TABLE)
         .replace("__EVENT_DEFAULTS__", EVENT_DEFAULTS)
         .replace("__METHOD_LENGTHS__", METHOD_LENGTHS)
-        .replace("__BRAND_TRACE__", if std::env::var_os("NOKK_TRACE_BRAND").is_some() { "true" } else { "false" })
+        .replace(
+            "__BRAND_TRACE__",
+            if std::env::var_os("NOKK_TRACE_BRAND").is_some() {
+                "true"
+            } else {
+                "false"
+            },
+        )
 }
 
 /// Members Chrome 151 lets be called with a foreign `this` without "Illegal
@@ -2651,7 +2682,9 @@ const CTOR_STATICS: &str = include_str!("ctor_statics.json");
 const PROTO_MEMBERS: &str = include_str!("proto_members.json");
 
 pub fn shape_fixes_script() -> String {
-    SHAPE_FIXES.replace("__CTOR_STATICS__", CTOR_STATICS).replace("__PROTO_MEMBERS__", PROTO_MEMBERS)
+    SHAPE_FIXES
+        .replace("__CTOR_STATICS__", CTOR_STATICS)
+        .replace("__PROTO_MEMBERS__", PROTO_MEMBERS)
 }
 
 const SHAPE_FIXES: &str = r#"(() => {
@@ -3797,7 +3830,13 @@ const IFACE_KINDS_TEMPLATE: &str = r#"(() => {
 
 pub fn web_surface_script() -> String {
     // Sub-layer markers for NOKK_TRACE_BOOT (and the debug NOKK_SNAP_CUT).
-    let m = |n: &str| if std::env::var_os("NOKK_TRACE_BOOT").is_some() { format!("\n;(globalThis.__pt_bootT = globalThis.__pt_bootT || []).push(['{n}', Date.now()]);\n") } else { "\n".to_string() };
+    let m = |n: &str| {
+        if std::env::var_os("NOKK_TRACE_BOOT").is_some() {
+            format!("\n;(globalThis.__pt_bootT = globalThis.__pt_bootT || []).push(['{n}', Date.now()]);\n")
+        } else {
+            "\n".to_string()
+        }
+    };
     format!(
         "{WEB_SURFACE_TEMPLATE}{}{}{}{}{}{}",
         m("surf_fill"),
@@ -3813,7 +3852,8 @@ pub fn web_surface_script() -> String {
             .replace("__IFACE_PROTO_MOVES__", IFACE_PROTO_MOVES)
             .replace("__IFACE_CHAIN__", IFACE_CHAIN)
             .replace("__IFACE_LIFT__", IFACE_LIFT),
-    ) + &m("surf_statics") + &IFACE_KINDS_TEMPLATE.replace("__IFACE_KINDS__", IFACE_KINDS)
+    ) + &m("surf_statics")
+        + &IFACE_KINDS_TEMPLATE.replace("__IFACE_KINDS__", IFACE_KINDS)
 }
 
 /// Makes window own-property enumerability match the browser. Runs last:
@@ -5423,7 +5463,6 @@ const IFACE_CHAIN: &str = r#"{"AggregateError":"Error","EvalError":"Error","Rang
 /// copy stops delivering events. The challenge stopped dead after its first
 /// question to the worker.
 const IFACE_PROTO_MOVES: &str = r#"{"Blob":{"toString":[]},"FormData":{"toString":[]},"KeyboardEvent":{"which":["UIEvent"]},"ShadowRoot":{"append":["DocumentFragment"],"prepend":["DocumentFragment"],"children":["DocumentFragment"],"childElementCount":["DocumentFragment"],"firstElementChild":["DocumentFragment"],"lastElementChild":["DocumentFragment"],"querySelector":["DocumentFragment"],"querySelectorAll":["DocumentFragment"],"getElementById":["DocumentFragment"],"replaceChildren":["DocumentFragment"],"moveBefore":["DocumentFragment"],"nodeName":["Node"],"nodeValue":["Node"],"textContent":["Node"],"getElementsByClassName":[],"getElementsByTagName":[]}}"#;
-
 
 /// The interface objects' static members, installed last of all: constants like
 /// `Event.AT_TARGET` and `DOMException.ABORT_ERR` sit on the interface itself,
@@ -13720,6 +13759,7 @@ mod tests {
             "__LANGS__",
             "__HW__",
             "__MEM__",
+            "__DPR__",
             "__WEBGL_VENDOR__",
             "__WEBGL_RENDERER__",
             "__TZ__",
@@ -13786,7 +13826,10 @@ mod dump_scripts {
             ("fingerprint", super::fingerprint_script(&prof)),
             ("late_interfaces", super::late_interfaces_script()),
             ("late_originals", super::late_originals_script()),
-            ("worker_scope", super::worker_scope_script("w", "https://example.com/w.js")),
+            (
+                "worker_scope",
+                super::worker_scope_script("w", "https://example.com/w.js"),
+            ),
         ] {
             std::fs::write(format!("{dir}/dump_{name}.js"), body).unwrap();
         }

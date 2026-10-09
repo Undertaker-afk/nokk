@@ -4,7 +4,9 @@
 //! (`strokeRect`). Chrome uses this for `stroke()` wider than a pixel and for
 //! `strokeText` (via `SkScalerContext::internalGetPath`).
 
-use super::geometry::{chop_cubic_at, find_unit_quad_roots, Conic, Matrix, Point, Rect, SCALAR_NEARLY_ZERO};
+use super::geometry::{
+    chop_cubic_at, find_unit_quad_roots, Conic, Matrix, Point, Rect, SCALAR_NEARLY_ZERO,
+};
 use super::path::{Path, PathBuilder, Verb};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -160,7 +162,10 @@ fn eval_cubic_at(c: &[Point; 4], t: f32) -> Point {
         let cc = 3.0 * (p1 - p0);
         ((a * t + b) * t + cc) * t + p0
     };
-    Point::new(ev(c[0].x, c[1].x, c[2].x, c[3].x), ev(c[0].y, c[1].y, c[2].y, c[3].y))
+    Point::new(
+        ev(c[0].x, c[1].x, c[2].x, c[3].x),
+        ev(c[0].y, c[1].y, c[2].y, c[3].y),
+    )
 }
 
 fn eval_cubic_derivative(c: &[Point; 4], t: f32) -> Point {
@@ -171,13 +176,20 @@ fn eval_cubic_derivative(c: &[Point; 4], t: f32) -> Point {
         let cc = p1 - p0;
         (a * t + b) * t + cc
     };
-    Point::new(ev(c[0].x, c[1].x, c[2].x, c[3].x), ev(c[0].y, c[1].y, c[2].y, c[3].y))
+    Point::new(
+        ev(c[0].x, c[1].x, c[2].x, c[3].x),
+        ev(c[0].y, c[1].y, c[2].y, c[3].y),
+    )
 }
 
 /// `SkEvalCubicAt(src, t, loc, tangent, nullptr)`.
 fn eval_cubic_tangent(c: &[Point; 4], t: f32) -> Point {
     if (t == 0.0 && c[0] == c[1]) || (t == 1.0 && c[2] == c[3]) {
-        let mut tangent = if t == 0.0 { sub(c[2], c[0]) } else { sub(c[3], c[1]) };
+        let mut tangent = if t == 0.0 {
+            sub(c[2], c[0])
+        } else {
+            sub(c[3], c[1])
+        };
         if tangent.x == 0.0 && tangent.y == 0.0 {
             tangent = sub(c[3], c[0]);
         }
@@ -274,7 +286,10 @@ fn on_same_side(src: &[Point; 4], test_index: usize, line_index: usize) -> bool 
 }
 
 fn calc_cubic_precision(src: &[Point; 4]) -> f32 {
-    (distance_to_sqd(src[1], src[0]) + distance_to_sqd(src[2], src[1]) + distance_to_sqd(src[3], src[2])) * 1e-8
+    (distance_to_sqd(src[1], src[0])
+        + distance_to_sqd(src[2], src[1])
+        + distance_to_sqd(src[3], src[2]))
+        * 1e-8
 }
 
 /// `SkFindCubicCusp`.
@@ -397,12 +412,24 @@ struct PathIter<'a> {
 
 impl<'a> PathIter<'a> {
     fn new(path: &'a Path) -> Self {
-        PathIter { path, vi: 0, pi: 0, ci: 0, move_to: Point::default(), last_pt: Point::default(), need_close: false }
+        PathIter {
+            path,
+            vi: 0,
+            pi: 0,
+            ci: 0,
+            move_to: Point::default(),
+            last_pt: Point::default(),
+            need_close: false,
+        }
     }
     /// `autoClose`: line to the contour start, or the Close itself.
     fn auto_close(&mut self) -> Seg {
         if self.last_pt != self.move_to {
-            if self.last_pt.x.is_nan() || self.last_pt.y.is_nan() || self.move_to.x.is_nan() || self.move_to.y.is_nan() {
+            if self.last_pt.x.is_nan()
+                || self.last_pt.y.is_nan()
+                || self.move_to.x.is_nan()
+                || self.move_to.y.is_nan()
+            {
                 return Seg::Close;
             }
             let seg = Seg::Line([self.last_pt, self.move_to]);
@@ -538,7 +565,13 @@ fn round_capper(sink: &mut PathBuilder, pivot: Point, normal: Point, stop: Point
     sink.conic_to(sub(projected_center, normal), stop, root2);
 }
 
-fn square_capper(sink: &mut PathBuilder, pivot: Point, normal: Point, stop: Point, extend_last_pt: bool) {
+fn square_capper(
+    sink: &mut PathBuilder,
+    pivot: Point,
+    normal: Point,
+    stop: Point,
+    extend_last_pt: bool,
+) {
     let parallel = rotate_cw(normal);
     if extend_last_pt {
         set_last_point(sink, add(add(pivot, normal), parallel));
@@ -590,7 +623,17 @@ fn handle_inner_join(inner: &mut PathBuilder, pivot: Point, after: Point) {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn blunt_joiner(outer: &mut PathBuilder, inner: &mut PathBuilder, before_unit: Point, pivot: Point, after_unit: Point, radius: f32, _inv_miter: f32, _prev_is_line: bool, _curr_is_line: bool) {
+fn blunt_joiner(
+    outer: &mut PathBuilder,
+    inner: &mut PathBuilder,
+    before_unit: Point,
+    pivot: Point,
+    after_unit: Point,
+    radius: f32,
+    _inv_miter: f32,
+    _prev_is_line: bool,
+    _curr_is_line: bool,
+) {
     let mut after = mul(after_unit, radius);
     let (o, i): (&mut PathBuilder, &mut PathBuilder) = if is_clockwise(before_unit, after_unit) {
         (outer, inner)
@@ -603,7 +646,17 @@ fn blunt_joiner(outer: &mut PathBuilder, inner: &mut PathBuilder, before_unit: P
 }
 
 #[allow(clippy::too_many_arguments)]
-fn round_joiner(outer: &mut PathBuilder, inner: &mut PathBuilder, before_unit: Point, pivot: Point, after_unit: Point, radius: f32, _inv_miter: f32, _prev_is_line: bool, _curr_is_line: bool) {
+fn round_joiner(
+    outer: &mut PathBuilder,
+    inner: &mut PathBuilder,
+    before_unit: Point,
+    pivot: Point,
+    after_unit: Point,
+    radius: f32,
+    _inv_miter: f32,
+    _prev_is_line: bool,
+    _curr_is_line: bool,
+) {
     let dot_prod = dot(before_unit, after_unit);
     if dot2angle(dot_prod) == AngleType::NearlyLine {
         return;
@@ -634,7 +687,17 @@ fn round_joiner(outer: &mut PathBuilder, inner: &mut PathBuilder, before_unit: P
 const ONE_OVER_SQRT2: f32 = std::f32::consts::FRAC_1_SQRT_2;
 
 #[allow(clippy::too_many_arguments)]
-fn miter_joiner(outer: &mut PathBuilder, inner: &mut PathBuilder, before_unit: Point, pivot: Point, after_unit: Point, radius: f32, inv_miter_limit: f32, prev_is_line: bool, curr_is_line: bool) {
+fn miter_joiner(
+    outer: &mut PathBuilder,
+    inner: &mut PathBuilder,
+    before_unit: Point,
+    pivot: Point,
+    after_unit: Point,
+    radius: f32,
+    inv_miter_limit: f32,
+    prev_is_line: bool,
+    curr_is_line: bool,
+) {
     let dot_prod = dot(before_unit, after_unit);
     let angle_type = dot2angle(dot_prod);
     let mut before = before_unit;
@@ -697,11 +760,52 @@ fn miter_joiner(outer: &mut PathBuilder, inner: &mut PathBuilder, before_unit: P
 }
 
 #[allow(clippy::too_many_arguments)]
-fn join(join: Join, outer: &mut PathBuilder, inner: &mut PathBuilder, before_unit: Point, pivot: Point, after_unit: Point, radius: f32, inv_miter: f32, prev_is_line: bool, curr_is_line: bool) {
+fn join(
+    join: Join,
+    outer: &mut PathBuilder,
+    inner: &mut PathBuilder,
+    before_unit: Point,
+    pivot: Point,
+    after_unit: Point,
+    radius: f32,
+    inv_miter: f32,
+    prev_is_line: bool,
+    curr_is_line: bool,
+) {
     match join {
-        Join::Miter => miter_joiner(outer, inner, before_unit, pivot, after_unit, radius, inv_miter, prev_is_line, curr_is_line),
-        Join::Round => round_joiner(outer, inner, before_unit, pivot, after_unit, radius, inv_miter, prev_is_line, curr_is_line),
-        Join::Bevel => blunt_joiner(outer, inner, before_unit, pivot, after_unit, radius, inv_miter, prev_is_line, curr_is_line),
+        Join::Miter => miter_joiner(
+            outer,
+            inner,
+            before_unit,
+            pivot,
+            after_unit,
+            radius,
+            inv_miter,
+            prev_is_line,
+            curr_is_line,
+        ),
+        Join::Round => round_joiner(
+            outer,
+            inner,
+            before_unit,
+            pivot,
+            after_unit,
+            radius,
+            inv_miter,
+            prev_is_line,
+            curr_is_line,
+        ),
+        Join::Bevel => blunt_joiner(
+            outer,
+            inner,
+            before_unit,
+            pivot,
+            after_unit,
+            radius,
+            inv_miter,
+            prev_is_line,
+            curr_is_line,
+        ),
     }
 }
 
@@ -735,8 +839,17 @@ struct PathStroker {
     join_completed: bool,
 }
 
-fn set_normal_unitnormal(before: Point, after: Point, scale: f32, radius: f32) -> Option<(Point, Point)> {
-    let unit = set_length((after.x - before.x) * scale, (after.y - before.y) * scale, 1.0)?;
+fn set_normal_unitnormal(
+    before: Point,
+    after: Point,
+    scale: f32,
+    radius: f32,
+) -> Option<(Point, Point)> {
+    let unit = set_length(
+        (after.x - before.x) * scale,
+        (after.y - before.y) * scale,
+        1.0,
+    )?;
     let unit = rotate_ccw(unit);
     Some((mul(unit, radius), unit))
 }
@@ -801,7 +914,8 @@ fn cubic_in_line(cubic: &[Point; 4]) -> bool {
     let mid1 = (1 + (2 >> outer2)) >> outer1;
     let mid2 = outer1 ^ outer2 ^ mid1;
     let line_slop = pt_max * pt_max * 0.00001;
-    pt_to_line(cubic[mid1], cubic[outer1], cubic[outer2]) <= line_slop && pt_to_line(cubic[mid2], cubic[outer1], cubic[outer2]) <= line_slop
+    pt_to_line(cubic[mid1], cubic[outer1], cubic[outer2]) <= line_slop
+        && pt_to_line(cubic[mid2], cubic[outer1], cubic[outer2]) <= line_slop
 }
 
 fn quad_in_line(quad: &[Point; 3]) -> bool {
@@ -836,7 +950,11 @@ fn check_cubic_linear(cubic: &[Point; 4]) -> (ReductionType, [Point; 3], usize) 
         return (ReductionType::Line, reduction, 1);
     }
     if !cubic_in_line(cubic) {
-        return (ReductionType::Quad, reduction, if degenerate_ab { 2 } else { 1 });
+        return (
+            ReductionType::Quad,
+            reduction,
+            if degenerate_ab { 2 } else { 1 },
+        );
     }
     let mut r_count = 0usize;
     for t in find_cubic_max_curvature(cubic) {
@@ -933,7 +1051,14 @@ fn sharp_angle(quad: &[Point; 3]) -> bool {
 
 impl PathStroker {
     #[allow(clippy::too_many_arguments)]
-    fn new(radius: f32, miter_limit: f32, cap: Cap, join: Join, res_scale: f32, can_ignore_center: bool) -> PathStroker {
+    fn new(
+        radius: f32,
+        miter_limit: f32,
+        cap: Cap,
+        join: Join,
+        res_scale: f32,
+        can_ignore_center: bool,
+    ) -> PathStroker {
         let mut join = join;
         let mut inv_miter_limit = 0.0;
         if join == Join::Miter {
@@ -980,19 +1105,21 @@ impl PathStroker {
         self.first_pt
     }
     fn is_current_contour_empty(&self) -> bool {
-        is_zero_length_since_point(&self.inner.pts, 0) && is_zero_length_since_point(&self.outer.pts, self.first_outer_pt_index_in_contour)
+        is_zero_length_since_point(&self.inner.pts, 0)
+            && is_zero_length_since_point(&self.outer.pts, self.first_outer_pt_index_in_contour)
     }
 
     fn pre_join_to(&mut self, curr_pt: Point, curr_is_line: bool) -> Option<(Point, Point)> {
-        let (normal, unit_normal) = match set_normal_unitnormal(self.prev_pt, curr_pt, self.res_scale, self.radius) {
-            Some(v) => v,
-            None => {
-                if self.capper == Cap::Butt {
-                    return None;
+        let (normal, unit_normal) =
+            match set_normal_unitnormal(self.prev_pt, curr_pt, self.res_scale, self.radius) {
+                Some(v) => v,
+                None => {
+                    if self.capper == Cap::Butt {
+                        return None;
+                    }
+                    (Point::new(self.radius, 0.0), Point::new(1.0, 0.0))
                 }
-                (Point::new(self.radius, 0.0), Point::new(1.0, 0.0))
-            }
-        };
+            };
         if self.segment_count == 0 {
             self.first_normal = normal;
             self.first_unit_normal = unit_normal;
@@ -1000,7 +1127,18 @@ impl PathStroker {
             self.outer.move_to(self.first_outer_pt);
             self.inner.move_to(sub(self.prev_pt, normal));
         } else {
-            join(self.joiner, &mut self.outer, &mut self.inner, self.prev_unit_normal, self.prev_pt, unit_normal, self.radius, self.inv_miter_limit, self.prev_is_line, curr_is_line);
+            join(
+                self.joiner,
+                &mut self.outer,
+                &mut self.inner,
+                self.prev_unit_normal,
+                self.prev_pt,
+                unit_normal,
+                self.radius,
+                self.inv_miter_limit,
+                self.prev_is_line,
+                curr_is_line,
+            );
         }
         self.prev_is_line = curr_is_line;
         Some((normal, unit_normal))
@@ -1017,7 +1155,18 @@ impl PathStroker {
     fn finish_contour(&mut self, close: bool, curr_is_line: bool) {
         if self.segment_count > 0 {
             if close {
-                join(self.joiner, &mut self.outer, &mut self.inner, self.prev_unit_normal, self.prev_pt, self.first_unit_normal, self.radius, self.inv_miter_limit, self.prev_is_line, curr_is_line);
+                join(
+                    self.joiner,
+                    &mut self.outer,
+                    &mut self.inner,
+                    self.prev_unit_normal,
+                    self.prev_pt,
+                    self.first_unit_normal,
+                    self.radius,
+                    self.inv_miter_limit,
+                    self.prev_is_line,
+                    curr_is_line,
+                );
                 self.outer.close();
                 if self.can_ignore_center {
                     if rect_contains(&self.inner.bounds(), &self.outer.bounds()) {
@@ -1030,10 +1179,24 @@ impl PathStroker {
                     self.outer.close();
                 }
             } else if let Some(pt) = self.inner.last_pt() {
-                cap(self.capper, &mut self.outer, self.prev_pt, self.prev_normal, pt, curr_is_line);
+                cap(
+                    self.capper,
+                    &mut self.outer,
+                    self.prev_pt,
+                    self.prev_normal,
+                    pt,
+                    curr_is_line,
+                );
                 let inner = std::mem::take(&mut self.inner).detach();
                 reverse_path_to(&mut self.outer, &inner);
-                cap(self.capper, &mut self.outer, self.first_pt, neg(self.first_normal), self.first_outer_pt, self.prev_is_line);
+                cap(
+                    self.capper,
+                    &mut self.outer,
+                    self.first_pt,
+                    neg(self.first_normal),
+                    self.first_outer_pt,
+                    self.prev_is_line,
+                );
                 self.outer.close();
             }
             if !self.cusper.is_empty() {
@@ -1063,23 +1226,37 @@ impl PathStroker {
 
     fn line_to(&mut self, curr_pt: Point, iter: Option<&PathIter>) {
         let tol = SCALAR_NEARLY_ZERO * self.inv_res_scale;
-        let teeny_line = nearly_zero_tol(self.prev_pt.x - curr_pt.x, tol) && nearly_zero_tol(self.prev_pt.y - curr_pt.y, tol);
+        let teeny_line = nearly_zero_tol(self.prev_pt.x - curr_pt.x, tol)
+            && nearly_zero_tol(self.prev_pt.y - curr_pt.y, tol);
         if self.capper == Cap::Butt && teeny_line {
             return;
         }
         if teeny_line && (self.join_completed || iter.is_some_and(has_valid_tangent)) {
             return;
         }
-        let Some((normal, unit_normal)) = self.pre_join_to(curr_pt, true) else { return };
+        let Some((normal, unit_normal)) = self.pre_join_to(curr_pt, true) else {
+            return;
+        };
         self.line_to_raw(curr_pt, normal);
         self.post_join_to(curr_pt, normal, unit_normal);
     }
 
-    fn set_quad_end_normal(&self, quad: &[Point; 3], normal_ab: Point, unit_ab: Point) -> (Point, Point) {
-        set_normal_unitnormal(quad[1], quad[2], self.res_scale, self.radius).unwrap_or((normal_ab, unit_ab))
+    fn set_quad_end_normal(
+        &self,
+        quad: &[Point; 3],
+        normal_ab: Point,
+        unit_ab: Point,
+    ) -> (Point, Point) {
+        set_normal_unitnormal(quad[1], quad[2], self.res_scale, self.radius)
+            .unwrap_or((normal_ab, unit_ab))
     }
 
-    fn set_cubic_end_normal(&self, cubic: &[Point; 4], normal_ab: Point, unit_ab: Point) -> (Point, Point) {
+    fn set_cubic_end_normal(
+        &self,
+        cubic: &[Point; 4],
+        normal_ab: Point,
+        unit_ab: Point,
+    ) -> (Point, Point) {
         let mut ab = sub(cubic[1], cubic[0]);
         let mut cd = sub(cubic[3], cubic[2]);
         let mut degenerate_ab = degenerate_vector(ab);
@@ -1101,7 +1278,13 @@ impl PathStroker {
         set_normal_unitnormal_vec(cd, self.radius).unwrap_or((normal_ab, unit_ab))
     }
 
-    fn init(&mut self, stroke_type: StrokeType, quad_pts: &mut QuadConstruct, t_start: f32, t_end: f32) {
+    fn init(
+        &mut self,
+        stroke_type: StrokeType,
+        quad_pts: &mut QuadConstruct,
+        t_start: f32,
+        t_end: f32,
+    ) {
         self.stroke_type = stroke_type;
         self.found_tangents = false;
         quad_pts.init(t_start, t_end);
@@ -1112,7 +1295,11 @@ impl PathStroker {
         if !d.set_length(self.radius) {
             d = Point::new(self.radius, 0.0);
         }
-        let axis_flip = if self.stroke_type == StrokeType::Outer { 1.0f32 } else { -1.0 };
+        let axis_flip = if self.stroke_type == StrokeType::Outer {
+            1.0f32
+        } else {
+            -1.0
+        };
         let on_pt = Point::new(t_pt.x + axis_flip * d.y, t_pt.y - axis_flip * d.x);
         (on_pt, d)
     }
@@ -1255,7 +1442,12 @@ impl PathStroker {
         true
     }
 
-    fn stroke_close_enough(&self, stroke: &[Point; 3], ray: &[Point; 2], q: &QuadConstruct) -> ResultType {
+    fn stroke_close_enough(
+        &self,
+        stroke: &[Point; 3],
+        ray: &[Point; 2],
+        q: &QuadConstruct,
+    ) -> ResultType {
         let stroke_mid = eval_quad_at(stroke, 0.5);
         if points_within_dist(ray[0], stroke_mid, self.inv_res_scale) {
             if sharp_angle(&q.quad) {
@@ -1348,7 +1540,10 @@ impl PathStroker {
         if !self.found_tangents {
             let r = self.tangents_meet(cubic, q);
             if r != ResultType::Quad {
-                if (r == ResultType::Degenerate || points_within_dist(q.quad[0], q.quad[2], self.inv_res_scale)) && self.cubic_mid_on_line(cubic, q) {
+                if (r == ResultType::Degenerate
+                    || points_within_dist(q.quad[0], q.quad[2], self.inv_res_scale))
+                    && self.cubic_mid_on_line(cubic, q)
+                {
                     self.add_degenerate_line(q);
                     return true;
                 }
@@ -1372,7 +1567,13 @@ impl PathStroker {
             return false;
         }
         self.recursion_depth += 1;
-        if self.recursion_depth > RECURSIVE_LIMITS[if self.found_tangents { CUBIC_LIMIT } else { TANGENT_LIMIT }] {
+        if self.recursion_depth
+            > RECURSIVE_LIMITS[if self.found_tangents {
+                CUBIC_LIMIT
+            } else {
+                TANGENT_LIMIT
+            }]
+        {
             self.add_degenerate_line(q);
             return true;
         }
@@ -1549,7 +1750,11 @@ impl PathStroker {
         let t_values = find_cubic_inflections(&cubic);
         let mut last_t = 0.0f32;
         for index in 0..=t_values.len() {
-            let next_t = if index < t_values.len() { t_values[index] } else { 1.0 };
+            let next_t = if index < t_values.len() {
+                t_values[index]
+            } else {
+                1.0
+            };
             let mut q = QuadConstruct::default();
             self.init(StrokeType::Outer, &mut q, last_t, next_t);
             let _ = self.cubic_stroke(&cubic, &mut q);
@@ -1562,7 +1767,11 @@ impl PathStroker {
             let loc = eval_cubic_at(&cubic, cusp);
             let r = self.radius;
             if r >= 0.0 {
-                self.cusper.add_oval(&Rect::from_ltrb(loc.x - r, loc.y - r, loc.x + r, loc.y + r), true, 1);
+                self.cusper.add_oval(
+                    &Rect::from_ltrb(loc.x - r, loc.y - r, loc.x + r, loc.y + r),
+                    true,
+                    1,
+                );
             }
         }
         let (normal_cd, unit_cd) = self.set_cubic_end_normal(&cubic, normal_ab, unit_ab);
@@ -1671,7 +1880,11 @@ fn trivial_rect(path: &Path) -> Option<RectContour> {
         return None;
     }
     let rect = Rect::from_ltrb(p[0].x, p[0].y, p[2].x, p[2].y).sorted();
-    Some(RectContour { rect, is_closed: true, cw: cross(v0, v1) > 0.0 })
+    Some(RectContour {
+        rect,
+        is_closed: true,
+        cw: cross(v0, v1) > 0.0,
+    })
 }
 
 /// `SkPathPriv::IsRectContour(pts, verbs, mask, allowPartial=false)`.
@@ -1784,8 +1997,17 @@ fn is_rect_contour(path: &Path) -> Option<RectContour> {
     if close_xy.x != 0.0 && close_xy.y != 0.0 {
         return None;
     }
-    let rect = Rect::from_ltrb(first_corner.x.min(third_corner.x), first_corner.y.min(third_corner.y), first_corner.x.max(third_corner.x), first_corner.y.max(third_corner.y));
-    Some(RectContour { rect, is_closed: auto_close, cw: directions[0] == ((directions[1] + 1) & 3) })
+    let rect = Rect::from_ltrb(
+        first_corner.x.min(third_corner.x),
+        first_corner.y.min(third_corner.y),
+        first_corner.x.max(third_corner.x),
+        first_corner.y.max(third_corner.y),
+    );
+    Some(RectContour {
+        rect,
+        is_closed: auto_close,
+        cw: directions[0] == ((directions[1] + 1) & 3),
+    })
 }
 
 fn add_bevel(b: &mut PathBuilder, r: &Rect, outer: &Rect, cw: bool) {
@@ -1831,7 +2053,12 @@ fn stroke_rect(orig: &Rect, p: &StrokeParams, cw: bool) -> Option<Path> {
     let rect = orig.sorted();
     let rw = rect.right - rect.left;
     let rh = rect.bottom - rect.top;
-    let r = Rect::from_ltrb(rect.left - radius, rect.top - radius, rect.right + radius, rect.bottom + radius);
+    let r = Rect::from_ltrb(
+        rect.left - radius,
+        rect.top - radius,
+        rect.right + radius,
+        rect.bottom + radius,
+    );
     let mut join = p.join;
     if join == Join::Miter && p.miter_limit < std::f32::consts::SQRT_2 {
         join = Join::Bevel;
@@ -1843,7 +2070,12 @@ fn stroke_rect(orig: &Rect, p: &StrokeParams, cw: bool) -> Option<Path> {
         Join::Round => return None,
     }
     if p.width < rw.min(rh) {
-        let inner = Rect::from_ltrb(rect.left + radius, rect.top + radius, rect.right - radius, rect.bottom - radius);
+        let inner = Rect::from_ltrb(
+            rect.left + radius,
+            rect.top + radius,
+            rect.right - radius,
+            rect.bottom - radius,
+        );
         b.add_rect(&inner, !cw, 0);
     }
     Some(b.detach())
@@ -1913,11 +2145,24 @@ mod tests {
         b.move_to(Point::new(10.0, 10.0));
         b.line_to(Point::new(30.0, 10.0));
         let path = b.detach();
-        let out = stroke_path(&path, &StrokeParams { width: 4.0, miter_limit: 10.0, cap: Cap::Butt, join: Join::Miter, res_scale: 1.0 }).unwrap();
+        let out = stroke_path(
+            &path,
+            &StrokeParams {
+                width: 4.0,
+                miter_limit: 10.0,
+                cap: Cap::Butt,
+                join: Join::Miter,
+                res_scale: 1.0,
+            },
+        )
+        .unwrap();
         assert_eq!(out.verbs.first(), Some(&Verb::Move));
         assert_eq!(out.verbs.last(), Some(&Verb::Close));
         let bounds = out.bounds();
-        assert_eq!((bounds.left, bounds.top, bounds.right, bounds.bottom), (10.0, 8.0, 30.0, 12.0));
+        assert_eq!(
+            (bounds.left, bounds.top, bounds.right, bounds.bottom),
+            (10.0, 8.0, 30.0, 12.0)
+        );
     }
 
     #[test]
@@ -1925,9 +2170,22 @@ mod tests {
         let mut b = PathBuilder::new();
         b.add_rect(&Rect::from_ltrb(10.0, 10.0, 30.0, 20.0), true, 0);
         let path = b.detach();
-        let out = stroke_path(&path, &StrokeParams { width: 2.0, miter_limit: 10.0, cap: Cap::Butt, join: Join::Miter, res_scale: 1.0 }).unwrap();
+        let out = stroke_path(
+            &path,
+            &StrokeParams {
+                width: 2.0,
+                miter_limit: 10.0,
+                cap: Cap::Butt,
+                join: Join::Miter,
+                res_scale: 1.0,
+            },
+        )
+        .unwrap();
         assert_eq!(out.verbs.iter().filter(|v| **v == Verb::Move).count(), 2);
         let bounds = out.bounds();
-        assert_eq!((bounds.left, bounds.top, bounds.right, bounds.bottom), (9.0, 9.0, 31.0, 21.0));
+        assert_eq!(
+            (bounds.left, bounds.top, bounds.right, bounds.bottom),
+            (9.0, 9.0, 31.0, 21.0)
+        );
     }
 }

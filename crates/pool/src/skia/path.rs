@@ -36,7 +36,10 @@ pub enum Convexity {
 
 impl Convexity {
     pub fn is_convex(self) -> bool {
-        matches!(self, Convexity::ConvexCw | Convexity::ConvexCcw | Convexity::ConvexDegenerate)
+        matches!(
+            self,
+            Convexity::ConvexCw | Convexity::ConvexCcw | Convexity::ConvexDegenerate
+        )
     }
     fn from_dir(cw: bool) -> Convexity {
         if cw {
@@ -101,8 +104,16 @@ impl Path {
     pub fn as_rect(&self) -> Option<Rect> {
         let v = &self.verbs;
         let ok = match v.len() {
-            5 => v[0] == Verb::Move && v[1..4].iter().all(|x| *x == Verb::Line) && v[4] == Verb::Close,
-            6 => v[0] == Verb::Move && v[1..5].iter().all(|x| *x == Verb::Line) && v[5] == Verb::Close,
+            5 => {
+                v[0] == Verb::Move
+                    && v[1..4].iter().all(|x| *x == Verb::Line)
+                    && v[4] == Verb::Close
+            }
+            6 => {
+                v[0] == Verb::Move
+                    && v[1..5].iter().all(|x| *x == Verb::Line)
+                    && v[5] == Verb::Close
+            }
             _ => false,
         };
         if !ok {
@@ -153,7 +164,14 @@ pub struct PathBuilder {
 
 impl Default for Path {
     fn default() -> Self {
-        Path { verbs: Vec::new(), pts: Vec::new(), conics: Vec::new(), fill_type: FillType::Winding, convexity: Convexity::Unknown, segment_mask: 0 }
+        Path {
+            verbs: Vec::new(),
+            pts: Vec::new(),
+            conics: Vec::new(),
+            fill_type: FillType::Winding,
+            convexity: Convexity::Unknown,
+            segment_mask: 0,
+        }
     }
 }
 
@@ -205,7 +223,10 @@ impl PathBuilder {
         let mut pi = 0usize;
         for v in &self.verbs {
             match v {
-                Verb::Move => { self.last_move_point = self.pts[pi]; pi += 1; }
+                Verb::Move => {
+                    self.last_move_point = self.pts[pi];
+                    pi += 1;
+                }
                 Verb::Line => pi += 1,
                 Verb::Quad | Verb::Conic => pi += 2,
                 Verb::Cubic => pi += 3,
@@ -439,7 +460,11 @@ struct PointIter {
 }
 impl PointIter {
     fn new(n: usize, cw: bool, start: usize) -> PointIter {
-        PointIter { n, current: start % n, advance: if cw { 1 } else { n - 1 } }
+        PointIter {
+            n,
+            current: start % n,
+            advance: if cw { 1 } else { n - 1 },
+        }
     }
     fn current(&self) -> usize {
         self.current
@@ -523,7 +548,10 @@ impl Convexicator {
         if self.last_pt == pt {
             return true;
         }
-        if self.first_pt == self.last_pt && self.expected_dir == DirChange::Invalid && self.last_vec.is_zero() {
+        if self.first_pt == self.last_pt
+            && self.expected_dir == DirChange::Invalid
+            && self.last_vec.is_zero()
+        {
             self.last_vec = pt.sub(self.last_pt);
             self.first_vec = self.last_vec;
         } else if !self.add_vec(pt.sub(self.last_pt)) {
@@ -591,7 +619,11 @@ impl Convexicator {
             return DirChange::Unknown;
         }
         if cross == 0.0 {
-            return if Point::dot(self.last_vec, cur) < 0.0 { DirChange::Backwards } else { DirChange::Straight };
+            return if Point::dot(self.last_vec, cur) < 0.0 {
+                DirChange::Backwards
+            } else {
+                DirChange::Straight
+            };
         }
         if cross > 0.0 {
             DirChange::Right
@@ -713,7 +745,12 @@ pub enum Drawable {
     /// A line segment: filling it is a no-op.
     Line(Point, Point),
     /// A single arc: `PaintCanvas::drawArc`.
-    Arc { oval: Rect, start_deg: f32, sweep_deg: f32, closed: bool },
+    Arc {
+        oval: Rect,
+        start_deg: f32,
+        sweep_deg: f32,
+        closed: bool,
+    },
     Path(Path),
 }
 
@@ -796,7 +833,9 @@ impl CanvasPath {
     }
 
     fn is_empty(&self) -> bool {
-        self.line_state == LineState::Empty && self.arc_state == ArcState::Empty && self.builder.is_empty()
+        self.line_state == LineState::Empty
+            && self.arc_state == ArcState::Empty
+            && self.builder.is_empty()
     }
     fn is_line(&self) -> bool {
         self.line_state == LineState::Line
@@ -818,7 +857,14 @@ impl CanvasPath {
             }
         } else {
             let (x, y, r, start, sweep) = self.arc;
-            add_ellipse(&mut self.builder, Point::new(x, y), r, r, start, start + sweep);
+            add_ellipse(
+                &mut self.builder,
+                Point::new(x, y),
+                r,
+                r,
+                start,
+                start + sweep,
+            );
             if self.arc_state == ArcState::Closed {
                 self.builder.close();
             }
@@ -837,7 +883,9 @@ impl CanvasPath {
         let pb = self.builder.bounds();
         let lb_zero = match self.line_state {
             LineState::StartingPoint => true,
-            LineState::Line => self.line_start.x == self.line_end.x && self.line_start.y == self.line_end.y,
+            LineState::Line => {
+                self.line_start.x == self.line_end.x && self.line_start.y == self.line_end.y
+            }
             LineState::Empty => false,
         };
         if pb.width() == 0.0 && pb.height() == 0.0 && self.is_line() && lb_zero {
@@ -911,7 +959,8 @@ impl CanvasPath {
         if self.builder.last_pt().is_none() {
             self.builder.move_to(Point::new(c1x, c1y));
         }
-        self.builder.cubic_to(Point::new(c1x, c1y), Point::new(c2x, c2y), Point::new(x, y));
+        self.builder
+            .cubic_to(Point::new(c1x, c1y), Point::new(c2x, c2y), Point::new(x, y));
     }
 
     pub fn arc(&mut self, x: f32, y: f32, radius: f32, start: f32, end: f32, anticlockwise: bool) {
@@ -932,7 +981,14 @@ impl CanvasPath {
             self.arc = (x, y, radius, start, end - start);
             return;
         }
-        add_ellipse(&mut self.builder, Point::new(x, y), radius, radius, start, end);
+        add_ellipse(
+            &mut self.builder,
+            Point::new(x, y),
+            radius,
+            radius,
+            start,
+            end,
+        );
     }
 
     pub fn ellipse(
@@ -946,7 +1002,12 @@ impl CanvasPath {
         end: f32,
         anticlockwise: bool,
     ) {
-        if ![x, y, rx, ry, rotation, start, end].iter().all(|v| v.is_finite()) || rx < 0.0 || ry < 0.0 {
+        if ![x, y, rx, ry, rotation, start, end]
+            .iter()
+            .all(|v| v.is_finite())
+            || rx < 0.0
+            || ry < 0.0
+        {
             return;
         }
         self.update_for_mutation();
@@ -958,7 +1019,15 @@ impl CanvasPath {
             self.degenerate_ellipse(x, y, rx, ry, rotation, start, adjusted_end, anticlockwise);
             return;
         }
-        add_ellipse_rotated(&mut self.builder, Point::new(x, y), rx, ry, rotation, start, adjusted_end);
+        add_ellipse_rotated(
+            &mut self.builder,
+            Point::new(x, y),
+            rx,
+            ry,
+            rotation,
+            start,
+            adjusted_end,
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1012,7 +1081,8 @@ impl CanvasPath {
             return;
         }
         self.update_for_mutation();
-        self.builder.add_rect(&Rect::from_ltrb(x, y, x + w, y + h), true, 0);
+        self.builder
+            .add_rect(&Rect::from_ltrb(x, y, x + w, y + h), true, 0);
     }
 
     /// Result for fill/stroke.
@@ -1051,7 +1121,14 @@ fn rotation_matrix(radians: f32) -> Matrix {
     // MapPoint computes in double and narrows. Same precision here.
     let c = (radians as f64).cos();
     let s = (radians as f64).sin();
-    Matrix { sx: c as f32, kx: (-s) as f32, tx: 0.0, ky: s as f32, sy: c as f32, ty: 0.0 }
+    Matrix {
+        sx: c as f32,
+        kx: (-s) as f32,
+        tx: 0.0,
+        ky: s as f32,
+        sy: c as f32,
+        ty: 0.0,
+    }
 }
 
 /// Blink's `PathBuilder::AddEllipse(p, rx, ry, start, end)`.
@@ -1093,14 +1170,28 @@ pub fn add_ellipse_rotated(
     // AffineTransform::Translation(p).RotateRadians(rotation), in double.
     let c = (rotation as f64).cos();
     let s = (rotation as f64).sin();
-    let fwd = Matrix { sx: c as f32, kx: (-s) as f32, tx: p.x, ky: s as f32, sy: c as f32, ty: p.y };
+    let fwd = Matrix {
+        sx: c as f32,
+        kx: (-s) as f32,
+        tx: p.x,
+        ky: s as f32,
+        sy: c as f32,
+        ty: p.y,
+    };
     // Inverse: rotate by −rotation and translate by −p (double, like Inverse()).
     let inv = {
         let det = c * c + s * s;
         let (a, bb, cc, d) = (c / det, s / det, -s / det, c / det);
         let e = -(a * p.x as f64 + cc * p.y as f64);
         let f = -(bb * p.x as f64 + d * p.y as f64);
-        Matrix { sx: a as f32, kx: cc as f32, tx: e as f32, ky: bb as f32, sy: d as f32, ty: f as f32 }
+        Matrix {
+            sx: a as f32,
+            kx: cc as f32,
+            tx: e as f32,
+            ky: bb as f32,
+            sy: d as f32,
+            ty: f as f32,
+        }
     };
     b.transform(&inv);
     add_ellipse(b, Point::new(0.0, 0.0), rx, ry, start, end);
@@ -1109,7 +1200,12 @@ pub fn add_ellipse_rotated(
 
 /// `SkPathPriv::CreateDrawArcPath(arc, isFillNoPathEffect)` for arcs without
 /// a centre (the kind canvas draws).
-pub fn create_draw_arc_path(oval: &Rect, start_angle: f32, sweep_angle: f32, is_fill: bool) -> Path {
+pub fn create_draw_arc_path(
+    oval: &Rect,
+    start_angle: f32,
+    sweep_angle: f32,
+    is_fill: bool,
+) -> Path {
     let mut start = start_angle;
     let mut sweep = sweep_angle;
     if sweep.abs() > 3600.0 {
@@ -1140,7 +1236,11 @@ pub fn create_draw_arc_path(oval: &Rect, start_angle: f32, sweep_angle: f32, is_
         sweep -= 360.0;
     }
     b.arc_to(oval, start, sweep, force_move_to);
-    b.set_convexity(if convex { Convexity::from_dir(first_cw) } else { Convexity::Concave });
+    b.set_convexity(if convex {
+        Convexity::from_dir(first_cw)
+    } else {
+        Convexity::Concave
+    });
     b.detach()
 }
 

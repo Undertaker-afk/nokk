@@ -45,7 +45,11 @@ pub struct A8Blitter<'a> {
 
 impl<'a> A8Blitter<'a> {
     pub fn new(data: &'a mut [u8], width: i32, height: i32) -> Self {
-        A8Blitter { data, width, height }
+        A8Blitter {
+            data,
+            width,
+            height,
+        }
     }
     #[inline]
     fn idx(&self, x: i32, y: i32) -> usize {
@@ -65,7 +69,9 @@ impl<'a> A8Blitter<'a> {
         if y < 0 || y >= self.height {
             return;
         }
-        let Some((x0, x1)) = self.xr(x, w) else { return };
+        let Some((x0, x1)) = self.xr(x, w) else {
+            return;
+        };
         let src = div255(255 * aa as u32);
         for xx in x0..x1 {
             let i = self.idx(xx, y);
@@ -76,7 +82,9 @@ impl<'a> A8Blitter<'a> {
         if y < 0 || y >= self.height {
             return;
         }
-        let Some((x0, x1)) = self.xr(x, w) else { return };
+        let Some((x0, x1)) = self.xr(x, w) else {
+            return;
+        };
         for xx in x0..x1 {
             let i = self.idx(xx, y);
             self.data[i] = srcover_p(255, self.data[i]);
@@ -132,7 +140,15 @@ impl<'a> Blitter for A8Blitter<'a> {
         self.blit_anti_h(x, y, &[a0], &runs);
         self.blit_anti_h(x, y + 1, &[a1], &runs);
     }
-    fn blit_anti_rect(&mut self, x: i32, y: i32, width: i32, height: i32, left_alpha: u8, right_alpha: u8) {
+    fn blit_anti_rect(
+        &mut self,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        left_alpha: u8,
+        right_alpha: u8,
+    ) {
         let mut x = x;
         if left_alpha > 0 {
             self.blit_v(x, y, height, left_alpha);
@@ -151,7 +167,9 @@ impl<'a> Blitter for A8Blitter<'a> {
             if yy < 0 || yy >= self.height {
                 continue;
             }
-            let Some((x0, x1)) = self.xr(clip.left, clip.width()) else { continue };
+            let Some((x0, x1)) = self.xr(clip.left, clip.width()) else {
+                continue;
+            };
             let row = (yy - mask_bounds.top) as usize * row_bytes;
             for xx in x0..x1 {
                 let src = mask[row + (xx - mask_bounds.left) as usize];
@@ -234,8 +252,16 @@ fn prepare_destination(radius_x: i32, radius_y: i32, src: &Mask) -> Mask {
         src.bounds.left - radius_x + dst_w,
         src.bounds.top - radius_y + dst_h,
     );
-    let image = if src.has_image() { vec![0u8; (dst_w * dst_h) as usize] } else { Vec::new() };
-    Mask { bounds, row_bytes: dst_w as usize, image }
+    let image = if src.has_image() {
+        vec![0u8; (dst_w * dst_h) as usize]
+    } else {
+        Vec::new()
+    };
+    Mask {
+        bounds,
+        row_bytes: dst_w as usize,
+        image,
+    }
 }
 
 #[inline]
@@ -281,7 +307,16 @@ fn store8(dst: &mut [u8], off: usize, v: &[u16; 8], width: usize) {
     }
 }
 
-fn blur_row(radius: usize, g: &[u16; 5], src: &[u8], src_off: usize, src_w: usize, dst: &mut [u8], dst_off: usize, dst_w: usize) {
+fn blur_row(
+    radius: usize,
+    g: &[u16; 5],
+    src: &[u8],
+    src_off: usize,
+    src_w: usize,
+    dst: &mut [u8],
+    dst_off: usize,
+    dst_w: usize,
+) {
     let mut d0 = [HALF88; 8];
     let mut d8 = [HALF88; 8];
     let mut x = 0usize;
@@ -337,7 +372,18 @@ fn blur_y_radius(radius: usize, s0: &[u16; 8], g: &[u16; 5], d: &mut [[u16; 8]; 
     answer
 }
 
-fn blur_column(radius: usize, width: usize, g: &[u16; 5], src: &[u8], src_off: usize, src_rb: usize, src_h: usize, dst: &mut [u8], dst_off: usize, dst_rb: usize) {
+fn blur_column(
+    radius: usize,
+    width: usize,
+    g: &[u16; 5],
+    src: &[u8],
+    src_off: usize,
+    src_rb: usize,
+    src_h: usize,
+    dst: &mut [u8],
+    dst_off: usize,
+    dst_rb: usize,
+) {
     let mut d = [[HALF88; 8]; 8];
     let mut so = src_off;
     let mut dof = dst_off;
@@ -373,17 +419,48 @@ fn small_blur(sigma: f64, src: &Mask) -> (Mask, (i32, i32)) {
     // Vertical pass: columns of 8 into dst, offset by radius in x.
     let mut x = 0usize;
     while x + 8 <= src_w {
-        blur_column(radius, 8, &g, &src.image, x, src.row_bytes, src_h, &mut dst.image, radius + x, dst_rb);
+        blur_column(
+            radius,
+            8,
+            &g,
+            &src.image,
+            x,
+            src.row_bytes,
+            src_h,
+            &mut dst.image,
+            radius + x,
+            dst_rb,
+        );
         x += 8;
     }
     let x_tail = src_w - x;
     if x_tail > 0 {
-        blur_column(radius, x_tail, &g, &src.image, x, src.row_bytes, src_h, &mut dst.image, radius + x, dst_rb);
+        blur_column(
+            radius,
+            x_tail,
+            &g,
+            &src.image,
+            x,
+            src.row_bytes,
+            src_h,
+            &mut dst.image,
+            radius + x,
+            dst_rb,
+        );
     }
     // Horizontal pass in place: source is dst offset by radius.
     let tmp = dst.image.clone();
     for y in 0..dst_h {
-        blur_row(radius, &g, &tmp, y * dst_rb + radius, src_w, &mut dst.image, y * dst_rb, dst_w);
+        blur_row(
+            radius,
+            &g,
+            &tmp,
+            y * dst_rb + radius,
+            src_w,
+            &mut dst.image,
+            y * dst_rb,
+            dst_w,
+        );
     }
     (dst, (radius as i32, radius as i32))
 }
@@ -399,21 +476,51 @@ struct PlanGauss {
 
 impl PlanGauss {
     fn new(sigma: f64) -> PlanGauss {
-        let possible_window = (sigma * 3.0 * (2.0 * std::f64::consts::PI).sqrt() / 4.0 + 0.5).floor() as i32;
+        let possible_window =
+            (sigma * 3.0 * (2.0 * std::f64::consts::PI).sqrt() / 4.0 + 0.5).floor() as i32;
         let window = possible_window.max(1);
         let pass0 = (window - 1) as usize;
         let pass1 = (window - 1) as usize;
         let pass2 = if window & 1 == 1 { window - 1 } else { window } as usize;
-        let border = if window & 1 == 1 { 3 * ((window - 1) / 2) } else { 3 * (window / 2) - 1 };
+        let border = if window & 1 == 1 {
+            3 * ((window - 1) / 2)
+        } else {
+            3 * (window / 2) - 1
+        };
         let sliding_window = 2 * border + 1;
         let window2 = window as i64 * window as i64;
         let window3 = window2 * window as i64;
-        let divisor = if window & 1 == 1 { window3 } else { window3 + window2 };
+        let divisor = if window & 1 == 1 {
+            window3
+        } else {
+            window3 + window2
+        };
         let weight = (1.0 / divisor as f64 * (1u64 << 32) as f64).round() as u64;
-        PlanGauss { weight, border, sliding_window, pass0, pass1, pass2 }
+        PlanGauss {
+            weight,
+            border,
+            sliding_window,
+            pass0,
+            pass1,
+            pass2,
+        }
     }
-    fn blur(&self, src: &[u8], src_step: usize, src_n: usize, dst: &mut [u8], dst_start: usize, dst_stride: usize, dst_n: usize, width: usize) {
-        let no_change = if self.sliding_window as usize > width { self.sliding_window as usize - width } else { 0 };
+    fn blur(
+        &self,
+        src: &[u8],
+        src_step: usize,
+        src_n: usize,
+        dst: &mut [u8],
+        dst_start: usize,
+        dst_stride: usize,
+        dst_n: usize,
+        width: usize,
+    ) {
+        let no_change = if self.sliding_window as usize > width {
+            self.sliding_window as usize - width
+        } else {
+            0
+        };
         let mut b0 = vec![0u32; self.pass0.max(1)];
         let mut b1 = vec![0u32; self.pass1.max(1)];
         let mut b2 = vec![0u32; self.pass2.max(1)];
@@ -423,7 +530,17 @@ impl PlanGauss {
         let final_scale = |sum: u32| -> u8 { ((self.weight * sum as u64 + half) >> 32) as u8 };
         let mut di = dst_start;
         let mut produced = 0usize;
-        let step = |lead: u32, b0: &mut Vec<u32>, b1: &mut Vec<u32>, b2: &mut Vec<u32>, c0: &mut usize, c1: &mut usize, c2: &mut usize, sum0: &mut u32, sum1: &mut u32, sum2: &mut u32| -> u8 {
+        let step = |lead: u32,
+                    b0: &mut Vec<u32>,
+                    b1: &mut Vec<u32>,
+                    b2: &mut Vec<u32>,
+                    c0: &mut usize,
+                    c1: &mut usize,
+                    c2: &mut usize,
+                    sum0: &mut u32,
+                    sum1: &mut u32,
+                    sum2: &mut u32|
+         -> u8 {
             *sum0 = sum0.wrapping_add(lead);
             *sum1 = sum1.wrapping_add(*sum0);
             *sum2 = sum2.wrapping_add(*sum1);
@@ -447,13 +564,19 @@ impl PlanGauss {
         };
         for i in 0..src_n {
             let lead = src[i * src_step] as u32;
-            let out = step(lead, &mut b0, &mut b1, &mut b2, &mut c0, &mut c1, &mut c2, &mut sum0, &mut sum1, &mut sum2);
+            let out = step(
+                lead, &mut b0, &mut b1, &mut b2, &mut c0, &mut c1, &mut c2, &mut sum0, &mut sum1,
+                &mut sum2,
+            );
             dst[di] = out;
             di += dst_stride;
             produced += 1;
         }
         for _ in 0..no_change {
-            let out = step(0, &mut b0, &mut b1, &mut b2, &mut c0, &mut c1, &mut c2, &mut sum0, &mut sum1, &mut sum2);
+            let out = step(
+                0, &mut b0, &mut b1, &mut b2, &mut c0, &mut c1, &mut c2, &mut sum0, &mut sum1,
+                &mut sum2,
+            );
             dst[di] = out;
             di += dst_stride;
             produced += 1;
@@ -477,7 +600,10 @@ impl PlanGauss {
             dcur -= dst_stride;
             si -= 1;
             let lead = src[si * src_step] as u32;
-            let out = step(lead, &mut b0, &mut b1, &mut b2, &mut c0, &mut c1, &mut c2, &mut sum0, &mut sum1, &mut sum2);
+            let out = step(
+                lead, &mut b0, &mut b1, &mut b2, &mut c0, &mut c1, &mut c2, &mut sum0, &mut sum1,
+                &mut sum2,
+            );
             dst[dcur] = out;
         }
         let _ = produced;
@@ -525,11 +651,25 @@ pub fn has_no_blur(sigma: f64) -> bool {
 
 /// `compute_mask_bounds`: mask bounds for the path plus the blur margin.
 pub fn compute_mask_bounds(dev_bounds: &Rect, clip: &IRect, sigma: f64) -> Option<IRect> {
-    let outset = Rect::from_ltrb(dev_bounds.left - 0.5, dev_bounds.top - 0.5, dev_bounds.right + 0.5, dev_bounds.bottom + 0.5);
+    let outset = Rect::from_ltrb(
+        dev_bounds.left - 0.5,
+        dev_bounds.top - 0.5,
+        dev_bounds.right + 0.5,
+        dev_bounds.bottom + 0.5,
+    );
     let mut bounds = outset.round_out();
-    let src = Mask { bounds, row_bytes: 0, image: Vec::new() };
+    let src = Mask {
+        bounds,
+        row_bytes: 0,
+        image: Vec::new(),
+    };
     let (_, (mx, my)) = mask_blur(sigma, &src);
-    let clip_out = IRect::from_ltrb(clip.left - mx.min(128), clip.top - my.min(128), clip.right + mx.min(128), clip.bottom + my.min(128));
+    let clip_out = IRect::from_ltrb(
+        clip.left - mx.min(128),
+        clip.top - my.min(128),
+        clip.right + mx.min(128),
+        clip.bottom + my.min(128),
+    );
     bounds = bounds.intersect(&clip_out)?;
     Some(bounds)
 }

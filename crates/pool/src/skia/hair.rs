@@ -39,7 +39,14 @@ enum Kind {
     Vertish,
 }
 
-fn draw_cap(kind: &Kind, b: &mut dyn Blitter, x: i32, fy: Fixed, slope: Fixed, coverage: FDot6) -> Fixed {
+fn draw_cap(
+    kind: &Kind,
+    b: &mut dyn Blitter,
+    x: i32,
+    fy: Fixed,
+    slope: Fixed,
+    coverage: FDot6,
+) -> Fixed {
     match kind {
         Kind::HLine => {
             let fy = fy.wrapping_add(FIXED_HALF);
@@ -82,13 +89,25 @@ fn draw_cap(kind: &Kind, b: &mut dyn Blitter, x: i32, fy: Fixed, slope: Fixed, c
             let fx = fy.wrapping_add(FIXED_HALF);
             let xx = fixed_floor_to_int(fx);
             let a = fixed_to_alpha(fx);
-            b.blit_anti_h2(xx - 1, x, scale_alpha_by_coverage(255 - a, coverage), scale_alpha_by_coverage(a, coverage));
+            b.blit_anti_h2(
+                xx - 1,
+                x,
+                scale_alpha_by_coverage(255 - a, coverage),
+                scale_alpha_by_coverage(a, coverage),
+            );
             fx.wrapping_add(slope) - FIXED_HALF
         }
     }
 }
 
-fn draw_line(kind: &Kind, b: &mut dyn Blitter, x: i32, stopx: i32, fy: Fixed, slope: Fixed) -> Fixed {
+fn draw_line(
+    kind: &Kind,
+    b: &mut dyn Blitter,
+    x: i32,
+    stopx: i32,
+    fy: Fixed,
+    slope: Fixed,
+) -> Fixed {
     match kind {
         Kind::HLine => {
             let count = stopx - x;
@@ -179,7 +198,14 @@ fn partial_pixel_coverage(pos: FDot6) -> FDot6 {
     fd6_frac(pos - 1) + 1
 }
 
-fn do_anti_hairline(mut x0: FDot6, mut y0: FDot6, mut x1: FDot6, mut y1: FDot6, clip: Option<&IRect>, b: &mut dyn Blitter) {
+fn do_anti_hairline(
+    mut x0: FDot6,
+    mut y0: FDot6,
+    mut x1: FDot6,
+    mut y1: FDot6,
+    clip: Option<&IRect>,
+    b: &mut dyn Blitter,
+) {
     if any_bad_ints(x0, y0, x1, y1) {
         return;
     }
@@ -242,10 +268,16 @@ fn do_anti_hairline(mut x0: FDot6, mut y0: FDot6, mut x1: FDot6, mut y1: FDot6, 
             let (mut top, mut bottom);
             if slope >= 0 {
                 top = fixed_floor_to_int(fstart - FIXED_HALF);
-                bottom = fixed_ceil_to_int(fstart.wrapping_add((istop - istart - 1).wrapping_mul(slope)).wrapping_add(FIXED_HALF));
+                bottom = fixed_ceil_to_int(
+                    fstart
+                        .wrapping_add((istop - istart - 1).wrapping_mul(slope))
+                        .wrapping_add(FIXED_HALF),
+                );
             } else {
                 bottom = fixed_ceil_to_int(fstart + FIXED_HALF);
-                top = fixed_floor_to_int(fstart.wrapping_add((istop - istart - 1).wrapping_mul(slope)) - FIXED_HALF);
+                top = fixed_floor_to_int(
+                    fstart.wrapping_add((istop - istart - 1).wrapping_mul(slope)) - FIXED_HALF,
+                );
             }
             top -= 1;
             bottom += 1;
@@ -306,10 +338,16 @@ fn do_anti_hairline(mut x0: FDot6, mut y0: FDot6, mut x1: FDot6, mut y1: FDot6, 
             let (mut left, mut right);
             if slope >= 0 {
                 left = fixed_floor_to_int(fstart - FIXED_HALF);
-                right = fixed_ceil_to_int(fstart.wrapping_add((istop - istart - 1).wrapping_mul(slope)).wrapping_add(FIXED_HALF));
+                right = fixed_ceil_to_int(
+                    fstart
+                        .wrapping_add((istop - istart - 1).wrapping_mul(slope))
+                        .wrapping_add(FIXED_HALF),
+                );
             } else {
                 right = fixed_ceil_to_int(fstart + FIXED_HALF);
-                left = fixed_floor_to_int(fstart.wrapping_add((istop - istart - 1).wrapping_mul(slope)) - FIXED_HALF);
+                left = fixed_floor_to_int(
+                    fstart.wrapping_add((istop - istart - 1).wrapping_mul(slope)) - FIXED_HALF,
+                );
             }
             left -= 1;
             right += 1;
@@ -348,14 +386,22 @@ fn nested_lt(a: f32, b: f32, dim: f32) -> bool {
     a <= b && (a < b || dim > 0.0)
 }
 fn contains_no_empty_check(outer: &Rect, inner: &Rect) -> bool {
-    outer.left <= inner.left && outer.top <= inner.top && outer.right >= inner.right && outer.bottom >= inner.bottom
+    outer.left <= inner.left
+        && outer.top <= inner.top
+        && outer.right >= inner.right
+        && outer.bottom >= inner.bottom
 }
 fn sect_with_horizontal(src: &[Point; 2], y: f32) -> f32 {
     let dy = src[1].y - src[0].y;
     if dy.abs() <= SCALAR_NEARLY_ZERO {
         (0.5 * (src[0].x as f64 + src[1].x as f64)) as f32
     } else {
-        let (x0, y0, x1, y1) = (src[0].x as f64, src[0].y as f64, src[1].x as f64, src[1].y as f64);
+        let (x0, y0, x1, y1) = (
+            src[0].x as f64,
+            src[0].y as f64,
+            src[1].x as f64,
+            src[1].y as f64,
+        );
         let result = x0 + (y as f64 - y0) * (x1 - x0) / (y1 - y0);
         let (lo, hi) = if x0 < x1 { (x0, x1) } else { (x1, x0) };
         result.clamp(lo, hi) as f32
@@ -366,7 +412,12 @@ fn sect_with_vertical(src: &[Point; 2], x: f32) -> f32 {
     if dx.abs() <= SCALAR_NEARLY_ZERO {
         (0.5 * (src[0].y as f64 + src[1].y as f64)) as f32
     } else {
-        let (x0, y0, x1, y1) = (src[0].x as f64, src[0].y as f64, src[1].x as f64, src[1].y as f64);
+        let (x0, y0, x1, y1) = (
+            src[0].x as f64,
+            src[0].y as f64,
+            src[1].x as f64,
+            src[1].y as f64,
+        );
         (y0 + (x as f64 - x0) * (y1 - y0) / (x1 - x0)) as f32
     }
 }
@@ -415,10 +466,19 @@ fn anti_hair_line_rgn(src: &[Point], clip: Option<&IRect>, b: &mut dyn Blitter) 
     }
     let max = 32767.0f32;
     let fixed_bounds = Rect::from_ltrb(-max, -max, max, max);
-    let clip_bounds = clip.map(|c| Rect::from_ltrb(c.left as f32 - 1.0, c.top as f32 - 1.0, c.right as f32 + 1.0, c.bottom as f32 + 1.0));
+    let clip_bounds = clip.map(|c| {
+        Rect::from_ltrb(
+            c.left as f32 - 1.0,
+            c.top as f32 - 1.0,
+            c.right as f32 + 1.0,
+            c.bottom as f32 + 1.0,
+        )
+    });
     for i in 0..src.len() - 1 {
         let seg = [src[i], src[i + 1]];
-        let Some(mut pts) = intersect_line(&seg, &fixed_bounds) else { continue };
+        let Some(mut pts) = intersect_line(&seg, &fixed_bounds) else {
+            continue;
+        };
         if let Some(cb) = &clip_bounds {
             match intersect_line(&pts, cb) {
                 Some(p) => pts = p,
@@ -434,7 +494,12 @@ fn anti_hair_line_rgn(src: &[Point], clip: Option<&IRect>, b: &mut dyn Blitter) 
             let top = y0.min(y1);
             let right = x0.max(x1);
             let bottom = y0.max(y1);
-            let ir = IRect::from_ltrb(fd6_floor(left) - 1, fd6_floor(top) - 1, fd6_ceil(right) + 1, fd6_ceil(bottom) + 1);
+            let ir = IRect::from_ltrb(
+                fd6_floor(left) - 1,
+                fd6_floor(top) - 1,
+                fd6_ceil(right) + 1,
+                fd6_ceil(bottom) + 1,
+            );
             if ir.intersect(c).is_none() {
                 continue;
             }
@@ -501,8 +566,14 @@ fn hair_quad(pts: &[Point; 3], clip: Option<&IRect>, b: &mut dyn Blitter, level:
 fn compute_cubic_segs(pts: &[Point; 4]) -> usize {
     let one_third = 1.0f32 / 3.0;
     let two_third = 2.0f32 / 3.0;
-    let p13 = Point::new(one_third * pts[3].x + two_third * pts[0].x, one_third * pts[3].y + two_third * pts[0].y);
-    let p23 = Point::new(one_third * pts[0].x + two_third * pts[3].x, one_third * pts[0].y + two_third * pts[3].y);
+    let p13 = Point::new(
+        one_third * pts[3].x + two_third * pts[0].x,
+        one_third * pts[3].y + two_third * pts[0].y,
+    );
+    let p23 = Point::new(
+        one_third * pts[0].x + two_third * pts[3].x,
+        one_third * pts[0].y + two_third * pts[3].y,
+    );
     let d1 = Point::new((pts[1].x - p13.x).abs(), (pts[1].y - p13.y).abs());
     let d2 = Point::new((pts[2].x - p23.x).abs(), (pts[2].y - p23.y).abs());
     let diff = d1.x.max(d2.x).max(d1.y.max(d2.y));
@@ -520,7 +591,10 @@ fn lt_90(p0: Point, pivot: Point, p2: Point) -> bool {
     Point::dot(p0.sub(pivot), p2.sub(pivot)) >= 0.0
 }
 fn quick_cubic_niceness_check(pts: &[Point; 4]) -> bool {
-    lt_90(pts[1], pts[0], pts[3]) && lt_90(pts[2], pts[0], pts[3]) && lt_90(pts[1], pts[3], pts[0]) && lt_90(pts[2], pts[3], pts[0])
+    lt_90(pts[1], pts[0], pts[3])
+        && lt_90(pts[2], pts[0], pts[3])
+        && lt_90(pts[1], pts[3], pts[0])
+        && lt_90(pts[2], pts[3], pts[0])
 }
 
 fn hair_cubic(pts: &[Point; 4], clip: Option<&IRect>, b: &mut dyn Blitter) {
@@ -559,7 +633,10 @@ fn geometric_overlap(a: &Rect, b: &Rect) -> bool {
     a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
 }
 fn geometric_contains(outer: &Rect, inner: &Rect) -> bool {
-    inner.right <= outer.right && inner.left >= outer.left && inner.bottom <= outer.bottom && inner.top >= outer.top
+    inner.right <= outer.right
+        && inner.left >= outer.left
+        && inner.bottom <= outer.bottom
+        && inner.top >= outer.top
 }
 
 struct Params<'c> {
@@ -580,19 +657,28 @@ fn cull<'c>(bounds: &Rect, p: &Params<'c>) -> Option<Option<&'c IRect>> {
 }
 
 fn hairquad(pts: &[Point; 3], p: &Params, b: &mut dyn Blitter, level: usize) {
-    let Some(clip) = cull(&Rect::bounds(pts), p) else { return };
+    let Some(clip) = cull(&Rect::bounds(pts), p) else {
+        return;
+    };
     hair_quad(pts, clip, b, level);
 }
 
 fn haircubic(pts: &[Point; 4], p: &Params, b: &mut dyn Blitter) {
-    let Some(clip) = cull(&Rect::bounds(pts), p) else { return };
+    let Some(clip) = cull(&Rect::bounds(pts), p) else {
+        return;
+    };
     if quick_cubic_niceness_check(pts) {
         hair_cubic(pts, clip, b);
     } else {
         let chopped = chop_cubic_at_max_curvature(pts);
         let n = (chopped.len() - 1) / 3;
         for i in 0..n {
-            let c = [chopped[i * 3], chopped[i * 3 + 1], chopped[i * 3 + 2], chopped[i * 3 + 3]];
+            let c = [
+                chopped[i * 3],
+                chopped[i * 3 + 1],
+                chopped[i * 3 + 2],
+                chopped[i * 3 + 3],
+            ];
             hair_cubic(&c, clip, b);
         }
     }
@@ -618,13 +704,26 @@ pub fn anti_hair_path(path: &Path, rclip: &IRect, b: &mut dyn Blitter) {
     if ibounds.intersect(rclip).is_none() {
         return;
     }
-    let mut params = Params { clip: None, inset: None, outset: None };
+    let mut params = Params {
+        clip: None,
+        inset: None,
+        outset: None,
+    };
     if !rclip.contains(&ibounds) {
         params.clip = Some(rclip);
         let r = rclip.to_rect();
-        params.outset = Some(Rect::from_ltrb(r.left - 1.0, r.top - 1.0, r.right + 1.0, r.bottom + 1.0));
+        params.outset = Some(Rect::from_ltrb(
+            r.left - 1.0,
+            r.top - 1.0,
+            r.right + 1.0,
+            r.bottom + 1.0,
+        ));
         let inset = Rect::from_ltrb(r.left + 1.0, r.top + 1.0, r.right - 1.0, r.bottom - 1.0);
-        params.inset = Some(if inset.left > inset.right || inset.top > inset.bottom { Rect::default() } else { inset });
+        params.inset = Some(if inset.left > inset.right || inset.top > inset.bottom {
+            Rect::default()
+        } else {
+            inset
+        });
     }
     let mut first_pt = Point::default();
     let mut last_pt = Point::default();
@@ -659,7 +758,12 @@ pub fn anti_hair_path(path: &Path, rclip: &IRect, b: &mut dyn Blitter) {
                 pi += 2;
             }
             Verb::Cubic => {
-                let pts = [path.pts[pi - 1], path.pts[pi], path.pts[pi + 1], path.pts[pi + 2]];
+                let pts = [
+                    path.pts[pi - 1],
+                    path.pts[pi],
+                    path.pts[pi + 1],
+                    path.pts[pi + 2],
+                ];
                 haircubic(&pts, &params, b);
                 last_pt = pts[3];
                 pi += 3;
@@ -747,8 +851,17 @@ fn antifilldot8(l: FDot8, t: FDot8, r: FDot8, bt: FDot8, b: &mut dyn Blitter, fi
 /// `SkScan::AntiFillRect(rect, clip, blitter)` for a rect clip: the
 /// `drawRect` route (no quarter-pixel edge snapping, unlike paths).
 pub fn anti_fill_rect(orig: &Rect, clip: &IRect, b: &mut dyn Blitter) {
-    let Some(r) = clip.to_rect().intersect(orig) else { return };
+    let Some(r) = clip.to_rect().intersect(orig) else {
+        return;
+    };
     // XRect_set: SkScalarToFixed = saturate2int(x · 65536), truncating.
     let fx = |v: f32| saturate2int(v * 65536.0);
-    antifilldot8(fixed_to_fdot8(fx(r.left)), fixed_to_fdot8(fx(r.top)), fixed_to_fdot8(fx(r.right)), fixed_to_fdot8(fx(r.bottom)), b, true);
+    antifilldot8(
+        fixed_to_fdot8(fx(r.left)),
+        fixed_to_fdot8(fx(r.top)),
+        fixed_to_fdot8(fx(r.right)),
+        fixed_to_fdot8(fx(r.bottom)),
+        b,
+        true,
+    );
 }

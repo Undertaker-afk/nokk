@@ -207,10 +207,16 @@ fn parse_proxy(s: &str) -> Option<nokk_net::ProxyConfig> {
     let port = u.port().or_else(|| {
         let default = u.port_or_known_default()?;
         let authority = s.split_once("://")?.1.split(['/', '?', '#']).next()?;
-        authority.ends_with(&format!(":{default}")).then_some(default)
+        authority
+            .ends_with(&format!(":{default}"))
+            .then_some(default)
     })?;
     // Userinfo comes percent-encoded (`p%40ss`); the proxy wants the real bytes.
-    let decode = |v: &str| percent_encoding::percent_decode_str(v).decode_utf8_lossy().into_owned();
+    let decode = |v: &str| {
+        percent_encoding::percent_decode_str(v)
+            .decode_utf8_lossy()
+            .into_owned()
+    };
     Some(nokk_net::ProxyConfig {
         scheme,
         host: u.host_str()?.to_string(),
@@ -526,7 +532,11 @@ async fn real_main() -> Result<()> {
                         .new_context_with_session(name.clone(), proxy.clone())
                         .await?
                 }
-                None => engine.new_context().await?,
+                // Route the one-shot context through the proxy too: otherwise
+                // `--proxy ... --geoip-timezone` without `--session` silently
+                // runs direct with the default locale (geo lookup is a no-op
+                // without a proxy, and a proxy that is never used is the same).
+                None => engine.new_context_with_proxy(proxy.clone()).await?,
             };
             if cli.until_clearance {
                 c.set_stop_at_clearance(true);
@@ -1101,7 +1111,11 @@ if (s.length >= __DUMPLO__ && s.length <= __DUMPHI__ && !(globalThis.__ptD = glo
                 // 71 chars).
                 let probe = probe.replace(
                     "__LIGHT__",
-                    if std::env::var("NOKK_TRACE_BEACON").as_deref() == Ok("light") { "1" } else { "0" },
+                    if std::env::var("NOKK_TRACE_BEACON").as_deref() == Ok("light") {
+                        "1"
+                    } else {
+                        "0"
+                    },
                 );
                 let probe = probe.replace(
                     "__ENCMIN__",
@@ -1110,9 +1124,12 @@ if (s.length >= __DUMPLO__ && s.length <= __DUMPHI__ && !(globalThis.__ptD = glo
                 // Which piece to dump whole: `NOKK_DUMP_ENC=30000-32000`. Defaults to the
                 // audio block. Set the same range for Chrome via `DUMPENC` in
                 // `chrome-compare`.
-                let window = std::env::var("NOKK_DUMP_ENC").unwrap_or_else(|_| "15000-16000".into());
+                let window =
+                    std::env::var("NOKK_DUMP_ENC").unwrap_or_else(|_| "15000-16000".into());
                 let (lo, hi) = window.split_once('-').unwrap_or(("15000", "16000"));
-                let probe = probe.replace("__DUMPLO__", lo.trim()).replace("__DUMPHI__", hi.trim());
+                let probe = probe
+                    .replace("__DUMPLO__", lo.trim())
+                    .replace("__DUMPHI__", hi.trim());
                 c.add_frame_init_script(spread_to_realms(&probe, "beacon"));
                 c.add_worker_init_script(probe.clone());
                 c.add_init_script(probe);
@@ -1453,7 +1470,11 @@ if (s.length >= __DUMPLO__ && s.length <= __DUMPHI__ && !(globalThis.__ptD = glo
                 })();"#;
                 let probe = probe.replace(
                     "__READS__",
-                    if std::env::var("NOKK_TRACE_READS").is_ok() { "true" } else { "false" },
+                    if std::env::var("NOKK_TRACE_READS").is_ok() {
+                        "true"
+                    } else {
+                        "false"
+                    },
                 );
                 c.add_frame_init_script(spread_to_realms(&probe, "fields"));
                 // Also on the page itself: the interstitial posts its own reports to
@@ -2512,11 +2533,19 @@ if (s.length >= __DUMPLO__ && s.length <= __DUMPHI__ && !(globalThis.__ptD = glo
                 );
                 let hook = hook.replace(
                     "__REPORT__",
-                    if std::env::var("NOKK_DUMP_REPORT").is_ok() { "true" } else { "false" },
+                    if std::env::var("NOKK_DUMP_REPORT").is_ok() {
+                        "true"
+                    } else {
+                        "false"
+                    },
                 );
                 let hook = hook.replace(
                     "__HANG__",
-                    if std::env::var("NOKK_HANG_UNREACHABLE").is_ok() { "true" } else { "false" },
+                    if std::env::var("NOKK_HANG_UNREACHABLE").is_ok() {
+                        "true"
+                    } else {
+                        "false"
+                    },
                 );
                 c.add_frame_init_script(spread_to_realms(&hook, "hooks"));
                 c.add_worker_init_script(hook.clone());
@@ -2540,7 +2569,12 @@ if (s.length >= __DUMPLO__ && s.length <= __DUMPHI__ && !(globalThis.__ptD = glo
 
         if let Some(seconds) = cli.solve_challenge {
             let outcome = ctx.solve_challenge(Duration::from_secs(seconds)).await;
-            tracing::debug!(status = outcome.status.as_str(), presses = outcome.presses, elapsed_ms = outcome.elapsed_ms, "solve finished");
+            tracing::debug!(
+                status = outcome.status.as_str(),
+                presses = outcome.presses,
+                elapsed_ms = outcome.elapsed_ms,
+                "solve finished"
+            );
         }
 
         // With the probe tracer on, say what the page asked us — in the page and
@@ -2633,15 +2667,24 @@ if (s.length >= __DUMPLO__ && s.length <= __DUMPHI__ && !(globalThis.__ptD = glo
                                 .unwrap_or_else(|| "page".to_string());
                             eprintln!("# tail {label}:");
                             for row in rows {
-                                eprintln!("#   {:>6}ms {} -> {}", row[0].as_i64().unwrap_or(0),
-                                          row[1].as_str().unwrap_or(""), row[2].as_str().unwrap_or(""));
+                                eprintln!(
+                                    "#   {:>6}ms {} -> {}",
+                                    row[0].as_i64().unwrap_or(0),
+                                    row[1].as_str().unwrap_or(""),
+                                    row[2].as_str().unwrap_or("")
+                                );
                             }
                         }
                     }
                 }
             }
             // Feed snapshot at the mark: what was read last before sending.
-            for slot in ctx.frame_list().iter().map(|f| Some(f.id)).chain(std::iter::once(None)) {
+            for slot in ctx
+                .frame_list()
+                .iter()
+                .map(|f| Some(f.id))
+                .chain(std::iter::once(None))
+            {
                 let expr = "globalThis.__pt_atMark || ''";
                 let out = match slot {
                     None => ctx.evaluate(expr).await,
@@ -2677,7 +2720,10 @@ if (s.length >= __DUMPLO__ && s.length <= __DUMPHI__ && !(globalThis.__ptD = glo
                     .and_then(|t| serde_json::from_str(t).ok())
                     .unwrap_or_default();
                 for (url, log) in rows {
-                    dump(format!("worker {url} (ended)"), serde_json::Value::String(log));
+                    dump(
+                        format!("worker {url} (ended)"),
+                        serde_json::Value::String(log),
+                    );
                 }
             }
             for f in ctx.frame_list() {
@@ -2718,35 +2764,38 @@ if (s.length >= __DUMPLO__ && s.length <= __DUMPHI__ && !(globalThis.__ptD = glo
                 ("typeof __ptProg === 'string' ? __ptProg : ''", "join"),
                 // Smaller joins (report, style enumeration) go one per file: line-by-line
                 // comparison with Chrome needs them whole.
-                ("(globalThis.__ptJoins||[]).map(j => j[0] + '\\u0000' + j[1]).join('\\u0001')", "joins"),
+                (
+                    "(globalThis.__ptJoins||[]).map(j => j[0] + '\\u0000' + j[1]).join('\\u0001')",
+                    "joins",
+                ),
             ] {
-            for slot in where_.clone() {
-                let out = match slot {
-                    None => ctx.evaluate(js).await,
-                    Some(id) => ctx.evaluate_in_frame(id, js).await,
-                };
-                if let Ok(serde_json::Value::String(src)) = out {
-                    if src.len() > 1000 {
-                        let name = match slot {
-                            None => format!("{path}.page.{tag}"),
-                            Some(id) => format!("{path}.frame{id}.{tag}"),
-                        };
-                        if tag == "joins" {
-                            for part in src.split('\u{1}') {
-                                let Some((n, body)) = part.split_once('\u{0}') else {
-                                    continue;
-                                };
-                                let name = format!("{name}.{n}");
-                                if std::fs::write(&name, body).is_ok() {
-                                    eprintln!("# join saved: {name} ({} bytes)", body.len());
+                for slot in where_.clone() {
+                    let out = match slot {
+                        None => ctx.evaluate(js).await,
+                        Some(id) => ctx.evaluate_in_frame(id, js).await,
+                    };
+                    if let Ok(serde_json::Value::String(src)) = out {
+                        if src.len() > 1000 {
+                            let name = match slot {
+                                None => format!("{path}.page.{tag}"),
+                                Some(id) => format!("{path}.frame{id}.{tag}"),
+                            };
+                            if tag == "joins" {
+                                for part in src.split('\u{1}') {
+                                    let Some((n, body)) = part.split_once('\u{0}') else {
+                                        continue;
+                                    };
+                                    let name = format!("{name}.{n}");
+                                    if std::fs::write(&name, body).is_ok() {
+                                        eprintln!("# join saved: {name} ({} bytes)", body.len());
+                                    }
                                 }
+                            } else if std::fs::write(&name, &src).is_ok() {
+                                eprintln!("# program saved: {name} ({} bytes)", src.len());
                             }
-                        } else if std::fs::write(&name, &src).is_ok() {
-                            eprintln!("# program saved: {name} ({} bytes)", src.len());
                         }
                     }
                 }
-            }
             }
         }
         // Ask the same thing of the page and each of its frames. The challenge
@@ -2873,7 +2922,9 @@ if (s.length >= __DUMPLO__ && s.length <= __DUMPHI__ && !(globalThis.__ptD = glo
         // `--until-clearance` stops on the gate's page on purpose, lock in hand.
         let still_challenged = at_gate && !ctx.stopped_at_clearance();
         if at_gate && !still_challenged {
-            eprintln!("clearance obtained; the site behind the gate was not loaded (--until-clearance)");
+            eprintln!(
+                "clearance obtained; the site behind the gate was not loaded (--until-clearance)"
+            );
         }
         if still_challenged {
             if cli.import_cookies.is_some() {
@@ -2904,9 +2955,12 @@ if (s.length >= __DUMPLO__ && s.length <= __DUMPHI__ && !(globalThis.__ptD = glo
     }
 
     // One-shot eval mode: run JS in a stealth-patched context and print it
-    // (driving the event loop so fetch/timers can complete).
+    // (driving the event loop so fetch/timers can complete). Routed through
+    // the proxy like --load so --proxy/--geoip-timezone probes see the exit
+    // IP's locale rather than the default.
     if let Some(js) = &cli.eval {
-        let ctx = engine.new_context().await?;
+        let proxy = cli.proxy.as_deref().and_then(parse_proxy);
+        let ctx = engine.new_context_with_proxy(proxy).await?;
         eval_and_print(&ctx, js).await?;
         return Ok(());
     }
@@ -2921,7 +2975,10 @@ if (s.length >= __DUMPLO__ && s.length <= __DUMPHI__ && !(globalThis.__ptD = glo
         cli.host
     };
     let token = cli.token.clone().filter(|t| !t.is_empty());
-    let query = token.as_ref().map(|t| format!("?token={t}")).unwrap_or_default();
+    let query = token
+        .as_ref()
+        .map(|t| format!("?token={t}"))
+        .unwrap_or_default();
     println!(
         "CDP server on ws://{advertise}:{}/devtools/browser/nokk{query}",
         cli.port
@@ -2934,7 +2991,15 @@ if (s.length >= __DUMPLO__ && s.length <= __DUMPHI__ && !(globalThis.__ptD = glo
             cli.host
         );
     }
-    nokk_cdp::serve(engine, nokk_cdp::ServerConfig { addr, auto_solve: cli.auto_solve.map(Duration::from_secs), token }).await?;
+    nokk_cdp::serve(
+        engine,
+        nokk_cdp::ServerConfig {
+            addr,
+            auto_solve: cli.auto_solve.map(Duration::from_secs),
+            token,
+        },
+    )
+    .await?;
     Ok(())
 }
 
@@ -2980,8 +3045,16 @@ mod tests {
         // No default-port inference — the proxy port must be given.
         assert!(parse_proxy("http://host.example").is_none());
         // Written out, the scheme's default port counts (`url` hides it).
-        assert_eq!(parse_proxy("http://u:p@p.webshare.io:80").expect(":80").port, 80);
-        assert_eq!(parse_proxy("https://h.example:443/").expect(":443").port, 443);
+        assert_eq!(
+            parse_proxy("http://u:p@p.webshare.io:80")
+                .expect(":80")
+                .port,
+            80
+        );
+        assert_eq!(
+            parse_proxy("https://h.example:443/").expect(":443").port,
+            443
+        );
         assert!(parse_proxy("http://h.example:8080").is_some());
     }
 

@@ -124,7 +124,7 @@ pub const DEFAULT_CHROME_MAJOR: u32 = 151;
 /// `sec-ch-ua` brands must agree with `navigator.userAgent` and
 /// `navigator.userAgentData.brands` in JS.
 fn retag_chrome_version(headers: &mut wreq::header::HeaderMap, major: u32) {
-    use wreq::header::{HeaderValue, HeaderName};
+    use wreq::header::{HeaderName, HeaderValue};
     if let Some(ua) = headers.get(wreq::header::USER_AGENT).cloned() {
         if let Ok(text) = ua.to_str() {
             // `Chrome/<n>.0.0.0` → `Chrome/<major>.0.0.0`, the rest untouched.
@@ -229,6 +229,11 @@ pub struct ClientConfig {
     /// profile's UA / `CHROME_MAJOR`. Mapped to a wreq profile by
     /// [`profile_for_major`]; an unavailable version falls back to the default.
     pub chrome_major: u32,
+    /// Wire `Accept-Language` overriding the emulation default. Set from the same
+    /// geo-derived profile that drives `navigator.languages` (see
+    /// `nokk_stealth::accept_language_header`), so the header and the JS locale
+    /// never disagree. `None` keeps the emulation default.
+    pub accept_language: Option<String>,
     pub limits: PoolLimits,
     pub proxy: Option<ProxyConfig>,
     pub request_timeout: Duration,
@@ -240,6 +245,7 @@ impl Default for ClientConfig {
             fingerprint: FingerprintProfile::default(),
             emulation_os: EmulationOs::default(),
             chrome_major: DEFAULT_CHROME_MAJOR,
+            accept_language: None,
             limits: PoolLimits::default(),
             proxy: None,
             request_timeout: Duration::from_secs(30),
@@ -349,7 +355,6 @@ pub struct Response {
     pub url: String,
 }
 
-
 /// Decodes the body per `content-encoding`. Unknown/empty encoding or a broken
 /// stream returns the body as is; a browser would not fail the load over it.
 fn decode_body(encoding: &str, raw: Vec<u8>) -> Vec<u8> {
@@ -439,6 +444,10 @@ pub struct FingerprintClient {
     /// cookie that matters for a warmed session (`cf_clearance`, Akamai's
     /// `bm_s*`) is HttpOnly, so `document.cookie` is no substitute.
     jar: Arc<SessionJar>,
+    /// Wire `Accept-Language` from [`ClientConfig::accept_language`]: the same
+    /// geo-derived locale `navigator.languages` reports. Applied per request over
+    /// the emulation default, keeping its header order.
+    accept_language: Option<String>,
 }
 
 /// Header names the emulation profile owns; caller-supplied values for these are
@@ -499,7 +508,8 @@ impl FingerprintClient {
         // weight of 220; Chrome 148 sends 256. The Akamai hash does not cover it,
         // the wire does, and a fingerprint that matches everywhere except one
         // number is still a fingerprint that does not match.
-        let mut emulation = <wreq_util::Emulation as wreq::IntoEmulation>::into_emulation(emulation);
+        let mut emulation =
+            <wreq_util::Emulation as wreq::IntoEmulation>::into_emulation(emulation);
         if let Some(h2) = emulation.http2_options.as_mut() {
             h2.headers_stream_dependency = Some(wreq::http2::StreamDependency::new(
                 wreq::http2::StreamId::zero(),
@@ -551,14 +561,24 @@ impl FingerprintClient {
         let inner = builder
             .build()
             .map_err(|e| NetError::Connect(e.to_string()))?;
-        Ok(Self { inner, jar })
+        Ok(Self {
+            inner,
+            jar,
+            accept_language: config.accept_language.clone(),
+        })
+    }
+
+    /// Wire `Accept-Language` this client sends, if any (geo-derived).
+    pub fn accept_language(&self) -> Option<&str> {
+        self.accept_language.as_deref()
     }
 }
 
-
 /// The URL's origin (scheme, host, port) as Chrome writes it in `Origin`.
 fn origin_of(url: &str) -> Option<String> {
-    let rest = url.strip_prefix("https://").map(|r| ("https", r))
+    let rest = url
+        .strip_prefix("https://")
+        .map(|r| ("https", r))
         .or_else(|| url.strip_prefix("http://").map(|r| ("http", r)))?;
     let (scheme, tail) = rest;
     let host = tail.split(['/', '?', '#']).next()?;
@@ -716,12 +736,7 @@ impl HttpClient for FingerprintClient {
         if storage_access {
             order.insert("sec-fetch-storage-access");
         }
-        for name in [
-            "referer",
-            "accept-encoding",
-            "accept-language",
-            "priority",
-        ] {
+        for name in ["referer", "accept-encoding", "accept-language", "priority"] {
             order.insert(name);
         }
         rb = rb.orig_headers(order);
@@ -742,6 +757,11 @@ impl HttpClient for FingerprintClient {
                 continue;
             }
             rb = rb.header(k, v);
+        }
+        // Geo-derived locale: same profile that drives navigator.languages.
+        // Overrides the emulation default in place, keeping its header order.
+        if let Some(lang) = &self.accept_language {
+            rb = rb.header("accept-language", lang);
         }
         if let Some(body) = req.body {
             rb = rb.body(body);

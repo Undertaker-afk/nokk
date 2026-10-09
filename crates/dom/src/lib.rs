@@ -80,7 +80,12 @@ impl ParsedPage {
             }),
             None => Value::Null,
         };
-        format!("globalThis.__pt_installDocument({}, {}, {});", self.root, dt, Value::String(self.markup.clone()))
+        format!(
+            "globalThis.__pt_installDocument({}, {}, {});",
+            self.root,
+            dt,
+            Value::String(self.markup.clone())
+        )
     }
 }
 
@@ -94,18 +99,23 @@ pub fn parse(html: &str) -> ParsedPage {
     let mut scripts = Vec::new();
     let mut script_modes = Vec::new();
     // The document's children are the doctype and the root <html> element.
-    let doctype = dom.document.children.borrow().iter().find_map(|c| match &c.data {
-        NodeData::Doctype {
-            name,
-            public_id,
-            system_id,
-        } => Some((
-            name.to_string(),
-            public_id.to_string(),
-            system_id.to_string(),
-        )),
-        _ => None,
-    });
+    let doctype = dom
+        .document
+        .children
+        .borrow()
+        .iter()
+        .find_map(|c| match &c.data {
+            NodeData::Doctype {
+                name,
+                public_id,
+                system_id,
+            } => Some((
+                name.to_string(),
+                public_id.to_string(),
+                system_id.to_string(),
+            )),
+            _ => None,
+        });
     let root = dom
         .document
         .children
@@ -157,7 +167,11 @@ fn serialize(node: &Handle, scripts: &mut Vec<Script>, modes: &mut Vec<ScriptMod
                 // `async`/`defer` only matter on a classic script with `src`;
                 // a module is always deferred, and `async` makes it run on arrival.
                 let mode = if module {
-                    if has("async") { ScriptMode::Async } else { ScriptMode::Defer }
+                    if has("async") {
+                        ScriptMode::Async
+                    } else {
+                        ScriptMode::Defer
+                    }
                 } else if has_src && has("async") {
                     ScriptMode::Async
                 } else if has_src && has("defer") {
@@ -187,11 +201,11 @@ fn serialize(node: &Handle, scripts: &mut Vec<Script>, modes: &mut Vec<ScriptMod
                     scripts.push(Script::Skipped);
                 } else {
                     match attr("src") {
-                    Some(src) if !src.is_empty() => scripts.push(if module {
-                        Script::ExternalModule(src)
-                    } else {
-                        Script::External(src)
-                    }),
+                        Some(src) if !src.is_empty() => scripts.push(if module {
+                            Script::ExternalModule(src)
+                        } else {
+                            Script::External(src)
+                        }),
                         _ => {
                             let code = text_content(node);
                             scripts.push(if module {

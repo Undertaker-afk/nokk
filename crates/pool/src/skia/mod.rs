@@ -41,7 +41,13 @@ pub fn canvas_path_from_ops(ops: &[f32]) -> CanvasPath {
     let mut cp = CanvasPath::new();
     let mut i = 0usize;
     let n = ops.len();
-    let take = |i: usize, k: usize| -> Option<&[f32]> { if i + k <= n { Some(&ops[i..i + k]) } else { None } };
+    let take = |i: usize, k: usize| -> Option<&[f32]> {
+        if i + k <= n {
+            Some(&ops[i..i + k])
+        } else {
+            None
+        }
+    };
     while i < n {
         let op = ops[i].round() as i32;
         i += 1;
@@ -150,7 +156,12 @@ impl Shadow {
         if blur <= 0.0 && sh[1] == 0.0 && sh[2] == 0.0 {
             return None;
         }
-        Some(Shadow { blur, dx: sh[1], dy: sh[2], color })
+        Some(Shadow {
+            blur,
+            dx: sh[1],
+            dy: sh[2],
+            color,
+        })
     }
 }
 
@@ -169,7 +180,9 @@ enum Style {
     /// `drawRect`: rect in user space; under a rect-preserving matrix it goes
     /// through AntiFillRect, otherwise as a path.
     Rect(Rect),
-    Hairline { coverage: f32 },
+    Hairline {
+        coverage: f32,
+    },
 }
 
 /// `SkColorFilter::filterColor4f` for srcin: shadow color times paint alpha,
@@ -219,7 +232,15 @@ struct LayerBlitter<'a> {
 }
 
 impl<'a> LayerBlitter<'a> {
-    fn new(data: &'a mut [u8], w: u32, h: u32, paint: &PaintKind, alpha: u8, mode: BlendMode, layer: &Layer) -> Option<LayerBlitter<'a>> {
+    fn new(
+        data: &'a mut [u8],
+        w: u32,
+        h: u32,
+        paint: &PaintKind,
+        alpha: u8,
+        mode: BlendMode,
+        layer: &Layer,
+    ) -> Option<LayerBlitter<'a>> {
         let alpha_f = alpha as f32 * (1.0 / 255.0);
         match paint {
             PaintKind::Solid(rgba) => {
@@ -227,15 +248,34 @@ impl<'a> LayerBlitter<'a> {
                 if let Some(f) = layer.filter {
                     color = shadow_solid_color(color, f);
                 }
-                let surf = Surface { data, width: w as i32, height: h as i32 };
-                Some(LayerBlitter { solid: Some(SolidBlitter::new(surf, &SolidPaint { rgba: color, mode })), pipe: None })
+                let surf = Surface {
+                    data,
+                    width: w as i32,
+                    height: h as i32,
+                };
+                Some(LayerBlitter {
+                    solid: Some(SolidBlitter::new(surf, &SolidPaint { rgba: color, mode })),
+                    pipe: None,
+                })
             }
             PaintKind::Gradient(desc) => {
                 let shader = gradient::make_shader(desc)?;
-                let filter = layer.filter.map(|c| [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0, c[3] as f32 / 255.0]);
+                let filter = layer.filter.map(|c| {
+                    [
+                        c[0] as f32 / 255.0,
+                        c[1] as f32 / 255.0,
+                        c[2] as f32 / 255.0,
+                        c[3] as f32 / 255.0,
+                    ]
+                });
                 let stages = gradient::color_stages(&shader, &layer.ctm, alpha_f, filter, true)?;
                 let is_opaque = shader.is_opaque && alpha == 255 && filter.is_none();
-                Some(LayerBlitter { solid: None, pipe: Some(PipelineBlitter::new(data, w as i32, h as i32, stages, mode, is_opaque)) })
+                Some(LayerBlitter {
+                    solid: None,
+                    pipe: Some(PipelineBlitter::new(
+                        data, w as i32, h as i32, stages, mode, is_opaque,
+                    )),
+                })
             }
         }
     }
@@ -250,13 +290,27 @@ impl<'a> LayerBlitter<'a> {
 
 /// One layer: paint -> blitter -> (mask + blur |) raster.
 #[allow(clippy::too_many_arguments)]
-fn draw_layer(data: &mut [u8], w: u32, h: u32, dev: &Path, style: Style, paint: &PaintKind, alpha: u8, mode: BlendMode, layer: &Layer) -> bool {
+fn draw_layer(
+    data: &mut [u8],
+    w: u32,
+    h: u32,
+    dev: &Path,
+    style: Style,
+    paint: &PaintKind,
+    alpha: u8,
+    mode: BlendMode,
+    layer: &Layer,
+) -> bool {
     let clip = IRect::from_ltrb(0, 0, w as i32, h as i32);
-    let Some(mut lb) = LayerBlitter::new(data, w, h, paint, alpha, mode, layer) else { return true };
+    let Some(mut lb) = LayerBlitter::new(data, w, h, paint, alpha, mode, layer) else {
+        return true;
+    };
     let blitter: &mut dyn Blitter = lb.get();
     if let Some(sigma) = layer.sigma {
         if !blur::has_no_blur(sigma) {
-            let Some(bounds) = blur::compute_mask_bounds(&dev.bounds(), &clip, sigma) else { return true };
+            let Some(bounds) = blur::compute_mask_bounds(&dev.bounds(), &clip, sigma) else {
+                return true;
+            };
             let mw = bounds.width();
             let mh = bounds.height();
             if mw <= 0 || mh <= 0 {
@@ -267,7 +321,8 @@ fn draw_layer(data: &mut [u8], w: u32, h: u32, dev: &Path, style: Style, paint: 
                 // draw_into_mask: path offset into the mask, clip is the mask itself.
                 // Like SkPathData::MakeTransform + Raw(kYes): convexity is recomputed
                 // from the offset points (transform resets it).
-                let mut shifted = dev.transform(&Matrix::translate(-bounds.left as f32, -bounds.top as f32));
+                let mut shifted =
+                    dev.transform(&Matrix::translate(-bounds.left as f32, -bounds.top as f32));
                 shifted.resolve_convexity();
                 let mut a8 = blur::A8Blitter::new(&mut image, mw, mh);
                 let mclip = IRect::from_ltrb(0, 0, mw, mh);
@@ -277,7 +332,11 @@ fn draw_layer(data: &mut [u8], w: u32, h: u32, dev: &Path, style: Style, paint: 
                     Style::Hairline { .. } => hair::anti_hair_path(&shifted, &mclip, &mut a8),
                 }
             }
-            let src = blur::Mask { bounds, row_bytes: mw as usize, image };
+            let src = blur::Mask {
+                bounds,
+                row_bytes: mw as usize,
+                image,
+            };
             let (dst, _) = blur::mask_blur(sigma, &src);
             if let Some(cr) = dst.bounds.intersect(&clip) {
                 blitter.blit_mask(&dst.image, &dst.bounds, dst.row_bytes, &cr);
@@ -307,7 +366,18 @@ fn draw_layer(data: &mut [u8], w: u32, h: u32, dev: &Path, style: Style, paint: 
 
 /// Draw a path with paint and shadow: layers as in `cc::DrawLooper`.
 #[allow(clippy::too_many_arguments)]
-fn draw_with_layers(data: &mut [u8], w: u32, h: u32, path: &Path, ctm: &Matrix, line_width: Option<f32>, rect: Option<Rect>, paint: &PaintKind, shadow: Option<Shadow>, mode: BlendMode) -> bool {
+fn draw_with_layers(
+    data: &mut [u8],
+    w: u32,
+    h: u32,
+    path: &Path,
+    ctm: &Matrix,
+    line_width: Option<f32>,
+    rect: Option<Rect>,
+    paint: &PaintKind,
+    shadow: Option<Shadow>,
+    mode: BlendMode,
+) -> bool {
     if !path.is_finite() {
         return true;
     }
@@ -319,7 +389,9 @@ fn draw_with_layers(data: &mut [u8], w: u32, h: u32, path: &Path, ctm: &Matrix, 
             None => Style::Fill,
         },
         Some(lw) => {
-            let Some(coverage) = hairline_coverage(lw, ctm) else { return false };
+            let Some(coverage) = hairline_coverage(lw, ctm) else {
+                return false;
+            };
             if coverage != 1.0 {
                 if !mode.should_pre_scale_coverage() {
                     return false;
@@ -335,9 +407,17 @@ fn draw_with_layers(data: &mut [u8], w: u32, h: u32, path: &Path, ctm: &Matrix, 
         let mut m = *ctm;
         m.post_translate(sh.dx, sh.dy);
         let sigma = (sh.blur * 0.5) as f64;
-        layers.push(Layer { ctm: m, sigma: Some(sigma), filter: Some(sh.color) });
+        layers.push(Layer {
+            ctm: m,
+            sigma: Some(sigma),
+            filter: Some(sh.color),
+        });
     }
-    layers.push(Layer { ctm: *ctm, sigma: None, filter: None });
+    layers.push(Layer {
+        ctm: *ctm,
+        sigma: None,
+        filter: None,
+    });
     let clip = IRect::from_ltrb(0, 0, w as i32, h as i32);
     for layer in &layers {
         // internalQuickReject on the path bounds in device space.
@@ -347,7 +427,10 @@ fn draw_with_layers(data: &mut [u8], w: u32, h: u32, path: &Path, ctm: &Matrix, 
         }
         let mut dev = path.transform(&layer.ctm);
         dev.resolve_convexity();
-        if dev_bounds.intersect(&clip.to_rect()).is_none() && !rect_touches(&dev_bounds, &clip) && layer.sigma.is_none() {
+        if dev_bounds.intersect(&clip.to_rect()).is_none()
+            && !rect_touches(&dev_bounds, &clip)
+            && layer.sigma.is_none()
+        {
             continue;
         }
         if !draw_layer(data, w, h, &dev, style, paint, alpha, mode, layer) {
@@ -360,7 +443,11 @@ fn draw_with_layers(data: &mut [u8], w: u32, h: u32, path: &Path, ctm: &Matrix, 
 /// Fill/stroke path from canvas ops (Blink `DrawPathInternal`).
 fn path_for_ops(ops: &[f32], even_odd: bool, is_fill: bool) -> Option<Path> {
     let cp = canvas_path_from_ops(ops);
-    let fill_type = if even_odd { FillType::EvenOdd } else { FillType::Winding };
+    let fill_type = if even_odd {
+        FillType::EvenOdd
+    } else {
+        FillType::Winding
+    };
     match cp.drawable() {
         Drawable::Empty => None,
         Drawable::Line(a, b) => {
@@ -373,7 +460,12 @@ fn path_for_ops(ops: &[f32], even_odd: bool, is_fill: bool) -> Option<Path> {
                 Some(bld.detach())
             }
         }
-        Drawable::Arc { oval, start_deg, sweep_deg, closed } => {
+        Drawable::Arc {
+            oval,
+            start_deg,
+            sweep_deg,
+            closed,
+        } => {
             if oval.is_empty() || sweep_deg == 0.0 {
                 return None;
             }
@@ -397,13 +489,30 @@ fn path_for_ops(ops: &[f32], even_odd: bool, is_fill: bool) -> Option<Path> {
 }
 
 fn ctm_of(ctm: [f32; 6]) -> Matrix {
-    Matrix { sx: ctm[0], ky: ctm[1], kx: ctm[2], sy: ctm[3], tx: ctm[4], ty: ctm[5] }
+    Matrix {
+        sx: ctm[0],
+        ky: ctm[1],
+        kx: ctm[2],
+        sy: ctm[3],
+        tx: ctm[4],
+        ty: ctm[5],
+    }
 }
 
 /// Canvas `fill()`: op stream, canvas matrix, fill rule, paint, shadow and
 /// blend mode, into surface `data` (w x h RGBA premul).
 #[allow(clippy::too_many_arguments)]
-pub fn fill_ops_paint(data: &mut [u8], w: u32, h: u32, ops: &[f32], ctm: [f32; 6], even_odd: bool, paint: &PaintKind, shadow: Option<Shadow>, mode: u32) {
+pub fn fill_ops_paint(
+    data: &mut [u8],
+    w: u32,
+    h: u32,
+    ops: &[f32],
+    ctm: [f32; 6],
+    even_odd: bool,
+    paint: &PaintKind,
+    shadow: Option<Shadow>,
+    mode: u32,
+) {
     // fillRect: a single rectangle via drawRect.
     let mut rect = None;
     if ops.len() == 5 && ops[0] == OP_DRAW_RECT as f32 {
@@ -413,36 +522,110 @@ pub fn fill_ops_paint(data: &mut [u8], w: u32, h: u32, ops: &[f32], ctm: [f32; 6
         }
         rect = Some(r);
     }
-    let Some(path) = path_for_ops(ops, even_odd, true) else { return };
-    draw_with_layers(data, w, h, &path, &ctm_of(ctm), None, rect, paint, shadow, blend_mode_from_index(mode));
+    let Some(path) = path_for_ops(ops, even_odd, true) else {
+        return;
+    };
+    draw_with_layers(
+        data,
+        w,
+        h,
+        &path,
+        &ctm_of(ctm),
+        None,
+        rect,
+        paint,
+        shadow,
+        blend_mode_from_index(mode),
+    );
 }
 
 /// Solid fill (compat entry point).
-pub fn fill_ops(data: &mut [u8], w: u32, h: u32, ops: &[f32], ctm: [f32; 6], even_odd: bool, rgba: [u8; 4], mode: u32) {
-    fill_ops_paint(data, w, h, ops, ctm, even_odd, &PaintKind::Solid(rgba), None, mode);
+pub fn fill_ops(
+    data: &mut [u8],
+    w: u32,
+    h: u32,
+    ops: &[f32],
+    ctm: [f32; 6],
+    even_odd: bool,
+    rgba: [u8; 4],
+    mode: u32,
+) {
+    fill_ops_paint(
+        data,
+        w,
+        h,
+        ops,
+        ctm,
+        even_odd,
+        &PaintKind::Solid(rgba),
+        None,
+        mode,
+    );
 }
 
 /// Canvas `stroke()`. Returns false if the stroke is not a hairline (wider
 /// than a device pixel); the caller then uses the old rasterizer.
 #[allow(clippy::too_many_arguments)]
-pub fn stroke_ops(data: &mut [u8], w: u32, h: u32, ops: &[f32], ctm: [f32; 6], line: &LineStyle, paint: &PaintKind, shadow: Option<Shadow>, mode: u32) -> bool {
-    let Some(path) = path_for_ops(ops, false, false) else { return true };
+pub fn stroke_ops(
+    data: &mut [u8],
+    w: u32,
+    h: u32,
+    ops: &[f32],
+    ctm: [f32; 6],
+    line: &LineStyle,
+    paint: &PaintKind,
+    shadow: Option<Shadow>,
+    mode: u32,
+) -> bool {
+    let Some(path) = path_for_ops(ops, false, false) else {
+        return true;
+    };
     let m = ctm_of(ctm);
     // Thin stroke: Skia hairline path (DrawTreatAsHairline).
     if hairline_coverage(line.width, &m).is_some() {
-        return draw_with_layers(data, w, h, &path, &m, Some(line.width), None, paint, shadow, blend_mode_from_index(mode));
+        return draw_with_layers(
+            data,
+            w,
+            h,
+            &path,
+            &m,
+            Some(line.width),
+            None,
+            paint,
+            shadow,
+            blend_mode_from_index(mode),
+        );
     }
     // Otherwise FillPathWithPaint: stroke in user space with resScale from
     // the matrix, then fill the outline as a path.
     if !path.is_finite() {
         return true;
     }
-    let params = stroke::StrokeParams { width: line.width, miter_limit: line.miter_limit, cap: line.cap, join: line.join, res_scale: stroke::res_scale_for_stroking(&m) };
-    let Some(stroked) = stroke::stroke_path(&path, &params) else { return false };
+    let params = stroke::StrokeParams {
+        width: line.width,
+        miter_limit: line.miter_limit,
+        cap: line.cap,
+        join: line.join,
+        res_scale: stroke::res_scale_for_stroking(&m),
+    };
+    let Some(stroked) = stroke::stroke_path(&path, &params) else {
+        return false;
+    };
     if !stroked.is_finite() {
         return true;
     }
-    draw_with_layers(data, w, h, &stroked, &m, None, None, paint, shadow, blend_mode_from_index(mode))
+    draw_with_layers(
+        data,
+        w,
+        h,
+        &stroked,
+        &m,
+        None,
+        None,
+        paint,
+        shadow,
+        blend_mode_from_index(mode),
+    )
 }
 
 /// Canvas stroke params: width, caps (0 butt, 1 round, 2 square), joins
@@ -467,7 +650,12 @@ impl LineStyle {
             2 => stroke::Join::Bevel,
             _ => stroke::Join::Miter,
         };
-        LineStyle { width, cap, join, miter_limit }
+        LineStyle {
+            width,
+            cap,
+            join,
+            miter_limit,
+        }
     }
 }
 
@@ -475,20 +663,47 @@ impl LineStyle {
 /// Fontations (see `text.rs`). `align`: 0 start/left, 1 center, 2 right/end;
 /// `baseline`: 0 alphabetic, 1 top/hanging, 2 middle, 3 bottom/ideographic.
 #[allow(clippy::too_many_arguments)]
-pub fn draw_text(data: &mut [u8], w: u32, h: u32, fonts: &[&'static [u8]], glyphs: &[text::ShapedGlyph], width: f32, x: f32, y: f32, ctm: [f32; 6], eff: f32, align: u32, baseline: u32, line: Option<&LineStyle>, paint: &PaintKind, shadow: Option<Shadow>, mode: u32) -> bool {
+pub fn draw_text(
+    data: &mut [u8],
+    w: u32,
+    h: u32,
+    fonts: &[&'static [u8]],
+    glyphs: &[text::ShapedGlyph],
+    width: f32,
+    x: f32,
+    y: f32,
+    ctm: [f32; 6],
+    eff: f32,
+    align: u32,
+    baseline: u32,
+    line: Option<&LineStyle>,
+    paint: &PaintKind,
+    shadow: Option<Shadow>,
+    mode: u32,
+) -> bool {
     if !x.is_finite() || !y.is_finite() || glyphs.is_empty() || fonts.is_empty() {
         return true;
     }
     // strokeText: stroke the glyph outline in text-size space (`internalGetPath`);
     // width 0 would be a hairline glyph, not implemented yet.
     let stroke_params = match line {
-        Some(l) if l.width > 0.0 => Some(stroke::StrokeParams { width: l.width, miter_limit: l.miter_limit, cap: l.cap, join: l.join, res_scale: 1.0 }),
+        Some(l) if l.width > 0.0 => Some(stroke::StrokeParams {
+            width: l.width,
+            miter_limit: l.miter_limit,
+            cap: l.cap,
+            join: l.join,
+            res_scale: 1.0,
+        }),
         Some(_) => return false,
         None => None,
     };
     let mode = blend_mode_from_index(mode);
-    let Some(first) = glyphs.first() else { return true };
-    let Ok(font) = skrifa::FontRef::new(fonts[first.font]) else { return true };
+    let Some(first) = glyphs.first() else {
+        return true;
+    };
+    let Ok(font) = skrifa::FontRef::new(fonts[first.font]) else {
+        return true;
+    };
     let m = ctm_of(ctm);
     // MakeRecAndEffects: fPost2x2 from the device matrix via sk_relax
     // (rounded to 1/1024), per matrix type as SkMatrix computes it.
@@ -504,7 +719,8 @@ pub fn draw_text(data: &mut [u8], w: u32, h: u32, fonts: &[&'static [u8]], glyph
         ty: 0.0,
     };
     // One scaler per fallback-chain font used in the string.
-    let font_refs: Vec<Option<skrifa::FontRef>> = fonts.iter().map(|b| skrifa::FontRef::new(b).ok()).collect();
+    let font_refs: Vec<Option<skrifa::FontRef>> =
+        fonts.iter().map(|b| skrifa::FontRef::new(b).ok()).collect();
     let scalers: Vec<Option<text::Scaler>> = fonts
         .iter()
         .zip(font_refs.iter())
@@ -520,7 +736,10 @@ pub fn draw_text(data: &mut [u8], w: u32, h: u32, fonts: &[&'static [u8]], glyph
     }
     if baseline != 0 {
         use skrifa::MetadataProvider;
-        let met = font.metrics(skrifa::prelude::Size::new(eff), skrifa::prelude::LocationRef::default());
+        let met = font.metrics(
+            skrifa::prelude::Size::new(eff),
+            skrifa::prelude::LocationRef::default(),
+        );
         let (asc, desc) = (met.ascent.round(), (-met.descent).round());
         loc.y += match baseline {
             1 => asc,
@@ -541,32 +760,55 @@ pub fn draw_text(data: &mut [u8], w: u32, h: u32, fonts: &[&'static [u8]], glyph
         let mut lm = m;
         lm.post_translate(sh.dx, sh.dy);
         let sigma = (sh.blur * 0.5) as f64;
-        layers.push(Layer { ctm: lm, sigma: if sigma > 0.0 { Some(sigma) } else { None }, filter: Some(sh.color) });
+        layers.push(Layer {
+            ctm: lm,
+            sigma: if sigma > 0.0 { Some(sigma) } else { None },
+            filter: Some(sh.color),
+        });
     }
-    layers.push(Layer { ctm: m, sigma: None, filter: None });
+    layers.push(Layer {
+        ctm: m,
+        sigma: None,
+        filter: None,
+    });
     for layer in &layers {
-        let Some(mut lb) = LayerBlitter::new(data, w, h, paint, 255, mode, layer) else { continue };
+        let Some(mut lb) = LayerBlitter::new(data, w, h, paint, 255, mode, layer) else {
+            continue;
+        };
         let blitter = lb.get();
         let pos_m = text::pre_translate(&layer.ctm, loc.x, loc.y);
         for g in glyphs {
-            let Some(scaler) = scalers.get(g.font).and_then(|s| s.as_ref()) else { continue };
+            let Some(scaler) = scalers.get(g.font).and_then(|s| s.as_ref()) else {
+                continue;
+            };
             // Bitmap glyphs (color emoji) are drawn separately, after the layers.
             if scaler.path(g.gid).is_none_or(|p| p.pts.is_empty()) {
                 if layer.filter.is_none() && stroke_params.is_none() {
-                    bitmap_glyphs.push((g.font, g.gid, pos_m.sx * g.x + pos_m.tx, pos_m.ky * g.x + pos_m.ty));
+                    bitmap_glyphs.push((
+                        g.font,
+                        g.gid,
+                        pos_m.sx * g.x + pos_m.tx,
+                        pos_m.ky * g.x + pos_m.ty,
+                    ));
                 }
                 continue;
             }
-            let Some(dp) = text::device_position(&pos_m, g.x, ax, ay) else { continue };
+            let Some(dp) = text::device_position(&pos_m, g.x, ax, ay) else {
+                continue;
+            };
             let mask = match &stroke_params {
                 None => scaler.fill_mask(g.gid, dp.sub_x, dp.sub_y),
-                Some(sp) => scaler.offset_path(g.gid, dp.sub_x, dp.sub_y).and_then(|p| text::stroke_mask(&p, &post, sp)),
+                Some(sp) => scaler
+                    .offset_path(g.gid, dp.sub_x, dp.sub_y)
+                    .and_then(|p| text::stroke_mask(&p, &post, sp)),
             };
             let Some(mut mask) = mask else { continue };
             match layer.sigma {
                 Some(sigma) => {
                     // Mask filter in the scaler context: no gamma table.
-                    let Some(blurred) = text::blur_mask(&mask, sigma) else { continue };
+                    let Some(blurred) = text::blur_mask(&mask, sigma) else {
+                        continue;
+                    };
                     text::blit_glyph(blitter, &blurred, dp.x, dp.y, &clip);
                 }
                 None => {
@@ -597,24 +839,54 @@ pub fn draw_text(data: &mut [u8], w: u32, h: u32, fonts: &[&'static [u8]], glyph
 /// dependency): color glyphs are just not drawn.
 #[cfg(not(feature = "render"))]
 #[allow(clippy::too_many_arguments)]
-fn draw_bitmap_glyph(_data: &mut [u8], _w: u32, _h: u32, _font: &[u8], _gid: u16, _x: f32, _y: f32, _size: f32, _alpha: f32) {}
+fn draw_bitmap_glyph(
+    _data: &mut [u8],
+    _w: u32,
+    _h: u32,
+    _font: &[u8],
+    _gid: u16,
+    _x: f32,
+    _y: f32,
+    _size: f32,
+    _alpha: f32,
+) {
+}
 
 /// Bitmap glyph (CBDT/sbix PNG strike) into a premul RGBA buffer:
 /// area-average scaling, source-over compositing.
 #[cfg(feature = "render")]
 #[allow(clippy::too_many_arguments)]
-fn draw_bitmap_glyph(data: &mut [u8], w: u32, h: u32, font: &[u8], gid: u16, x: f32, y: f32, size: f32, alpha: f32) {
-    let Ok(face) = ttf_parser::Face::parse(font, 0) else { return };
-    let Some(img) = face.glyph_raster_image(ttf_parser::GlyphId(gid), size.ceil().max(1.0) as u16) else { return };
+fn draw_bitmap_glyph(
+    data: &mut [u8],
+    w: u32,
+    h: u32,
+    font: &[u8],
+    gid: u16,
+    x: f32,
+    y: f32,
+    size: f32,
+    alpha: f32,
+) {
+    let Ok(face) = ttf_parser::Face::parse(font, 0) else {
+        return;
+    };
+    let Some(img) = face.glyph_raster_image(ttf_parser::GlyphId(gid), size.ceil().max(1.0) as u16)
+    else {
+        return;
+    };
     if img.format != ttf_parser::RasterImageFormat::PNG || img.pixels_per_em == 0 {
         return;
     }
     let mut dec = png::Decoder::new(std::io::Cursor::new(img.data));
     // Noto Color Emoji strikes are palette PNGs with tRNS: expand to RGBA.
     dec.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
-    let Ok(mut reader) = dec.read_info() else { return };
+    let Ok(mut reader) = dec.read_info() else {
+        return;
+    };
     let mut buf = vec![0u8; reader.output_buffer_size()];
-    let Ok(info) = reader.next_frame(&mut buf) else { return };
+    let Ok(info) = reader.next_frame(&mut buf) else {
+        return;
+    };
     if info.bit_depth != png::BitDepth::Eight {
         return;
     }
@@ -700,7 +972,10 @@ fn draw_bitmap_glyph(data: &mut [u8], w: u32, h: u32, font: &[u8], gid: u16, x: 
 
 fn rect_touches(r: &Rect, c: &IRect) -> bool {
     // An empty-in-float rect (zero width) can still lie inside the clip.
-    r.right >= c.left as f32 && r.left <= c.right as f32 && r.bottom >= c.top as f32 && r.top <= c.bottom as f32
+    r.right >= c.left as f32
+        && r.left <= c.right as f32
+        && r.bottom >= c.top as f32
+        && r.top <= c.bottom as f32
 }
 
 /// `getImageData`: premul -> straight, like `readPixels(kUnpremul)`.
@@ -726,7 +1001,9 @@ mod tests {
         cp.arc(40.0, 40.0, 40.0, 0.0, std::f32::consts::PI * 2.0, true);
         cp.close_path();
         match cp.drawable() {
-            Drawable::Arc { closed, sweep_deg, .. } => {
+            Drawable::Arc {
+                closed, sweep_deg, ..
+            } => {
                 assert!(closed);
                 assert!((sweep_deg.abs() - 360.0).abs() < 1e-3);
             }
@@ -739,9 +1016,14 @@ mod tests {
     fn dump_cases() {
         // NOKK_SKIA_CASES=out.json: draws a set of 48x48 shapes and writes the buffers
         // as base64.
-        let Some(out) = std::env::var_os("NOKK_SKIA_CASES") else { return };
+        let Some(out) = std::env::var_os("NOKK_SKIA_CASES") else {
+            return;
+        };
         let (w, h) = (48u32, 48u32);
-        let m = OP_MOVE as f32; let l = OP_LINE as f32; let c = OP_CLOSE as f32; let q = OP_QUAD as f32;
+        let m = OP_MOVE as f32;
+        let l = OP_LINE as f32;
+        let c = OP_CLOSE as f32;
+        let q = OP_QUAD as f32;
         let cases: Vec<(&str, Vec<f32>)> = vec![
             ("A", vec![m, 9.0, 14.0, l, 93.0, 48.0, l, 46.5, 48.0, c]),
             ("F", vec![m, -9.0, 14.0, l, 40.0, 30.0, l, 9.0, 40.0, c]),
@@ -751,13 +1033,39 @@ mod tests {
         let mut js = String::from("{");
         for (i, (name, ops)) in cases.iter().enumerate() {
             let mut data = vec![0u8; (w * h * 4) as usize];
-            fill_ops(&mut data, w, h, ops, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], false, [128, 153, 0, 255], 0);
+            fill_ops(
+                &mut data,
+                w,
+                h,
+                ops,
+                [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                false,
+                [128, 153, 0, 255],
+                0,
+            );
             let mut o = vec![0u8; data.len()];
             read_unpremul(&data, &mut o);
-            let b64 = { const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"; let mut s = String::new();
-                for ch in o.chunks(3) { let n = ((ch[0] as u32) << 16) | ((*ch.get(1).unwrap_or(&0) as u32) << 8) | (*ch.get(2).unwrap_or(&0) as u32);
-                    for k in 0..4 { if k <= ch.len() { s.push(T[((n >> (18 - 6 * k)) & 63) as usize] as char) } else { s.push('=') } } } s };
-            if i > 0 { js.push(','); }
+            let b64 = {
+                const T: &[u8] =
+                    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+                let mut s = String::new();
+                for ch in o.chunks(3) {
+                    let n = ((ch[0] as u32) << 16)
+                        | ((*ch.get(1).unwrap_or(&0) as u32) << 8)
+                        | (*ch.get(2).unwrap_or(&0) as u32);
+                    for k in 0..4 {
+                        if k <= ch.len() {
+                            s.push(T[((n >> (18 - 6 * k)) & 63) as usize] as char)
+                        } else {
+                            s.push('=')
+                        }
+                    }
+                }
+                s
+            };
+            if i > 0 {
+                js.push(',');
+            }
             js.push_str(&format!("\"{}\":\"{}\"", name, b64));
         }
         js.push('}');
@@ -771,11 +1079,29 @@ mod tests {
         let (w, h) = (48u32, 48u32);
         let ops = [OP_DRAW_RECT as f32, 0.0, 0.0, 100.0, 100.0];
         let mut data = vec![0u8; (w * h * 4) as usize];
-        fill_ops(&mut data, w, h, &ops, [0.384, 0.0, 0.0, 0.384, 0.0, 0.0], false, [128, 153, 0, 255], 0);
+        fill_ops(
+            &mut data,
+            w,
+            h,
+            &ops,
+            [0.384, 0.0, 0.0, 0.384, 0.0, 0.0],
+            false,
+            [128, 153, 0, 255],
+            0,
+        );
         assert_eq!(data[((38 * w) * 4 + 3) as usize], 102);
         let ops = [OP_RECT as f32, 0.0, 0.0, 100.0, 100.0];
         let mut data = vec![0u8; (w * h * 4) as usize];
-        fill_ops(&mut data, w, h, &ops, [0.384, 0.0, 0.0, 0.384, 0.0, 0.0], false, [128, 153, 0, 255], 0);
+        fill_ops(
+            &mut data,
+            w,
+            h,
+            &ops,
+            [0.384, 0.0, 0.0, 0.384, 0.0, 0.0],
+            false,
+            [128, 153, 0, 255],
+            0,
+        );
         assert_eq!(data[((38 * w) * 4 + 3) as usize], 128);
     }
 
@@ -784,16 +1110,36 @@ mod tests {
         let (w, h) = (49u32, 44u32);
         let mut data = vec![0u8; (w * h * 4) as usize];
         let ops = [
-            OP_ARC as f32, 40.0, 40.0, 40.0, 0.0, std::f32::consts::PI * 2.0, 1.0, OP_CLOSE as f32,
+            OP_ARC as f32,
+            40.0,
+            40.0,
+            40.0,
+            0.0,
+            std::f32::consts::PI * 2.0,
+            1.0,
+            OP_CLOSE as f32,
         ];
-        fill_ops(&mut data, w, h, &ops, [0.4, 0.0, 0.0, 0.4, 0.0, 0.0], false, [255, 34, 255, 255], 0);
+        fill_ops(
+            &mut data,
+            w,
+            h,
+            &ops,
+            [0.4, 0.0, 0.0, 0.4, 0.0, 0.0],
+            false,
+            [255, 34, 255, 255],
+            0,
+        );
         let px = |x: u32, y: u32| {
             let i = ((y * w + x) * 4) as usize;
             [data[i], data[i + 1], data[i + 2], data[i + 3]]
         };
         assert_eq!(px(16, 16), [255, 34, 255, 255], "centre is solid");
         assert_eq!(px(40, 40), [0, 0, 0, 0], "far corner is empty");
-        assert!(px(16, 0)[3] > 0 && px(16, 0)[3] < 255, "top edge is anti-aliased: {:?}", px(16, 0));
+        assert!(
+            px(16, 0)[3] > 0 && px(16, 0)[3] < 255,
+            "top edge is anti-aliased: {:?}",
+            px(16, 0)
+        );
     }
 }
 
@@ -881,14 +1227,23 @@ mod dump_quarter {
         let mut ci = 0usize;
         for v in &d.verbs {
             match v {
-                Verb::Move => { println!("M {:?}", d.pts[pi]); pi += 1; }
-                Verb::Line => { println!("L {:?}", d.pts[pi]); pi += 1; }
+                Verb::Move => {
+                    println!("M {:?}", d.pts[pi]);
+                    pi += 1;
+                }
+                Verb::Line => {
+                    println!("L {:?}", d.pts[pi]);
+                    pi += 1;
+                }
                 Verb::Conic => {
                     let c = Conic::new(d.pts[pi - 1], d.pts[pi], d.pts[pi + 1], d.conics[ci]);
                     let (q, n) = c.to_quads(0.25);
                     println!("C w={:?} {:?} -> {} quads", c.w, c.pts, n);
-                    for i in 0..n { println!("  Q {:?} {:?} {:?}", q[i * 2], q[i * 2 + 1], q[i * 2 + 2]); }
-                    pi += 2; ci += 1;
+                    for i in 0..n {
+                        println!("  Q {:?} {:?} {:?}", q[i * 2], q[i * 2 + 1], q[i * 2 + 2]);
+                    }
+                    pi += 2;
+                    ci += 1;
                 }
                 other => println!("{:?}", other),
             }
@@ -904,9 +1259,30 @@ mod dump_quarter_conv {
     #[test]
     fn dump_quarter_quads_convexity() {
         for (name, verbs) in [
-            ("S9q", vec![(0, 36.0, 22.0, 0.0, 0.0), (2, 36.0, 26.970562, 32.48528, 30.48528), (2, 28.970562, 34.0, 24.0, 34.0)]),
-            ("S9a", vec![(0, 36.0, 22.0, 0.0, 0.0), (2, 36.0, 26.970562, 32.48528, 30.48528), (1, 24.0, 34.0, 0.0, 0.0)]),
-            ("S9b", vec![(0, 32.48528, 30.48528, 0.0, 0.0), (2, 28.970562, 34.0, 24.0, 34.0), (1, 36.0, 22.0, 0.0, 0.0)]),
+            (
+                "S9q",
+                vec![
+                    (0, 36.0, 22.0, 0.0, 0.0),
+                    (2, 36.0, 26.970562, 32.48528, 30.48528),
+                    (2, 28.970562, 34.0, 24.0, 34.0),
+                ],
+            ),
+            (
+                "S9a",
+                vec![
+                    (0, 36.0, 22.0, 0.0, 0.0),
+                    (2, 36.0, 26.970562, 32.48528, 30.48528),
+                    (1, 24.0, 34.0, 0.0, 0.0),
+                ],
+            ),
+            (
+                "S9b",
+                vec![
+                    (0, 32.48528, 30.48528, 0.0, 0.0),
+                    (2, 28.970562, 34.0, 24.0, 34.0),
+                    (1, 36.0, 22.0, 0.0, 0.0),
+                ],
+            ),
         ] {
             let mut b = PathBuilder::new();
             for (k, a, bb, c, d) in verbs {
@@ -958,11 +1334,51 @@ mod dump_t2q_conv {
     #[test]
     fn dump_t2q_convexity() {
         let shapes: Vec<(&str, Vec<(u8, f32, f32, f32, f32)>)> = vec![
-            ("T1", vec![(0, 10.0, 4.0, 0.0, 0.0), (2, 30.0, 4.0, 36.0, 16.0), (2, 40.0, 28.0, 30.0, 40.0), (1, 10.0, 40.0, 0.0, 0.0)]),
-            ("T2", vec![(0, 10.0, 4.0, 0.0, 0.0), (2, 30.0, 4.0, 36.0, 16.0), (1, 30.0, 40.0, 0.0, 0.0), (1, 10.0, 40.0, 0.0, 0.0)]),
-            ("T3", vec![(0, 38.0, 4.0, 0.0, 0.0), (2, 18.0, 4.0, 12.0, 16.0), (2, 8.0, 28.0, 18.0, 40.0), (1, 38.0, 40.0, 0.0, 0.0)]),
-            ("T4", vec![(0, 10.0, 4.0, 0.0, 0.0), (2, 30.0, 4.0, 36.0, 16.3), (2, 40.0, 28.0, 30.0, 40.0), (1, 10.0, 40.0, 0.0, 0.0)]),
-            ("T5", vec![(0, 10.0, 4.0, 0.0, 0.0), (2, 30.0, 4.0, 36.2, 16.7), (2, 40.1, 28.4, 30.0, 40.0), (1, 10.0, 40.0, 0.0, 0.0)]),
+            (
+                "T1",
+                vec![
+                    (0, 10.0, 4.0, 0.0, 0.0),
+                    (2, 30.0, 4.0, 36.0, 16.0),
+                    (2, 40.0, 28.0, 30.0, 40.0),
+                    (1, 10.0, 40.0, 0.0, 0.0),
+                ],
+            ),
+            (
+                "T2",
+                vec![
+                    (0, 10.0, 4.0, 0.0, 0.0),
+                    (2, 30.0, 4.0, 36.0, 16.0),
+                    (1, 30.0, 40.0, 0.0, 0.0),
+                    (1, 10.0, 40.0, 0.0, 0.0),
+                ],
+            ),
+            (
+                "T3",
+                vec![
+                    (0, 38.0, 4.0, 0.0, 0.0),
+                    (2, 18.0, 4.0, 12.0, 16.0),
+                    (2, 8.0, 28.0, 18.0, 40.0),
+                    (1, 38.0, 40.0, 0.0, 0.0),
+                ],
+            ),
+            (
+                "T4",
+                vec![
+                    (0, 10.0, 4.0, 0.0, 0.0),
+                    (2, 30.0, 4.0, 36.0, 16.3),
+                    (2, 40.0, 28.0, 30.0, 40.0),
+                    (1, 10.0, 40.0, 0.0, 0.0),
+                ],
+            ),
+            (
+                "T5",
+                vec![
+                    (0, 10.0, 4.0, 0.0, 0.0),
+                    (2, 30.0, 4.0, 36.2, 16.7),
+                    (2, 40.1, 28.4, 30.0, 40.0),
+                    (1, 10.0, 40.0, 0.0, 0.0),
+                ],
+            ),
         ];
         for (name, verbs) in shapes {
             let mut b = PathBuilder::new();

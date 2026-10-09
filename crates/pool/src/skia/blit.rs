@@ -116,7 +116,12 @@ fn from_float(f: f32) -> u16 {
 fn blend_lowp(mode: BlendMode, s: Px, d: Px) -> Px {
     // Per-channel modes (BLEND_MODE with the shared alpha formula).
     let per_channel = |f: &dyn Fn(u16, u16, u16, u16) -> u16| -> Px {
-        Px { r: f(s.r, d.r, s.a, d.a), g: f(s.g, d.g, s.a, d.a), b: f(s.b, d.b, s.a, d.a), a: f(s.a, d.a, s.a, d.a) }
+        Px {
+            r: f(s.r, d.r, s.a, d.a),
+            g: f(s.g, d.g, s.a, d.a),
+            b: f(s.b, d.b, s.a, d.a),
+            a: f(s.a, d.a, s.a, d.a),
+        }
     };
     // Fixed-alpha modes: a = a + div255(da*inv(a)).
     let per_channel_srcover_alpha = |f: &dyn Fn(u16, u16, u16, u16) -> u16| -> Px {
@@ -152,16 +157,26 @@ fn blend_lowp(mode: BlendMode, s: Px, d: Px) -> Px {
         BlendMode::Lighten => {
             per_channel_srcover_alpha(&|s, d, sa, da| sb(ad(s, d), div255(m(s, da).min(m(d, sa)))))
         }
-        BlendMode::Difference => {
-            per_channel_srcover_alpha(&|s, d, sa, da| sb(ad(s, d), m(2, div255(m(s, da).min(m(d, sa))))))
+        BlendMode::Difference => per_channel_srcover_alpha(&|s, d, sa, da| {
+            sb(ad(s, d), m(2, div255(m(s, da).min(m(d, sa)))))
+        }),
+        BlendMode::Exclusion => {
+            per_channel_srcover_alpha(&|s, d, _sa, _da| sb(ad(s, d), m(2, div255(m(s, d)))))
         }
-        BlendMode::Exclusion => per_channel_srcover_alpha(&|s, d, _sa, _da| sb(ad(s, d), m(2, div255(m(s, d))))),
         BlendMode::HardLight => per_channel_srcover_alpha(&|s, d, sa, da| {
-            let t = if m(2, s) <= sa { m(m(2, s), d) } else { sb(m(sa, da), m(m(2, sb(sa, s)), sb(da, d))) };
+            let t = if m(2, s) <= sa {
+                m(m(2, s), d)
+            } else {
+                sb(m(sa, da), m(m(2, sb(sa, s)), sb(da, d)))
+            };
             div255(ad(ad(m(s, inv(da)), m(d, inv(sa))), t))
         }),
         BlendMode::Overlay => per_channel_srcover_alpha(&|s, d, sa, da| {
-            let t = if m(2, d) <= da { m(m(2, s), d) } else { sb(m(sa, da), m(m(2, sb(sa, s)), sb(da, d))) };
+            let t = if m(2, d) <= da {
+                m(m(2, s), d)
+            } else {
+                sb(m(sa, da), m(m(2, sb(sa, s)), sb(da, d)))
+            };
             div255(ad(ad(m(s, inv(da)), m(d, inv(sa))), t))
         }),
         // No lowp implementation: compute in float (highp), as Skia does.
@@ -181,7 +196,9 @@ fn blend_highp(mode: BlendMode, s: Px, d: Px) -> Px {
                 } else if s == sa {
                     s * (1.0 - da) + d * (1.0 - sa) + sa * da
                 } else {
-                    s * (1.0 - da) + d * (1.0 - sa) + sa * (da * (d * sa / (da * (sa - s))).min(1.0)).min(sa * da)
+                    s * (1.0 - da)
+                        + d * (1.0 - sa)
+                        + sa * (da * (d * sa / (da * (sa - s))).min(1.0)).min(sa * da)
                 }
             };
             (ch(sr, dr), ch(sg, dg), ch(sb, db), sa + da - sa * da)
@@ -193,7 +210,9 @@ fn blend_highp(mode: BlendMode, s: Px, d: Px) -> Px {
                 } else if s == 0.0 {
                     d * (1.0 - sa)
                 } else {
-                    s * (1.0 - da) + d * (1.0 - sa) + sa * (da - (da * (da - d) * sa / (s * da)).min(da))
+                    s * (1.0 - da)
+                        + d * (1.0 - sa)
+                        + sa * (da - (da * (da - d) * sa / (s * da)).min(da))
                 }
             };
             (ch(sr, dr), ch(sg, dg), ch(sb, db), sa + da - sa * da)
@@ -206,18 +225,29 @@ fn blend_highp(mode: BlendMode, s: Px, d: Px) -> Px {
                 let dark_src = d * (sa + (s2 - sa) * (1.0 - m));
                 let dark_dst = (m4 * m4 + m4) * (m - 1.0) + 7.0 * m;
                 let lite_dst = m.sqrt() - m;
-                let lite_src = d * sa + da * (s2 - sa) * if 4.0 * d <= da { dark_dst } else { lite_dst };
+                let lite_src =
+                    d * sa + da * (s2 - sa) * if 4.0 * d <= da { dark_dst } else { lite_dst };
                 s * (1.0 - da) + d * (1.0 - sa) + if s2 <= sa { dark_src } else { lite_src }
             };
             (ch(sr, dr), ch(sg, dg), ch(sb, db), sa + da - sa * da)
         }
         _ => {
             // hue/saturation/color/luminosity: rare on canvas; source-over.
-            (sr + dr * (1.0 - sa), sg + dg * (1.0 - sa), sb + db * (1.0 - sa), sa + da * (1.0 - sa))
+            (
+                sr + dr * (1.0 - sa),
+                sg + dg * (1.0 - sa),
+                sb + db * (1.0 - sa),
+                sa + da * (1.0 - sa),
+            )
         }
     };
     let u = |v: f32| ((v.clamp(0.0, 1.0) * 255.0 + 0.5) as u32) as u16;
-    Px { r: u(r), g: u(g), b: u(b), a: u(a) }
+    Px {
+        r: u(r),
+        g: u(g),
+        b: u(b),
+        a: u(a),
+    }
 }
 
 /// Pixel surface: RGBA8888 premul, row-major.
@@ -232,7 +262,12 @@ impl<'a> Surface<'a> {
     fn load(&self, x: i32, y: i32) -> Px {
         let i = ((y * self.width + x) * 4) as usize;
         let d = &self.data[i..i + 4];
-        Px { r: d[0] as u16, g: d[1] as u16, b: d[2] as u16, a: d[3] as u16 }
+        Px {
+            r: d[0] as u16,
+            g: d[1] as u16,
+            b: d[2] as u16,
+            a: d[3] as u16,
+        }
     }
     #[inline]
     fn store(&mut self, x: i32, y: i32, p: Px) {
@@ -365,9 +400,19 @@ impl<'a> Blitter for RectClipBlitter<'a> {
         self.blit_anti_h(x, y, &[a0], &runs);
         self.blit_anti_h(x, y + 1, &[a1], &runs);
     }
-    fn blit_anti_rect(&mut self, left: i32, y: i32, width: i32, height: i32, mut left_alpha: u8, mut right_alpha: u8) {
+    fn blit_anti_rect(
+        &mut self,
+        left: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        mut left_alpha: u8,
+        mut right_alpha: u8,
+    ) {
         let full = IRect::from_ltrb(left, y, left + width + 2, y + height);
-        let Some(r) = full.intersect(&self.clip) else { return };
+        let Some(r) = full.intersect(&self.clip) else {
+            return;
+        };
         if r.left != left {
             left_alpha = 255;
         }
@@ -383,7 +428,14 @@ impl<'a> Blitter for RectClipBlitter<'a> {
                 self.inner.blit_v(r.left, r.top, r.height(), right_alpha);
             }
         } else {
-            self.inner.blit_anti_rect(r.left, r.top, r.width() - 2, r.height(), left_alpha, right_alpha);
+            self.inner.blit_anti_rect(
+                r.left,
+                r.top,
+                r.width() - 2,
+                r.height(),
+                left_alpha,
+                right_alpha,
+            );
         }
     }
     fn blit_mask(&mut self, mask: &[u8], mask_bounds: &IRect, row_bytes: usize, clip: &IRect) {
@@ -401,7 +453,15 @@ pub trait Blitter {
     fn blit_rect(&mut self, x: i32, y: i32, width: i32, height: i32);
     fn blit_anti_h2(&mut self, x: i32, y: i32, a0: u8, a1: u8);
     fn blit_anti_v2(&mut self, x: i32, y: i32, a0: u8, a1: u8);
-    fn blit_anti_rect(&mut self, x: i32, y: i32, width: i32, height: i32, left_alpha: u8, right_alpha: u8);
+    fn blit_anti_rect(
+        &mut self,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        left_alpha: u8,
+        right_alpha: u8,
+    );
     /// A8 mask: `mask[(yy-top)*row_bytes + (xx-left)]`, drawn within `clip`.
     fn blit_mask(&mut self, mask: &[u8], mask_bounds: &IRect, row_bytes: usize, clip: &IRect);
     /// `SkBlitter::blitFatAntiRect`.
@@ -499,7 +559,12 @@ fn alpha_mul_q(c: [u8; 4], scale: u32) -> [u8; 4] {
 #[inline]
 fn add4(a: [u8; 4], b: [u8; 4]) -> [u8; 4] {
     // Per-channel add: unsaturated in Skia (cannot overflow).
-    [a[0].wrapping_add(b[0]), a[1].wrapping_add(b[1]), a[2].wrapping_add(b[2]), a[3].wrapping_add(b[3])]
+    [
+        a[0].wrapping_add(b[0]),
+        a[1].wrapping_add(b[1]),
+        a[2].wrapping_add(b[2]),
+        a[3].wrapping_add(b[3]),
+    ]
 }
 /// `skvx::approx_scale(x, y)` = (x·y + x) / 256.
 #[inline]
@@ -508,7 +573,12 @@ fn approx_scale(x: u8, y: u8) -> u8 {
 }
 #[inline]
 fn approx_scale4(c: [u8; 4], y: u8) -> [u8; 4] {
-    [approx_scale(c[0], y), approx_scale(c[1], y), approx_scale(c[2], y), approx_scale(c[3], y)]
+    [
+        approx_scale(c[0], y),
+        approx_scale(c[1], y),
+        approx_scale(c[2], y),
+        approx_scale(c[3], y),
+    ]
 }
 /// `SkBlendARGB32(src, dst, aa)`.
 #[inline]
@@ -517,14 +587,24 @@ fn blend_argb32(src: [u8; 4], dst: [u8; 4], aa: u8) -> [u8; 4] {
     let prod = 0xFFFF - src[3] as u32 * src_scale;
     let dst_scale = (prod + (prod >> 8)) >> 8;
     let ch = |s: u8, d: u8| ((s as u32 * src_scale + d as u32 * dst_scale) >> 8) as u8;
-    [ch(src[0], dst[0]), ch(src[1], dst[1]), ch(src[2], dst[2]), ch(src[3], dst[3])]
+    [
+        ch(src[0], dst[0]),
+        ch(src[1], dst[1]),
+        ch(src[2], dst[2]),
+        ch(src[3], dst[3]),
+    ]
 }
 /// `SkFastFourByteInterp(src, dst, w)`: scale = w + (w >> 7).
 #[inline]
 fn fast_four_byte_interp(src: [u8; 4], dst: [u8; 4], w: u8) -> [u8; 4] {
     let scale = w as u32 + (w as u32 >> 7);
     let ch = |s: u8, d: u8| ((s as u32 * scale + (256 - scale) * d as u32) >> 8) as u8;
-    [ch(src[0], dst[0]), ch(src[1], dst[1]), ch(src[2], dst[2]), ch(src[3], dst[3])]
+    [
+        ch(src[0], dst[0]),
+        ch(src[1], dst[1]),
+        ch(src[2], dst[2]),
+        ch(src[3], dst[3]),
+    ]
 }
 /// `SkBlitRow::Color32` for one pixel: dst = ((dst*invA) >> 8) + color.
 #[inline]
@@ -535,16 +615,29 @@ fn color32_px(dst: [u8; 4], color: [u8; 4]) -> [u8; 4] {
         a => {
             let inv_a = 256 - a as u32;
             let ch = |d: u8, c: u8| (((d as u32 * inv_a) >> 8) + c as u32) as u8;
-            [ch(dst[0], color[0]), ch(dst[1], color[1]), ch(dst[2], color[2]), ch(dst[3], color[3])]
+            [
+                ch(dst[0], color[0]),
+                ch(dst[1], color[1]),
+                ch(dst[2], color[2]),
+                ch(dst[3], color[3]),
+            ]
         }
     }
 }
 
 enum Strategy {
     /// `SkARGB32_Blitter` / `_Opaque_` / `_Black_`: source-over on N32.
-    Legacy { pm: [u8; 4], opaque: bool, black: bool },
+    Legacy {
+        pm: [u8; 4],
+        opaque: bool,
+        black: bool,
+    },
     /// `SkRasterPipelineBlitter`: the other blend modes.
-    Pipeline { src: Px, mode: BlendMode, memset: Option<Px> },
+    Pipeline {
+        src: Px,
+        mode: BlendMode,
+        memset: Option<Px>,
+    },
 }
 
 /// Solid-paint blitter, chosen as in `SkBlitter::Choose`.
@@ -563,10 +656,21 @@ impl<'a> SolidBlitter<'a> {
         if mode == BlendMode::SrcOver {
             let pm = premultiply(paint.rgba);
             let black = paint.rgba == [0, 0, 0, 255];
-            return SolidBlitter { surf, st: Strategy::Legacy { pm, opaque: paint.rgba[3] == 255, black } };
+            return SolidBlitter {
+                surf,
+                st: Strategy::Legacy {
+                    pm,
+                    opaque: paint.rgba[3] == 255,
+                    black,
+                },
+            };
         }
         // Clear is Src with a transparent color.
-        let rgba = if mode == BlendMode::Clear { [0, 0, 0, 0] } else { paint.rgba };
+        let rgba = if mode == BlendMode::Clear {
+            [0, 0, 0, 0]
+        } else {
+            paint.rgba
+        };
         if mode == BlendMode::Clear {
             mode = BlendMode::Src;
         }
@@ -575,13 +679,25 @@ impl<'a> SolidBlitter<'a> {
         let a = f(rgba[3]);
         let pmf = [f(rgba[0]) * a, f(rgba[1]) * a, f(rgba[2]) * a, a];
         let u = |v: f32| (v * 255.0 + 0.5) as u16;
-        let src = Px { r: u(pmf[0]), g: u(pmf[1]), b: u(pmf[2]), a: u(pmf[3]) };
+        let src = Px {
+            r: u(pmf[0]),
+            g: u(pmf[1]),
+            b: u(pmf[2]),
+            a: u(pmf[3]),
+        };
         let is_opaque = a == 1.0;
         if is_opaque && mode == BlendMode::SrcOver {
             mode = BlendMode::Src;
         }
-        let memset = if mode == BlendMode::Src { Some(src) } else { None };
-        SolidBlitter { surf, st: Strategy::Pipeline { src, mode, memset } }
+        let memset = if mode == BlendMode::Src {
+            Some(src)
+        } else {
+            None
+        };
+        SolidBlitter {
+            surf,
+            st: Strategy::Pipeline { src, mode, memset },
+        }
     }
 
     #[inline]
@@ -614,25 +730,44 @@ impl<'a> SolidBlitter<'a> {
 
     #[inline]
     fn pipe_coverage(&mut self, x: i32, y: i32, cov: u16) {
-        let Strategy::Pipeline { src, mode, memset } = self.st else { unreachable!() };
+        let Strategy::Pipeline { src, mode, memset } = self.st else {
+            unreachable!()
+        };
         let s = src;
         let d = self.surf.load(x, y);
         let out = if mode == BlendMode::Src {
             // Src does not pre-scale coverage: lerp(d, s, cov).
             let _ = memset;
-            Px { r: lerp(d.r, s.r, cov), g: lerp(d.g, s.g, cov), b: lerp(d.b, s.b, cov), a: lerp(d.a, s.a, cov) }
+            Px {
+                r: lerp(d.r, s.r, cov),
+                g: lerp(d.g, s.g, cov),
+                b: lerp(d.b, s.b, cov),
+                a: lerp(d.a, s.a, cov),
+            }
         } else if mode.should_pre_scale_coverage() {
-            let s2 = Px { r: div255(m(s.r, cov)), g: div255(m(s.g, cov)), b: div255(m(s.b, cov)), a: div255(m(s.a, cov)) };
+            let s2 = Px {
+                r: div255(m(s.r, cov)),
+                g: div255(m(s.g, cov)),
+                b: div255(m(s.b, cov)),
+                a: div255(m(s.a, cov)),
+            };
             blend_lowp(mode, s2, d)
         } else {
             let b = blend_lowp(mode, s, d);
-            Px { r: lerp(d.r, b.r, cov), g: lerp(d.g, b.g, cov), b: lerp(d.b, b.b, cov), a: lerp(d.a, b.a, cov) }
+            Px {
+                r: lerp(d.r, b.r, cov),
+                g: lerp(d.g, b.g, cov),
+                b: lerp(d.b, b.b, cov),
+                a: lerp(d.a, b.a, cov),
+            }
         };
         self.surf.store(x, y, out);
     }
     #[inline]
     fn pipe_full(&mut self, x: i32, y: i32) {
-        let Strategy::Pipeline { src, mode, memset } = self.st else { unreachable!() };
+        let Strategy::Pipeline { src, mode, memset } = self.st else {
+            unreachable!()
+        };
         if let Some(c) = memset {
             self.surf.store(x, y, c);
             return;
@@ -648,7 +783,9 @@ impl<'a> SolidBlitter<'a> {
         if !self.in_y(y) {
             return;
         }
-        let Some((x0, x1)) = self.clip_x(x, w) else { return };
+        let Some((x0, x1)) = self.clip_x(x, w) else {
+            return;
+        };
         if aa == 0 {
             return;
         }
@@ -671,7 +808,11 @@ impl<'a> SolidBlitter<'a> {
                         self.put(xx, y, pm);
                     }
                 } else {
-                    let sc = if aa == 255 { pm } else { alpha_mul_q(pm, aa as u32 + 1) };
+                    let sc = if aa == 255 {
+                        pm
+                    } else {
+                        alpha_mul_q(pm, aa as u32 + 1)
+                    };
                     for xx in x0..x1 {
                         let d = self.get(xx, y);
                         self.put(xx, y, color32_px(d, sc));
@@ -804,7 +945,15 @@ impl<'a> Blitter for SolidBlitter<'a> {
             }
         }
     }
-    fn blit_anti_rect(&mut self, x: i32, y: i32, width: i32, height: i32, left_alpha: u8, right_alpha: u8) {
+    fn blit_anti_rect(
+        &mut self,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        left_alpha: u8,
+        right_alpha: u8,
+    ) {
         let mut x = x;
         if left_alpha > 0 {
             self.blit_v(x, y, height, left_alpha);
@@ -823,7 +972,9 @@ impl<'a> Blitter for SolidBlitter<'a> {
             if !self.in_y(yy) {
                 continue;
             }
-            let Some((x0, x1)) = self.clip_x(clip.left, clip.width()) else { continue };
+            let Some((x0, x1)) = self.clip_x(clip.left, clip.width()) else {
+                continue;
+            };
             let row = (yy - mask_bounds.top) as usize * row_bytes;
             for xx in x0..x1 {
                 let aa = mask[row + (xx - mask_bounds.left) as usize];

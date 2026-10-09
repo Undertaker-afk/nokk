@@ -1,0 +1,23 @@
+[package]
+name = "nokk-captcha"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+rust-version.workspace = true
+description = "hCaptcha task plumbing: prompt normalization, thresholds, fail-closed selection, dump collector. Vision backend is opt-in."
+repository.workspace = true
+keywords = ["captcha", "hcaptcha", "automation"]
+categories = ["web-programming"]
+
+[features]
+default = []
+vision-onnx = ["dep:ort"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+sha2 = { workspace = true }
+hex = "0.4"
+ort = { version = "2.0.0-rc.13", optional = true, default-features = false }

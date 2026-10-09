@@ -38,19 +38,36 @@ pub enum Stage {
     MatrixScaleTranslate([f32; 4]),
     Matrix2x3([f32; 9]),
     XyToRadius,
-    XyTo2ptConicalStrip { p0: f32 },
+    XyTo2ptConicalStrip {
+        p0: f32,
+    },
     XyTo2ptConicalFocalOnCircle,
-    XyTo2ptConicalWellBehaved { p0: f32 },
-    XyTo2ptConicalGreater { p0: f32 },
-    XyTo2ptConicalSmaller { p0: f32 },
-    Alter2ptConicalCompensateFocal { p1: f32 },
+    XyTo2ptConicalWellBehaved {
+        p0: f32,
+    },
+    XyTo2ptConicalGreater {
+        p0: f32,
+    },
+    XyTo2ptConicalSmaller {
+        p0: f32,
+    },
+    Alter2ptConicalCompensateFocal {
+        p1: f32,
+    },
     Alter2ptConicalUnswap,
     NegateX,
     Mask2ptConicalNan,
     Mask2ptConicalDegenerates,
     ClampX1,
-    EvenlySpaced2StopGradient { factor: [f32; 4], bias: [f32; 4] },
-    Gradient { ts: Vec<f32>, factors: Vec<[f32; 4]>, biases: Vec<[f32; 4]> },
+    EvenlySpaced2StopGradient {
+        factor: [f32; 4],
+        bias: [f32; 4],
+    },
+    Gradient {
+        ts: Vec<f32>,
+        factors: Vec<[f32; 4]>,
+        biases: Vec<[f32; 4]>,
+    },
     ApplyVectorMask,
     MoveSrcDst,
     UniformColor([f32; 4]),
@@ -125,7 +142,9 @@ fn blend_highp(mode: BlendMode, l: &mut Lane) {
         BlendMode::Xor => per(&|s, d| mad(s, inv(da), d * inv(sa)), &mut out),
         BlendMode::Darken => per_srcover_alpha(&|s, d| s + d - (s * da).max(d * sa), &mut out),
         BlendMode::Lighten => per_srcover_alpha(&|s, d| s + d - (s * da).min(d * sa), &mut out),
-        BlendMode::Difference => per_srcover_alpha(&|s, d| s + d - 2.0 * (s * da).min(d * sa), &mut out),
+        BlendMode::Difference => {
+            per_srcover_alpha(&|s, d| s + d - 2.0 * (s * da).min(d * sa), &mut out)
+        }
         BlendMode::Exclusion => per_srcover_alpha(&|s, d| s + d - 2.0 * s * d, &mut out),
         _ => per(&|s, d| mad(d, inv(sa), s), &mut out),
     }
@@ -144,7 +163,17 @@ impl Pipeline {
     /// Run pixel (dx, dy). `dst` is the premul RGBA8 destination (for LoadDst),
     /// `cov` the coverage byte for ScaleU8/LerpU8. Returns the bytes for Store.
     pub fn run_px(&self, dx: i32, dy: i32, dst: [u8; 4], cov: u8) -> [u8; 4] {
-        let mut l = Lane { r: 0.0, g: 0.0, b: 0.0, a: 0.0, dr: 0.0, dg: 0.0, db: 0.0, da: 0.0, mask: true };
+        let mut l = Lane {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.0,
+            dr: 0.0,
+            dg: 0.0,
+            db: 0.0,
+            da: 0.0,
+            mask: true,
+        };
         for st in &self.stages {
             match st {
                 Stage::SeedShader => {
@@ -217,7 +246,11 @@ impl Pipeline {
                     l.b = mad(t, factor[2], bias[2]);
                     l.a = mad(t, factor[3], bias[3]);
                 }
-                Stage::Gradient { ts, factors, biases } => {
+                Stage::Gradient {
+                    ts,
+                    factors,
+                    biases,
+                } => {
                     let t = l.r;
                     let mut idx = 0usize;
                     for i in 1..ts.len() {
@@ -256,7 +289,12 @@ impl Pipeline {
                 Stage::Dither(rate) => {
                     let x = dx as u32;
                     let y = (dy as u32) ^ x;
-                    let m = (y & 1) << 5 | (x & 1) << 4 | (y & 2) << 2 | (x & 2) << 1 | (y & 4) >> 1 | (x & 4) >> 2;
+                    let m = (y & 1) << 5
+                        | (x & 1) << 4
+                        | (y & 2) << 2
+                        | (x & 2) << 1
+                        | (y & 4) >> 1
+                        | (x & 4) >> 2;
                     let dither = mad(m as f32, 2.0 / 128.0, -63.0 / 128.0);
                     l.r = mad(dither, *rate, l.r);
                     l.g = mad(dither, *rate, l.g);
@@ -340,7 +378,14 @@ pub struct PipelineBlitter<'a> {
 impl<'a> PipelineBlitter<'a> {
     /// `color`: color stages (Skia appends `clamp_01` after them); `mode`:
     /// paint blend mode; `is_opaque` reduces srcover to src.
-    pub fn new(data: &'a mut [u8], width: i32, height: i32, color: Vec<Stage>, mode: BlendMode, is_opaque: bool) -> Self {
+    pub fn new(
+        data: &'a mut [u8],
+        width: i32,
+        height: i32,
+        color: Vec<Stage>,
+        mode: BlendMode,
+        is_opaque: bool,
+    ) -> Self {
         let mut mode = mode;
         if is_opaque && mode == BlendMode::SrcOver {
             mode = BlendMode::Src;
@@ -401,7 +446,12 @@ impl<'a> PipelineBlitter<'a> {
     #[inline]
     fn get(&self, x: i32, y: i32) -> [u8; 4] {
         let i = ((y * self.width + x) * 4) as usize;
-        [self.data[i], self.data[i + 1], self.data[i + 2], self.data[i + 3]]
+        [
+            self.data[i],
+            self.data[i + 1],
+            self.data[i + 2],
+            self.data[i + 3],
+        ]
     }
     #[inline]
     fn put(&mut self, x: i32, y: i32, p: [u8; 4]) {
@@ -427,7 +477,9 @@ impl<'a> PipelineBlitter<'a> {
             if !self.in_y(yy) {
                 continue;
             }
-            let Some((x0, x1)) = self.xr(x, w) else { continue };
+            let Some((x0, x1)) = self.xr(x, w) else {
+                continue;
+            };
             for xx in x0..x1 {
                 let d = self.get(xx, yy);
                 let out = self.rect_p.run_px(xx, yy, d, 255);
@@ -440,7 +492,9 @@ impl<'a> PipelineBlitter<'a> {
         if !self.in_y(y) {
             return;
         }
-        let Some((x0, x1)) = self.xr(x, w) else { return };
+        let Some((x0, x1)) = self.xr(x, w) else {
+            return;
+        };
         let cov = aa as f32 * (1.0 / 255.0);
         // Plug the coverage into the Scale1Float/Lerp1Float stages.
         for st in self.anti_h_p.stages.iter_mut() {
@@ -501,7 +555,15 @@ impl<'a> Blitter for PipelineBlitter<'a> {
         let bounds = IRect::from_ltrb(x, y, x + 1, y + 2);
         self.blit_mask(&[a0, a1], &bounds, 1, &bounds);
     }
-    fn blit_anti_rect(&mut self, x: i32, y: i32, width: i32, height: i32, left_alpha: u8, right_alpha: u8) {
+    fn blit_anti_rect(
+        &mut self,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        left_alpha: u8,
+        right_alpha: u8,
+    ) {
         let mut x = x;
         if left_alpha > 0 {
             self.blit_v(x, y, height, left_alpha);
@@ -520,7 +582,9 @@ impl<'a> Blitter for PipelineBlitter<'a> {
             if !self.in_y(yy) {
                 continue;
             }
-            let Some((x0, x1)) = self.xr(clip.left, clip.width()) else { continue };
+            let Some((x0, x1)) = self.xr(clip.left, clip.width()) else {
+                continue;
+            };
             let row = (yy - mask_bounds.top) as usize * row_bytes;
             for xx in x0..x1 {
                 let aa = mask[row + (xx - mask_bounds.left) as usize];

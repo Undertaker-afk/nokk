@@ -6485,6 +6485,75 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
     return false;
   };
   // Inline script: nonce/hash/'unsafe-inline' (the last is voided by nonce/hash).
+  // SHA-256 over the script text (UTF-8), base64'd, compared with any
+  // 'sha256-…' token: Chrome runs a hash-allowed script even without
+  // 'unsafe-inline' (hCaptcha's frame relies on exactly this).
+  const __cspSha256B64 = (text) => {
+    const s = String(text);
+    const bytes = [];
+    for (let i = 0; i < s.length; i++) {
+      let c = s.charCodeAt(i);
+      if (c >= 0xD800 && c <= 0xDBFF && i + 1 < s.length) {
+        const lo = s.charCodeAt(i + 1);
+        if (lo >= 0xDC00 && lo <= 0xDFFF) { c = 0x10000 + ((c - 0xD800) << 10) + (lo - 0xDC00); i++; }
+      }
+      if (c < 0x80) bytes.push(c);
+      else if (c < 0x800) bytes.push(0xC0 | (c >> 6), 0x80 | (c & 0x3F));
+      else if (c < 0x10000) bytes.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 0x3F), 0x80 | (c & 0x3F));
+      else bytes.push(0xF0 | (c >> 18), 0x80 | ((c >> 12) & 0x3F), 0x80 | ((c >> 6) & 0x3F), 0x80 | (c & 0x3F));
+    }
+    const K = [0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+    let h0=0x6a09e667,h1=0xbb67ae85,h2=0x3c6ef372,h3=0xa54ff53a,h4=0x510e527f,h5=0x9b05688c,h6=0x1f83d9ab,h7=0x5be0cd19;
+    const bl = bytes.length;
+    bytes.push(0x80);
+    while ((bytes.length % 64) !== 56) bytes.push(0);
+    const bitLen = bl * 8;
+    for (let i = 7; i >= 0; i--) bytes.push((bitLen / Math.pow(2, i * 8)) & 0xFF);
+    const rotr = (x, n) => ((x >>> n) | (x << (32 - n))) >>> 0;
+    const w = new Array(64);
+    for (let b = 0; b < bytes.length; b += 64) {
+      for (let i = 0; i < 16; i++) w[i] = (((bytes[b+i*4] << 24) | (bytes[b+i*4+1] << 16) | (bytes[b+i*4+2] << 8) | bytes[b+i*4+3]) >>> 0);
+      for (let i = 16; i < 64; i++) {
+        const s0 = (rotr(w[i-15], 7) ^ rotr(w[i-15], 18) ^ (w[i-15] >>> 3)) >>> 0;
+        const s1 = (rotr(w[i-2], 17) ^ rotr(w[i-2], 19) ^ (w[i-2] >>> 10)) >>> 0;
+        w[i] = (w[i-16] + s0 + w[i-7] + s1) >>> 0;
+      }
+      let a=h0,bb=h1,c=h2,d=h3,e=h4,f=h5,g=h6,h=h7;
+      for (let i = 0; i < 64; i++) {
+        const S1 = (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) >>> 0;
+        const ch = ((e & f) ^ (~e & g)) >>> 0;
+        const t1 = (h + S1 + ch + K[i] + w[i]) >>> 0;
+        const S0 = (rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) >>> 0;
+        const mj = ((a & bb) ^ (a & c) ^ (bb & c)) >>> 0;
+        const t2 = (S0 + mj) >>> 0;
+        h=g; g=f; f=e; e=(d+t1)>>>0; d=c; c=bb; bb=a; a=(t1+t2)>>>0;
+      }
+      h0=(h0+a)>>>0; h1=(h1+bb)>>>0; h2=(h2+c)>>>0; h3=(h3+d)>>>0; h4=(h4+e)>>>0; h5=(h5+f)>>>0; h6=(h6+g)>>>0; h7=(h7+h)>>>0;
+    }
+    const words = [h0,h1,h2,h3,h4,h5,h6,h7];
+    const raw = [];
+    for (let i = 0; i < 8; i++) raw.push((words[i]>>>24)&0xFF,(words[i]>>>16)&0xFF,(words[i]>>>8)&0xFF,words[i]&0xFF);
+    const abc = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    let out = '';
+    for (let i = 0; i < raw.length; i += 3) {
+      const n = (raw[i] << 16) | ((i+1 < raw.length ? raw[i+1] : 0) << 8) | (i+2 < raw.length ? raw[i+2] : 0);
+      out += abc[(n >> 18) & 63] + abc[(n >> 12) & 63] + (i+1 < raw.length ? abc[(n >> 6) & 63] : '=') + (i+2 < raw.length ? abc[n & 63] : '=');
+    }
+    return out;
+  };
+  const __cspHashAllows = (el, list) => {
+    let text = '';
+    try { text = el && el.textContent != null ? String(el.textContent) : ''; } catch (e) { return false; }
+    let digest = null;
+    for (const t of list) {
+      const low = __s_toLowerCase(String(t));
+      if (__s_indexOf(low, "'sha256-") !== 0) continue;
+      if (digest === null) { try { digest = __cspSha256B64(text); } catch (e) { return false; } }
+      const want = t.slice(8, t.length - 1);
+      if (want === digest) return true;
+    }
+    return false;
+  };
   const __cspAllowsInline = (el) => {
     for (const p of __csp.policies) {
       const d = __cspScriptDirective(p);
@@ -6493,6 +6562,7 @@ const CHROME_IFACE_MEMBERS = {"HTMLAnchorElement":["attributionSrc","charset","c
       const hasNonceOrHash = list.some((t) => /^'(nonce-|sha(256|384|512)-)/i.test(t));
       const nonce = el && (__ptGetA(el, 'nonce') || el.__ptNonce || '');
       if (nonce && list.some((t) => t === "'nonce-" + nonce + "'")) continue;
+      if (el && __cspHashAllows(el, list)) continue;
       if (!hasNonceOrHash && __cspHas(list, "'unsafe-inline'")) continue;
       return { name: d[0], list };
     }
@@ -10743,7 +10813,7 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
     try {
       __walkTree(globalThis.document, (n) => {
         if (out || !n || n.nodeType !== ELEMENT_NODE) return;
-        if ((n.__ptLocal === 'input' || n.__ptLocal === 'textarea') && /^(cf-turnstile-response|g-recaptcha-response)$/.test(__ptGetA(n, 'name') || '')) { const v = n.value; if (v) out = String(v); }
+        if ((n.__ptLocal === 'input' || n.__ptLocal === 'textarea') && /^(cf-turnstile-response|g-recaptcha-response|h-captcha-response)$/.test(__ptGetA(n, 'name') || '')) { const v = n.value; if (v) out = String(v); }
       });
     } catch (e) {}
     return out;
@@ -10751,7 +10821,7 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
   // What the page shows in front of the site, for the driver; walks the tree
   // internally so no page API call shows up in the challenge's report.
   globalThis.__pt_gateInfo = () => {
-    const out = { title: '', url: '', inter: false, widget: false, recaptcha: false, token: false, datadome: false, orchestrator: false };
+    const out = { title: '', url: '', inter: false, widget: false, recaptcha: false, hcaptcha: false, hcaptcha_invisible: false, token: false, datadome: false, orchestrator: false };
     try {
       out.title = String((globalThis.document && document.title) || '');
       out.url = String((globalThis.location && location.href) || '');
@@ -10763,16 +10833,46 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
         // A reCAPTCHA checkbox (Google's /sorry/ page among others); the invisible
         // kind asks nothing of a user.
         if (t === 'iframe' && /\/recaptcha\/(api2|enterprise)\/anchor/.test(__ptGetA(n, 'src') || '') && !/size=invisible/.test(__ptGetA(n, 'src') || '')) out.recaptcha = true;
+        // An hCaptcha widget: its frame lives under hcaptcha.com/captcha or
+        // frames.hcaptcha.com. Invisible mode (`size=invisible` anchor or
+        // `data-size="invisible"` container) still sets `hcaptcha` — it is a
+        // gate — plus `hcaptcha_invisible`, which tells the driver to trigger
+        // `hcaptcha.execute()` instead of pressing a checkbox.
+        if (t === 'iframe' && /hcaptcha\.com\/captcha|frames\.hcaptcha\.com/.test(__ptGetA(n, 'src') || '')) {
+          out.hcaptcha = true;
+          if (/size=invisible/.test(__ptGetA(n, 'src') || '')) out.hcaptcha_invisible = true;
+        }
+        if ((t === 'div' || t === 'span') && /invisible/.test(__ptGetA(n, 'data-size') || '') && /h-captcha/.test(__ptGetA(n, 'class') || '')) {
+          out.hcaptcha = true;
+          out.hcaptcha_invisible = true;
+        }
         if (t === 'script') {
           const src = __ptGetA(n, 'src') || '';
           if (/\/cdn-cgi\/challenge-platform\//.test(src)) out.orchestrator = true;
           if (/captcha-delivery\.com|datadome/.test(src)) out.datadome = true;
         }
-        if ((t === 'input' || t === 'textarea') && /^(cf-turnstile-response|g-recaptcha-response)$/.test(__ptGetA(n, 'name') || '') && n.value) out.token = true;
+        if ((t === 'input' || t === 'textarea') && /^(cf-turnstile-response|g-recaptcha-response|h-captcha-response)$/.test(__ptGetA(n, 'name') || '') && n.value) out.token = true;
       });
       if (!out.inter && out.orchestrator && typeof globalThis._cf_chl_opt === 'object') out.inter = true;
     } catch (e) {}
     return __ptJSON.stringify(out);
+  };
+  // Invisible hCaptcha trigger probe: does this realm expose an `hcaptcha`
+  // bridge with `execute()` (the invisible flow), and if so which mode?
+  // Walks internally so the challenge's selector report stays clean.
+  globalThis.__pt_hcaptchaMode = () => {
+    let hasBridge = false, invisible = false;
+    try {
+      const h = globalThis.hcaptcha;
+      if (h && typeof h.execute === 'function') hasBridge = true;
+      __walkTree(globalThis.document, (n) => {
+        if (!n || n.nodeType !== ELEMENT_NODE) return;
+        const t = n.__ptLocal;
+        if (t === 'iframe' && /hcaptcha\.com\/captcha/.test(__ptGetA(n, 'src') || '') && /size=invisible/.test(__ptGetA(n, 'src') || '')) invisible = true;
+        if ((t === 'div' || t === 'span') && /invisible/.test(__ptGetA(n, 'data-size') || '')) invisible = true;
+      });
+    } catch (e) {}
+    return __ptJSON.stringify({ hasBridge, invisible });
   };
   globalThis.__pt_frameRectById = (id) => {
     const walk = (n) => {
@@ -10905,6 +11005,12 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
     const held = __mouseDownEl ? 1 : 0;
     if (down) {
       hoverTo(el);
+      try {
+        globalThis.__pt_userActivated = true;
+        globalThis.__pt_userActive = true;
+        if (globalThis.__pt_userActiveTimer) clearTimeout(globalThis.__pt_userActiveTimer);
+        globalThis.__pt_userActiveTimer = setTimeout(() => { try { globalThis.__pt_userActive = false; } catch (e) {} }, 5000);
+      } catch (e) {}
       send(el, P('pointerdown', { button: b, buttons: 1, pressure: 0.5 }, { which: b + 1, detail: 0 }));
       send(el, M('mousedown', { button: b, buttons: 1, detail: clicks }, { which: b + 1 }));
       // A window that receives its first press gets focus before the element.
@@ -10929,10 +11035,22 @@ const CS_REPLACED = {"block-size":"150px","border-block-end-style":"inset","bord
           const box = isBox(target) ? target : null;
           const was = box ? box.checked : null;
           if (box) box.checked = __s_toLowerCase(String(__ptGetA(box, 'type'))) === 'radio' ? true : !box.checked;
-          // Chrome's click is a PointerEvent with integer mouse coordinates
-          // and isPrimary false.
-          const ev = new PointerEvent('click', ptrInit({ button: b, buttons: 0, pressure: 0, detail: clicks, isPrimary: false }));
-          finish(ev, true, { which: b + 1, detail: clicks, isPrimary: false });
+          // A trusted press is a user gesture: Chrome marks transient + sticky
+          // activation, and widgets gate on navigator.userActivation. Without
+          // this every synthetic press reads hasBeenActive false forever.
+          try {
+            globalThis.__pt_userActivated = true;
+            globalThis.__pt_userActive = true;
+            if (globalThis.__pt_userActiveTimer) clearTimeout(globalThis.__pt_userActiveTimer);
+            globalThis.__pt_userActiveTimer = setTimeout(() => { try { globalThis.__pt_userActive = false; } catch (e) {} }, 5000);
+          } catch (e) {}
+          // Chrome's click is a PointerEvent with integer mouse coordinates.
+          // It belongs to the same primary-mouse gesture as the pointerdown
+          // and pointerup around it, so isPrimary is true like theirs: a
+          // gesture whose down/up are primary but whose click is not exists
+          // in no real browser, and widgets check gesture coherence.
+          const ev = new PointerEvent('click', ptrInit({ button: b, buttons: 0, pressure: 0, detail: clicks, isPrimary: true }));
+          finish(ev, true, { which: b + 1, detail: clicks, isPrimary: true });
           const ok = send(target, ev);
           if (ok && !box) __ptActivate(target);
           if (box) {

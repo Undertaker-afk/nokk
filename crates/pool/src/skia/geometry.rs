@@ -77,10 +77,24 @@ pub struct Matrix {
 }
 
 impl Matrix {
-    pub const IDENTITY: Matrix = Matrix { sx: 1.0, kx: 0.0, tx: 0.0, ky: 0.0, sy: 1.0, ty: 0.0 };
+    pub const IDENTITY: Matrix = Matrix {
+        sx: 1.0,
+        kx: 0.0,
+        tx: 0.0,
+        ky: 0.0,
+        sy: 1.0,
+        ty: 0.0,
+    };
 
     pub fn scale(sx: f32, sy: f32) -> Matrix {
-        Matrix { sx, kx: 0.0, tx: 0.0, ky: 0.0, sy, ty: 0.0 }
+        Matrix {
+            sx,
+            kx: 0.0,
+            tx: 0.0,
+            ky: 0.0,
+            sy,
+            ty: 0.0,
+        }
     }
     pub fn is_identity(&self) -> bool {
         *self == Matrix::IDENTITY
@@ -103,7 +117,14 @@ impl Matrix {
     }
     /// `setSinCos(sin, cos)`.
     pub fn sin_cos(s: f32, c: f32) -> Matrix {
-        Matrix { sx: c, kx: -s, tx: 0.0, ky: s, sy: c, ty: 0.0 }
+        Matrix {
+            sx: c,
+            kx: -s,
+            tx: 0.0,
+            ky: s,
+            sy: c,
+            ty: 0.0,
+        }
     }
     pub fn post_translate(&mut self, dx: f32, dy: f32) {
         self.tx += dx;
@@ -211,7 +232,12 @@ pub struct Rect {
 
 impl Rect {
     pub const fn from_ltrb(left: f32, top: f32, right: f32, bottom: f32) -> Rect {
-        Rect { left, top, right, bottom }
+        Rect {
+            left,
+            top,
+            right,
+            bottom,
+        }
     }
     pub fn width(&self) -> f32 {
         self.right - self.left
@@ -248,10 +274,18 @@ impl Rect {
             r = r.max(p.x);
             b = b.max(p.y);
         }
-        Rect { left: l, top: t, right: r, bottom: b }
+        Rect {
+            left: l,
+            top: t,
+            right: r,
+            bottom: b,
+        }
     }
     pub fn is_finite(&self) -> bool {
-        self.left.is_finite() && self.top.is_finite() && self.right.is_finite() && self.bottom.is_finite()
+        self.left.is_finite()
+            && self.top.is_finite()
+            && self.right.is_finite()
+            && self.bottom.is_finite()
     }
     pub fn round_out(&self) -> IRect {
         IRect {
@@ -267,7 +301,12 @@ impl Rect {
         let r = self.right.min(o.right);
         let b = self.bottom.min(o.bottom);
         if l < r && t < b {
-            Some(Rect { left: l, top: t, right: r, bottom: b })
+            Some(Rect {
+                left: l,
+                top: t,
+                right: r,
+                bottom: b,
+            })
         } else {
             None
         }
@@ -284,7 +323,12 @@ pub struct IRect {
 
 impl IRect {
     pub const fn from_ltrb(left: i32, top: i32, right: i32, bottom: i32) -> IRect {
-        IRect { left, top, right, bottom }
+        IRect {
+            left,
+            top,
+            right,
+            bottom,
+        }
     }
     pub fn width(&self) -> i32 {
         self.right - self.left
@@ -317,7 +361,12 @@ impl IRect {
             && self.bottom >= o.bottom
     }
     pub fn to_rect(&self) -> Rect {
-        Rect::from_ltrb(self.left as f32, self.top as f32, self.right as f32, self.bottom as f32)
+        Rect::from_ltrb(
+            self.left as f32,
+            self.top as f32,
+            self.right as f32,
+            self.bottom as f32,
+        )
     }
 }
 
@@ -381,7 +430,11 @@ pub fn find_unit_quad_roots(a: f32, b: f32, c: f32) -> ([f32; 2], usize) {
     if !r.is_finite() {
         return (roots, 0);
     }
-    let q = if b < 0.0 { -(b - r) / 2.0 } else { -(b + r) / 2.0 };
+    let q = if b < 0.0 {
+        -(b - r) / 2.0
+    } else {
+        -(b + r) / 2.0
+    };
     let mut n = 0;
     if let Some(v) = valid_unit_divide(q, a) {
         roots[n] = v;
@@ -466,7 +519,8 @@ pub fn chop_cubic_at(src: &[Point; 4], t: f32) -> [Point; 7] {
     if t == 1.0 {
         return [src[0], src[1], src[2], src[3], src[3], src[3], src[3]];
     }
-    let mix = |a: Point, b: Point| Point::new(unchecked_mix(a.x, b.x, t), unchecked_mix(a.y, b.y, t));
+    let mix =
+        |a: Point, b: Point| Point::new(unchecked_mix(a.x, b.x, t), unchecked_mix(a.y, b.y, t));
     let ab = mix(src[0], src[1]);
     let bc = mix(src[1], src[2]);
     let cd = mix(src[2], src[3]);
@@ -487,7 +541,9 @@ pub fn chop_cubic_at2(src: &[Point; 4], t0: f32, t1: f32) -> [Point; 10] {
         out[9] = src[3];
         return out;
     }
-    let mixp = |a: Point, b: Point, t: f32| Point::new(unchecked_mix(a.x, b.x, t), unchecked_mix(a.y, b.y, t));
+    let mixp = |a: Point, b: Point, t: f32| {
+        Point::new(unchecked_mix(a.x, b.x, t), unchecked_mix(a.y, b.y, t))
+    };
     // Two chops "in parallel", as with float4 in Skia: lo at t0, hi at t1.
     let ab0 = mixp(src[0], src[1], t0);
     let bc0 = mixp(src[1], src[2], t0);
@@ -588,7 +644,10 @@ fn between(a: f32, b: f32, c: f32) -> bool {
 
 impl Conic {
     pub fn new(p0: Point, p1: Point, p2: Point, w: f32) -> Conic {
-        Conic { pts: [p0, p1, p2], w }
+        Conic {
+            pts: [p0, p1, p2],
+            w,
+        }
     }
 
     /// `SkConic::chop`, the `SK_SUPPORT_LEGACY_CONIC_CHOP` variant: Chromium
@@ -613,7 +672,16 @@ impl Conic {
         }
         let c1 = Point::new((p0.x + wp1.x) * scale, (p0.y + wp1.y) * scale);
         let c2 = Point::new((wp1.x + p2.x) * scale, (wp1.y + p2.y) * scale);
-        [Conic { pts: [p0, c1, m], w: nw }, Conic { pts: [m, c2, p2], w: nw }]
+        [
+            Conic {
+                pts: [p0, c1, m],
+                w: nw,
+            },
+            Conic {
+                pts: [m, c2, p2],
+                w: nw,
+            },
+        ]
     }
 
     /// `SkConic::computeQuadPOW2(tol)`.
@@ -654,7 +722,11 @@ impl Conic {
         if between(start_y, src.pts[1].y, end_y) {
             let mid_y = dst[0].pts[2].y;
             if !between(start_y, mid_y, end_y) {
-                let closer_y = if (mid_y - start_y).abs() < (mid_y - end_y).abs() { start_y } else { end_y };
+                let closer_y = if (mid_y - start_y).abs() < (mid_y - end_y).abs() {
+                    start_y
+                } else {
+                    end_y
+                };
                 dst[0].pts[2].y = closer_y;
                 dst[1].pts[0].y = closer_y;
             }
@@ -818,11 +890,25 @@ pub fn nearly_equal(a: f32, b: f32) -> bool {
 
 impl Matrix {
     pub fn translate(dx: f32, dy: f32) -> Matrix {
-        Matrix { sx: 1.0, kx: 0.0, tx: dx, ky: 0.0, sy: 1.0, ty: dy }
+        Matrix {
+            sx: 1.0,
+            kx: 0.0,
+            tx: dx,
+            ky: 0.0,
+            sy: 1.0,
+            ty: dy,
+        }
     }
     /// `SkMatrix::ScaleTranslate`.
     pub fn scale_translate(sx: f32, sy: f32, tx: f32, ty: f32) -> Matrix {
-        Matrix { sx, kx: 0.0, tx, ky: 0.0, sy, ty }
+        Matrix {
+            sx,
+            kx: 0.0,
+            tx,
+            ky: 0.0,
+            sy,
+            ty,
+        }
     }
     /// `postScale(sx, sy)` = setConcat(scale, self).
     pub fn post_scale(&mut self, sx: f32, sy: f32) {
@@ -858,7 +944,14 @@ impl Matrix {
                 if !inv_tx.is_finite() || !inv_ty.is_finite() {
                     return None;
                 }
-                return Some(Matrix { sx: inv_sx, kx: 0.0, tx: inv_tx, ky: 0.0, sy: inv_sy, ty: inv_ty });
+                return Some(Matrix {
+                    sx: inv_sx,
+                    kx: 0.0,
+                    tx: inv_tx,
+                    ky: 0.0,
+                    sy: inv_sy,
+                    ty: inv_ty,
+                });
             }
             if !self.tx.is_finite() || !self.ty.is_finite() {
                 return None;
@@ -883,7 +976,10 @@ impl Matrix {
             sy: (self.sx as f64 * inv_det) as f32,
             ty: dcross_dscale(self.ky, self.tx, self.sx, self.ty),
         };
-        if ![m.sx, m.kx, m.tx, m.ky, m.sy, m.ty].iter().all(|v| v.is_finite()) {
+        if ![m.sx, m.kx, m.tx, m.ky, m.sy, m.ty]
+            .iter()
+            .all(|v| v.is_finite())
+        {
             return None;
         }
         Some(m)
@@ -912,7 +1008,9 @@ impl Matrix {
     }
     /// The nine values of `get9` (row-major), as the pipeline reads them.
     pub fn get9(&self) -> [f32; 9] {
-        [self.sx, self.kx, self.tx, self.ky, self.sy, self.ty, 0.0, 0.0, 1.0]
+        [
+            self.sx, self.kx, self.tx, self.ky, self.sy, self.ty, 0.0, 0.0, 1.0,
+        ]
     }
 }
 

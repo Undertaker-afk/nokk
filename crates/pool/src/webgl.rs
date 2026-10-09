@@ -212,7 +212,8 @@ pub fn resize(id: u32, w: u32, h: u32) {
                 .renderbuffer_storage(glow::RENDERBUFFER, glow::DEPTH_COMPONENT24, w, h);
             surf.gl.bind_renderbuffer(glow::RENDERBUFFER, None);
             surf.gl.clear_color(0.0, 0.0, 0.0, 0.0);
-            surf.gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
+            surf.gl
+                .clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
         }
         surf.w = w;
         surf.h = h;

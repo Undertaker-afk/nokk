@@ -1,0 +1,19 @@
+{
+  "prompt_raw": "Select all [redacted vehicle]",
+  "prompt_norm": "bus",
+  "threshold": 0.6,
+  "cleared": true,
+  "elapsed_ms": 42,
+  "tiles": [
+    {"tile_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "pred": "bus", "label": 1},
+    {"tile_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "pred": "car", "label": 0},
+    {"tile_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "pred": "bus", "label": 1},
+    {"tile_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "pred": "car", "label": 0},
+    {"tile_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "pred": "car", "label": 0},
+    {"tile_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "pred": "bus", "label": 1},
+    {"tile_sha256": "1111111111111111111111111111111111111111111111111111111111111111", "pred": "car", "label": 0},
+    {"tile_sha256": "2222222222222222222222222222222222222222222222222222222222222222", "pred": "car", "label": 0},
+    {"tile_sha256": "3333333333333333333333333333333333333333333333333333333333333333", "pred": "bus", "label": 1}
+  ],
+  "note": "Offline fixture. Fake SHAs, no real images, no PII."
+}

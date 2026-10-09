@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "NokkHcaptchaDumpManifestRow",
+  "description": "One row per tile in $NOKK_HCAPTCHA_DUMP_DIR/manifest.jsonl. Opt-in, no PII.",
+  "type": "object",
+  "required": ["prompt_raw", "prompt_norm", "tile_sha256", "tile_png", "pred", "threshold", "cleared", "elapsed_ms"],
+  "properties": {
+    "prompt_raw": { "type": "string", "maxLength": 200, "description": "Verbatim challenge prompt" },
+    "prompt_norm": { "type": "string", "pattern": "^[a-z0-9_]+$", "description": "taxonomy.yaml key" },
+    "tile_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "tile_png": { "type": "string", "maxLength": 160, "description": "Relative path under dump dir" },
+    "pred": { "type": "string", "description": "Predicted taxonomy key" },
+    "threshold": { "type": "number", "minimum": 0, "maximum": 1 },
+    "cleared": { "type": "boolean" },
+    "elapsed_ms": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": false
+}

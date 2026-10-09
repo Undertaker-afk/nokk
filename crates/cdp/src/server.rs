@@ -91,14 +91,25 @@ fn authorized(head: &str, path: &str, token: Option<&str>) -> bool {
     let Some(want) = token else { return true };
     let eq = |got: &str| {
         got.len() == want.len()
-            && got.bytes().zip(want.bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
+            && got
+                .bytes()
+                .zip(want.bytes())
+                .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+                == 0
     };
     let from_query = path
         .split_once('?')
-        .map(|(_, q)| q.split('&').filter_map(|kv| kv.strip_prefix("token=")).any(eq))
+        .map(|(_, q)| {
+            q.split('&')
+                .filter_map(|kv| kv.strip_prefix("token="))
+                .any(eq)
+        })
         .unwrap_or(false);
     let from_header = header(head, "authorization")
-        .and_then(|v| v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer ")))
+        .and_then(|v| {
+            v.strip_prefix("Bearer ")
+                .or_else(|| v.strip_prefix("bearer "))
+        })
         .map(|t| eq(t.trim()))
         .unwrap_or(false);
     from_query || from_header
@@ -122,7 +133,9 @@ pub async fn serve(engine: Engine, config: ServerConfig) -> std::io::Result<()> 
         let registry = registry.clone();
         let token = token.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_conn(stream, engine, port, registry, auto_solve, token.as_deref()).await {
+            if let Err(e) =
+                handle_conn(stream, engine, port, registry, auto_solve, token.as_deref()).await
+            {
                 tracing::debug!(%peer, error = %e, "cdp connection ended");
             }
         });
@@ -226,7 +239,11 @@ async fn serve_http(
         // The real page list. Every entry's debugger URL is the browser endpoint:
         // nokk uses CDP's flatten model, where one browser socket carries every
         // page and a client picks a page with `Target.attachToTarget`.
-        p if p.starts_with("/json/list") || p == "/json" || p.starts_with("/json?") || p == "/json/" => {
+        p if p.starts_with("/json/list")
+            || p == "/json"
+            || p.starts_with("/json?")
+            || p == "/json/" =>
+        {
             let mut list = json!(registry.list());
             if let Some(entries) = list.as_array_mut() {
                 for e in entries {
@@ -291,7 +308,8 @@ struct Target {
     /// `Page.navigate` reported, and answers `None` when nothing ever does.
     loader_id: Arc<std::sync::Mutex<String>>,
     /// Requests held for the driver (`Fetch.requestPaused`), by interception id.
-    fetch_held: Arc<std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<nokk::Decision>>>>,
+    fetch_held:
+        Arc<std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<nokk::Decision>>>>,
     /// Requests announced while held: engine request id -> the id the driver saw.
     net_ids: Arc<std::sync::Mutex<HashMap<String, String>>>,
     /// Frames already announced to the client, so each is reported once. Frames
@@ -385,7 +403,11 @@ fn cookie_param(c: &Value) -> Option<(String, String)> {
     if let Some(ss) = c.get("sameSite").and_then(|v| v.as_str()) {
         line.push_str(&format!("; SameSite={ss}"));
     }
-    if let Some(exp) = c.get("expires").and_then(|v| v.as_f64()).filter(|e| *e > 0.0) {
+    if let Some(exp) = c
+        .get("expires")
+        .and_then(|v| v.as_f64())
+        .filter(|e| *e > 0.0)
+    {
         line.push_str(&format!("; Max-Age={}", (exp - now_secs()).max(0.0) as i64));
     }
     Some((line, url))
@@ -701,7 +723,8 @@ impl Conn {
                     navigating: Arc::new(AtomicBool::new(false)),
                     announced_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
                 };
-                t.announced_seq.store(t.ctx.document_seq(), Ordering::Relaxed);
+                t.announced_seq
+                    .store(t.ctx.document_seq(), Ordering::Relaxed);
                 let info = target_info(&t);
                 self.registry.add(json!({
                     "id": t.target_id,
@@ -804,7 +827,10 @@ impl Conn {
             // may not have a page yet. Its pages share one jar, so one page is enough;
             // with none, the cookies wait for the first.
             "Storage.setCookies" if browser_level => {
-                let want = params.get("browserContextId").and_then(|v| v.as_str()).map(String::from);
+                let want = params
+                    .get("browserContextId")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
                 let cookies: Vec<(String, String)> = params
                     .get("cookies")
                     .and_then(|v| v.as_array())
@@ -818,7 +844,11 @@ impl Conn {
                     }
                     None => {
                         let key = want.clone().unwrap_or_default();
-                        self.browser_contexts.entry(key).or_default().pending_cookies.extend(cookies);
+                        self.browser_contexts
+                            .entry(key)
+                            .or_default()
+                            .pending_cookies
+                            .extend(cookies);
                     }
                 }
                 vec![ok(id, &session, json!({}))]
@@ -849,11 +879,16 @@ impl Conn {
             // itself reports (`screenX`/`outerWidth`…), so client and site agree.
             "Browser.getWindowForTarget" => {
                 let by_id = params.get("targetId").and_then(|v| v.as_str());
-                let t = self.targets.iter().find(|t| match (by_id, session.as_deref()) {
-                    (Some(tid), _) => t.target_id == tid,
-                    (None, Some(s)) => t.session_id == s || t.extra_sessions.iter().any(|e| e == s),
-                    (None, None) => false,
-                });
+                let t = self
+                    .targets
+                    .iter()
+                    .find(|t| match (by_id, session.as_deref()) {
+                        (Some(tid), _) => t.target_id == tid,
+                        (None, Some(s)) => {
+                            t.session_id == s || t.extra_sessions.iter().any(|e| e == s)
+                        }
+                        (None, None) => false,
+                    });
                 let Some(t) = t else {
                     return vec![err(id, &session, -32000, "No target with given id found")];
                 };
@@ -863,14 +898,21 @@ impl Conn {
                         .evaluate("JSON.stringify([screenX, screenY, outerWidth, outerHeight])")
                         .await
                         .ok()
-                        .and_then(|v| v.as_str().and_then(|s| serde_json::from_str::<Vec<i64>>(s).ok()))
+                        .and_then(|v| {
+                            v.as_str()
+                                .and_then(|s| serde_json::from_str::<Vec<i64>>(s).ok())
+                        })
                         .filter(|d| d.len() == 4)
                         .unwrap_or_else(|| vec![0, 0, 1280, 720]);
-                    let m = ok(id, &session, json!({
-                        "windowId": 1,
-                        "bounds": { "left": dims[0], "top": dims[1], "width": dims[2],
-                                    "height": dims[3], "windowState": "normal" },
-                    }));
+                    let m = ok(
+                        id,
+                        &session,
+                        json!({
+                            "windowId": 1,
+                            "bounds": { "left": dims[0], "top": dims[1], "width": dims[2],
+                                        "height": dims[3], "windowState": "normal" },
+                        }),
+                    );
                     let _ = tx.send(Message::Text(m.to_string()));
                 });
                 vec![]
@@ -1092,7 +1134,10 @@ impl Conn {
     ) -> Vec<Value> {
         let mut out = Vec::new();
         if let Some(bc) = params.get("browserContextId").and_then(|v| v.as_str()) {
-            let named = self.browser_contexts.get(bc).and_then(|c| c.session.clone());
+            let named = self
+                .browser_contexts
+                .get(bc)
+                .and_then(|c| c.session.clone());
             self.browser_contexts.remove(bc);
             // Close (drop) every page in this context, freeing its engine
             // context, and tell the client — otherwise the targets leak.
@@ -1537,7 +1582,7 @@ impl Conn {
                     let m = ok(id, &session, json!({
                         "kind": st.kind.as_str(), "title": st.title, "url": st.url,
                         "cleared": st.cleared, "token": st.token,
-                        "solvable": matches!(st.kind, nokk::ChallengeKind::CloudflareInterstitial | nokk::ChallengeKind::TurnstileWidget),
+                        "solvable": matches!(st.kind, nokk::ChallengeKind::CloudflareInterstitial | nokk::ChallengeKind::TurnstileWidget | nokk::ChallengeKind::HcaptchaWidget),
                     }));
                     let _ = tx.send(Message::Text(m.to_string()));
                 });
@@ -2240,27 +2285,27 @@ fn network_events(
     // A held request was announced when it paused.
     if !rec.announced {
         out.push(event(
-        "Network.requestWillBeSent",
-        session,
-        json!({
-            "requestId": request_id,
-            "loaderId": loader_id,
-            "documentURL": rec.url,
-            "request": {
-                "url": rec.url, "method": rec.method, "headers": {},
-                "initialPriority": "High", "referrerPolicy": "strict-origin-when-cross-origin",
-                // What the page sent up. Absent when there is no body, exactly as
-                // Chrome reports it — a GET has no `postData` field at all.
-                "postData": String::from_utf8_lossy(&rec.request_body),
-                "hasPostData": !rec.request_body.is_empty(),
-            },
-            "timestamp": now,
-            "wallTime": now,
-            "initiator": { "type": if kind == "Document" { "other" } else { "parser" } },
-            "type": kind,
-            "frameId": frame_id,
-            "hasUserGesture": false,
-        }),
+            "Network.requestWillBeSent",
+            session,
+            json!({
+                "requestId": request_id,
+                "loaderId": loader_id,
+                "documentURL": rec.url,
+                "request": {
+                    "url": rec.url, "method": rec.method, "headers": {},
+                    "initialPriority": "High", "referrerPolicy": "strict-origin-when-cross-origin",
+                    // What the page sent up. Absent when there is no body, exactly as
+                    // Chrome reports it — a GET has no `postData` field at all.
+                    "postData": String::from_utf8_lossy(&rec.request_body),
+                    "hasPostData": !rec.request_body.is_empty(),
+                },
+                "timestamp": now,
+                "wallTime": now,
+                "initiator": { "type": if kind == "Document" { "other" } else { "parser" } },
+                "type": kind,
+                "frameId": frame_id,
+                "hasUserGesture": false,
+            }),
         ));
     }
     // Status 0 means the request never produced a response — a blocked tracker,
@@ -2326,12 +2371,21 @@ fn network_events(
 fn fetch_decision(method: &str, params: &Value) -> nokk::Decision {
     use base64::Engine as _;
     let b64 = |k: &str| {
-        params.get(k).and_then(|v| v.as_str()).map(|s| base64::engine::general_purpose::STANDARD.decode(s).unwrap_or_default())
+        params.get(k).and_then(|v| v.as_str()).map(|s| {
+            base64::engine::general_purpose::STANDARD
+                .decode(s)
+                .unwrap_or_default()
+        })
     };
     let headers = |k: &str| {
         params.get(k).and_then(|v| v.as_array()).map(|a| {
             a.iter()
-                .filter_map(|h| Some((h.get("name")?.as_str()?.to_string(), h.get("value")?.as_str()?.to_string())))
+                .filter_map(|h| {
+                    Some((
+                        h.get("name")?.as_str()?.to_string(),
+                        h.get("value")?.as_str()?.to_string(),
+                    ))
+                })
                 .collect::<std::collections::BTreeMap<_, _>>()
         })
     };
@@ -2339,7 +2393,10 @@ fn fetch_decision(method: &str, params: &Value) -> nokk::Decision {
     match method {
         "Fetch.failRequest" => nokk::Decision::Fail,
         "Fetch.fulfillRequest" => nokk::Decision::Fulfill {
-            status: params.get("responseCode").and_then(|v| v.as_u64()).unwrap_or(200) as u16,
+            status: params
+                .get("responseCode")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(200) as u16,
             headers: headers("responseHeaders").unwrap_or_default(),
             body: b64("body").unwrap_or_default(),
         },
@@ -2349,7 +2406,12 @@ fn fetch_decision(method: &str, params: &Value) -> nokk::Decision {
             headers: headers("headers"),
             body: b64("postData"),
         },
-        _ => nokk::Decision::Continue { url: None, method: None, headers: None, body: None },
+        _ => nokk::Decision::Continue {
+            url: None,
+            method: None,
+            headers: None,
+            body: None,
+        },
     }
 }
 
@@ -2404,11 +2466,7 @@ fn announce_document(t: &mut Target) -> Vec<Value> {
     // The loader id its document request went out under: a client pairs the
     // request with the commit by it (Playwright keeps a request it cannot pair
     // as a navigation still pending, and its evaluates wait on that forever).
-    let loader = t
-        .loader_id
-        .lock()
-        .map(|l| l.clone())
-        .unwrap_or_default();
+    let loader = t.loader_id.lock().map(|l| l.clone()).unwrap_or_default();
     t.url = url.clone();
     t.exec_ctx_id = IDS.fetch_add(1, Ordering::Relaxed) as i64;
     for w in t.iso_worlds.iter_mut() {
@@ -2441,17 +2499,23 @@ fn announce_document(t: &mut Target) -> Vec<Value> {
         ),
     ];
     for (name, nid) in &t.iso_worlds {
-        out.push(ev("Runtime.executionContextCreated", json!({ "context": {
-            "id": nid, "origin": url, "name": name, "uniqueId": format!("{nid}.1"),
-            "auxData": { "isDefault": false, "type": "isolated", "frameId": target_id }
-        }})));
+        out.push(ev(
+            "Runtime.executionContextCreated",
+            json!({ "context": {
+                "id": nid, "origin": url, "name": name, "uniqueId": format!("{nid}.1"),
+                "auxData": { "isDefault": false, "type": "isolated", "frameId": target_id }
+            }}),
+        ));
     }
     out.push(lifecycle("init"));
     out.push(lifecycle("DOMContentLoaded"));
     out.push(ev("Page.domContentEventFired", json!({ "timestamp": 0.0 })));
     out.push(lifecycle("load"));
     out.push(ev("Page.loadEventFired", json!({ "timestamp": 0.0 })));
-    out.push(ev("Page.frameStoppedLoading", json!({ "frameId": target_id })));
+    out.push(ev(
+        "Page.frameStoppedLoading",
+        json!({ "frameId": target_id }),
+    ));
     out
 }
 
@@ -2623,48 +2687,94 @@ mod tests {
 
     #[test]
     fn fetch_answers_become_decisions() {
-        let d = fetch_decision("Fetch.fulfillRequest", &json!({
-            "requestId": "j", "responseCode": 404,
-            "responseHeaders": [{ "name": "Content-Type", "value": "text/plain" }],
-            "body": "aGk=",
-        }));
-        assert!(matches!(d, nokk::Decision::Fulfill { status: 404, ref headers, ref body }
-            if headers.get("Content-Type").map(String::as_str) == Some("text/plain") && body == b"hi"));
-        let d = fetch_decision("Fetch.continueRequest", &json!({
-            "requestId": "j", "method": "POST", "postData": "eD0x",
-            "headers": [{ "name": "X-Test", "value": "1" }],
-        }));
-        assert!(matches!(d, nokk::Decision::Continue { url: None, method: Some(ref m), headers: Some(ref h), body: Some(ref b) }
-            if m == "POST" && h.len() == 1 && b == b"x=1"));
-        assert!(matches!(fetch_decision("Fetch.failRequest", &json!({ "errorReason": "Aborted" })), nokk::Decision::Fail));
-        assert!(matches!(fetch_decision("Fetch.continueWithAuth", &json!({})), nokk::Decision::Continue { headers: None, .. }));
+        let d = fetch_decision(
+            "Fetch.fulfillRequest",
+            &json!({
+                "requestId": "j", "responseCode": 404,
+                "responseHeaders": [{ "name": "Content-Type", "value": "text/plain" }],
+                "body": "aGk=",
+            }),
+        );
+        assert!(
+            matches!(d, nokk::Decision::Fulfill { status: 404, ref headers, ref body }
+            if headers.get("Content-Type").map(String::as_str) == Some("text/plain") && body == b"hi")
+        );
+        let d = fetch_decision(
+            "Fetch.continueRequest",
+            &json!({
+                "requestId": "j", "method": "POST", "postData": "eD0x",
+                "headers": [{ "name": "X-Test", "value": "1" }],
+            }),
+        );
+        assert!(
+            matches!(d, nokk::Decision::Continue { url: None, method: Some(ref m), headers: Some(ref h), body: Some(ref b) }
+            if m == "POST" && h.len() == 1 && b == b"x=1")
+        );
+        assert!(matches!(
+            fetch_decision("Fetch.failRequest", &json!({ "errorReason": "Aborted" })),
+            nokk::Decision::Fail
+        ));
+        assert!(matches!(
+            fetch_decision("Fetch.continueWithAuth", &json!({})),
+            nokk::Decision::Continue { headers: None, .. }
+        ));
     }
 
     #[test]
     fn a_cdp_cookie_param_becomes_a_set_cookie_line() {
         let (line, url) = super::cookie_param(&json!({
             "name": "a", "value": "1", "url": "https://x.example/p"
-        })).unwrap();
-        assert_eq!((line.as_str(), url.as_str()), ("a=1; Path=/", "https://x.example/p"));
+        }))
+        .unwrap();
+        assert_eq!(
+            (line.as_str(), url.as_str()),
+            ("a=1; Path=/", "https://x.example/p")
+        );
         let (line, url) = super::cookie_param(&json!({
             "name": "b", "value": "2", "domain": ".x.example", "path": "/q",
             "secure": true, "httpOnly": true, "sameSite": "Lax"
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(url, "https://x.example/q");
-        assert_eq!(line, "b=2; Path=/q; Domain=.x.example; Secure; HttpOnly; SameSite=Lax");
-        assert!(super::cookie_param(&json!({ "name": "c", "value": "3" })).is_none(), "no url and no domain");
+        assert_eq!(
+            line,
+            "b=2; Path=/q; Domain=.x.example; Secure; HttpOnly; SameSite=Lax"
+        );
+        assert!(
+            super::cookie_param(&json!({ "name": "c", "value": "3" })).is_none(),
+            "no url and no domain"
+        );
     }
 
     #[test]
     fn a_token_is_checked_on_the_url_or_the_header() {
         let head = "GET /json/version HTTP/1.1\r\nHost: x\r\n";
-        assert!(super::authorized(head, "/json/version", None), "no token configured: open");
+        assert!(
+            super::authorized(head, "/json/version", None),
+            "no token configured: open"
+        );
         assert!(!super::authorized(head, "/json/version", Some("s3cret")));
-        assert!(super::authorized(head, "/json/version?token=s3cret", Some("s3cret")));
-        assert!(super::authorized(head, "/devtools/browser/nokk?a=1&token=s3cret", Some("s3cret")));
-        assert!(!super::authorized(head, "/json/version?token=s3cre", Some("s3cret")));
+        assert!(super::authorized(
+            head,
+            "/json/version?token=s3cret",
+            Some("s3cret")
+        ));
+        assert!(super::authorized(
+            head,
+            "/devtools/browser/nokk?a=1&token=s3cret",
+            Some("s3cret")
+        ));
+        assert!(!super::authorized(
+            head,
+            "/json/version?token=s3cre",
+            Some("s3cret")
+        ));
         let bearer = "GET /devtools/browser/nokk HTTP/1.1\r\nAuthorization: Bearer s3cret\r\n";
-        assert!(super::authorized(bearer, "/devtools/browser/nokk", Some("s3cret")));
+        assert!(super::authorized(
+            bearer,
+            "/devtools/browser/nokk",
+            Some("s3cret")
+        ));
         let wrong = "GET / HTTP/1.1\r\nAuthorization: Bearer nope\r\n";
         assert!(!super::authorized(wrong, "/", Some("s3cret")));
     }
@@ -2692,7 +2802,12 @@ mod tests {
             .is_none());
         assert!(super::parse_proxy_server("ftp://h:1").is_none());
         assert!(super::parse_proxy_server("no-port").is_none());
-        assert_eq!(super::parse_proxy_server("http://p.webshare.io:80/").unwrap().port, 80);
+        assert_eq!(
+            super::parse_proxy_server("http://p.webshare.io:80/")
+                .unwrap()
+                .port,
+            80
+        );
     }
 
     #[tokio::test]

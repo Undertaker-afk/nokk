@@ -31,8 +31,8 @@ pub use nokk_net::{CookieRecord, ProxyConfig, ProxyScheme, Response as HttpRespo
 pub use nokk_pool::{PoolConfig, WorkerId};
 
 mod intercept;
-pub use intercept::{Decision, PausedRequest};
 use intercept::PageClient;
+pub use intercept::{Decision, PausedRequest};
 
 /// Errors surfaced by the engine.
 #[derive(Debug, thiserror::Error)]
@@ -155,21 +155,28 @@ impl EngineInner {
     /// An empty key (the default browser context) or the stub network always uses
     /// the shared default client. Otherwise the client is built once per key and
     /// pooled — so each identity gets its *own* cookie jar (Puppeteer browser
-    /// contexts are isolated even when they share, or omit, a proxy).
+    /// contexts are isolated even when they share, or omit, a proxy). The pool key
+    /// includes the geo-derived `Accept-Language` so a context whose exit IP moved
+    /// its locale never shares a wire locale with one that did not.
     fn client_for(
         &self,
         key: &str,
         proxy: Option<ProxyConfig>,
         emulation_os: Option<nokk_net::EmulationOs>,
+        accept_language: Option<&str>,
     ) -> Result<Client, EngineError> {
         if key.is_empty() || !self.use_real_network {
             return Ok(self.client.clone());
         }
+        let pool_key = match accept_language {
+            Some(l) if !l.is_empty() => format!("{key}\0lang:{l}"),
+            _ => key.to_string(),
+        };
         if let Some(c) = self
             .client_pool
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .get(key)
+            .get(&pool_key)
         {
             return Ok(c.clone());
         }
@@ -182,9 +189,10 @@ impl EngineInner {
         if let Some(os) = emulation_os {
             cfg.emulation_os = os;
         }
+        cfg.accept_language = accept_language.map(str::to_string);
         let client = Client::Fingerprint(FingerprintClient::new(&cfg)?);
         let mut pool = self.client_pool.lock().unwrap_or_else(|e| e.into_inner());
-        Ok(pool.entry(key.to_string()).or_insert(client).clone())
+        Ok(pool.entry(pool_key).or_insert(client).clone())
     }
 
     /// The rotated fingerprint profile a context `identity` should present, or
@@ -305,6 +313,86 @@ impl EngineInner {
         }
     }
 
+    /// Cached geo result for `proxy_key`, if looked up before (a clone of the
+    /// cached miss included). Lets context creation skip the lookup request and
+    /// build the final client directly.
+    fn cached_geo(&self, proxy_key: &str) -> Option<Option<nokk_net::GeoInfo>> {
+        self.geo_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(proxy_key)
+            .map(|c| c.clone())
+    }
+
+    /// Throwaway client for the geo lookup itself: same proxy/TLS OS as the final
+    /// client, but never pooled, so the lookup's cookies never pollute a site jar.
+    fn lookup_client(
+        &self,
+        proxy: Option<ProxyConfig>,
+        emulation_os: Option<nokk_net::EmulationOs>,
+    ) -> Result<Client, EngineError> {
+        if !self.use_real_network {
+            return Ok(self.client.clone());
+        }
+        let mut cfg = self.client_config.clone();
+        cfg.proxy = proxy;
+        if let Some(os) = emulation_os {
+            cfg.emulation_os = os;
+        }
+        Ok(Client::Fingerprint(FingerprintClient::new(&cfg)?))
+    }
+
+    /// The stealth profile a context with `profile` + `geo` presents — the same
+    /// composition [`Self::context_bootstrap`] renders. The wire locale derives
+    /// from this value, so header and JS never disagree.
+    fn stealth_for_context(
+        &self,
+        profile: Option<nokk_stealth::FingerprintProfile>,
+        geo: Option<&nokk_net::GeoInfo>,
+    ) -> StealthProfile {
+        let base = profile
+            .map(|p| p.stealth().with_chrome_major(self.chrome_major))
+            .unwrap_or_else(|| self.stealth.clone());
+        match geo {
+            Some(g) => nokk_stealth::apply_geo(&base, &g.timezone, &g.country_code),
+            None => base,
+        }
+    }
+
+    /// Wire `Accept-Language` for `profile` + `geo`, or `None` to keep the
+    /// emulation default. `Some` exactly when `geo` moved the JS locale, built
+    /// from the same [`Self::stealth_for_context`] value the bootstrap renders —
+    /// one geo result, both layers, atomically.
+    fn accept_language_for(
+        &self,
+        profile: Option<nokk_stealth::FingerprintProfile>,
+        geo: Option<&nokk_net::GeoInfo>,
+    ) -> Option<String> {
+        geo.map(|_| {
+            let s = self.stealth_for_context(profile, geo);
+            nokk_stealth::accept_language_header(&s.languages)
+        })
+    }
+
+    /// Geo for a new context: the cached result when present, else one lookup
+    /// through a throwaway proxy client. Returns `None` when geoIP is off, the
+    /// network is stubbed, or there is no proxy.
+    async fn geo_for_context(
+        &self,
+        geo_key: &str,
+        proxy: Option<ProxyConfig>,
+        emulation_os: Option<nokk_net::EmulationOs>,
+    ) -> Option<nokk_net::GeoInfo> {
+        if !self.geoip_timezone || !self.use_real_network || geo_key.is_empty() {
+            return None;
+        }
+        if let Some(cached) = self.cached_geo(geo_key) {
+            return cached;
+        }
+        let tmp = self.lookup_client(proxy, emulation_os).ok()?;
+        self.geo_for(geo_key, &tmp).await
+    }
+
     /// Filesystem path for a named session's jar, or `None` when sessions aren't
     /// persisted or the name has no filesystem-safe form.
     fn session_path(&self, name: &str) -> Option<PathBuf> {
@@ -339,18 +427,23 @@ impl EngineInner {
     }
 
     /// Build (once, then pooled) a client whose cookie jar *is* the named session
-    /// jar, so its cookies accumulate in the shared, persistable store.
+    /// jar, so its cookies accumulate in the shared, persistable store. Pooled by
+    /// session + wire locale, like [`Self::client_for`].
     fn client_for_session(
         &self,
         name: &str,
         jar: Arc<SessionJar>,
         proxy: Option<ProxyConfig>,
         emulation_os: Option<nokk_net::EmulationOs>,
+        accept_language: Option<&str>,
     ) -> Result<Client, EngineError> {
         if !self.use_real_network {
             return Ok(self.client.clone());
         }
-        let key = format!("session:{name}");
+        let key = match accept_language {
+            Some(l) if !l.is_empty() => format!("session:{name}\0lang:{l}"),
+            _ => format!("session:{name}"),
+        };
         if let Some(c) = self
             .client_pool
             .lock()
@@ -364,6 +457,7 @@ impl EngineInner {
         if let Some(os) = emulation_os {
             cfg.emulation_os = os;
         }
+        cfg.accept_language = accept_language.map(str::to_string);
         let client = Client::Fingerprint(FingerprintClient::with_session(&cfg, Some(jar))?);
         let mut pool = self.client_pool.lock().unwrap_or_else(|e| e.into_inner());
         Ok(pool.entry(key).or_insert(client).clone())
@@ -437,7 +531,13 @@ fn build_bootstrap(profile: &StealthProfile) -> String {
     // Implementation trace flags (`NOKK_TRACE_CANVAS`, `NOKK_TRACE_GPU`) go first so
     // they exist in every realm before page code: a probe set later misses early calls.
     let mut flags = String::new();
-    for (env, name) in [("NOKK_TRACE_CANVAS", "__pt_canvasTrace"), ("NOKK_TRACE_GRID", "__pt_gridTrace"), ("NOKK_TRACE_GPU", "__pt_gpuTrace"), ("NOKK_TRACE_ENC", "__pt_encTrace"), ("NOKK_TRACE_SRCDOC", "__pt_srcdocTrace")] {
+    for (env, name) in [
+        ("NOKK_TRACE_CANVAS", "__pt_canvasTrace"),
+        ("NOKK_TRACE_GRID", "__pt_gridTrace"),
+        ("NOKK_TRACE_GPU", "__pt_gpuTrace"),
+        ("NOKK_TRACE_ENC", "__pt_encTrace"),
+        ("NOKK_TRACE_SRCDOC", "__pt_srcdocTrace"),
+    ] {
         if let Some(v) = std::env::var_os(env) {
             // The value reaches the tracer: `NOKK_TRACE_ENC=9000-9300,8600-8700` dumps
             // report chunks of those lengths in full.
@@ -448,7 +548,11 @@ fn build_bootstrap(profile: &StealthProfile) -> String {
     // `NOKK_TRACE_BOOT=1` logs each bootstrap layer's time to the console (`[boot]`).
     let timed = std::env::var_os("NOKK_TRACE_BOOT").is_some();
     let mark = |name: &str| -> String {
-        if timed { format!("\n;(globalThis.__pt_bootT = globalThis.__pt_bootT || []).push(['{name}', Date.now()]);\n") } else { "\n".to_string() }
+        if timed {
+            format!("\n;(globalThis.__pt_bootT = globalThis.__pt_bootT || []).push(['{name}', Date.now()]);\n")
+        } else {
+            "\n".to_string()
+        }
     };
     let pieces: Vec<(&str, String)> = vec![
         // The write helper first: every layer uses it, and read-only properties only
@@ -516,20 +620,26 @@ fn internal_field_setters<'a>(sources: impl Iterator<Item = &'a str>) -> String 
         while let Some(off) = src[i..].find(".__pt") {
             let start = i + off + 1;
             let mut end = start;
-            while end < b.len() && (b[end].is_ascii_alphanumeric() || b[end] == b'_' || b[end] == b'$') {
+            while end < b.len()
+                && (b[end].is_ascii_alphanumeric() || b[end] == b'_' || b[end] == b'$')
+            {
                 end += 1;
             }
             let mut k = end;
             while k < b.len() && (b[k] == b' ' || b[k] == b'\t') {
                 k += 1;
             }
-            if k < b.len() && b[k] == b'=' && !(k + 1 < b.len() && (b[k + 1] == b'=' || b[k + 1] == b'>')) {
+            if k < b.len()
+                && b[k] == b'='
+                && !(k + 1 < b.len() && (b[k + 1] == b'=' || b[k + 1] == b'>'))
+            {
                 names.insert(src[start..end].to_string());
             }
             i = end.max(start + 1);
         }
     }
-    let list = serde_json::to_string(&names.into_iter().collect::<Vec<_>>()).unwrap_or_else(|_| "[]".into());
+    let list = serde_json::to_string(&names.into_iter().collect::<Vec<_>>())
+        .unwrap_or_else(|_| "[]".into());
     format!(
         "(() => {{ const P = Object.prototype; const def = Object.defineProperty, own = Object.prototype.hasOwnProperty; \
          for (const n of {list}) {{ if (own.call(P, n)) continue; \
@@ -557,6 +667,72 @@ fn proxy_key(p: &ProxyConfig) -> String {
         p.port,
         p.username.as_deref().unwrap_or("")
     )
+}
+
+/// Per-session press seed: time + process + a monotonic counter mixed with the
+/// target, so the same (x, y) takes a different arc every session. A stable
+/// function of (x, y) repeats the identical trail on every run — the score
+/// counts that.
+fn press_seed(x: f64, y: f64) -> u64 {
+    static CTR: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0x9e37_79b9_7f4a_7c15);
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x243f_6a88_85a3_08d3);
+    let c = CTR.fetch_add(0x9e37_79b9_7f4a_7c15, std::sync::atomic::Ordering::Relaxed);
+    let mut h = t
+        .wrapping_add(c)
+        .wrapping_add((std::process::id() as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15))
+        .wrapping_add(x.to_bits().wrapping_mul(0xbf58_476d_1ce4_e5b9))
+        .wrapping_add(y.to_bits().wrapping_mul(0x94d0_49bb_1331_11eb));
+    // splitmix64 finalizer: avalanche so consecutive sessions differ widely.
+    h ^= h >> 30;
+    h = h.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    h ^= h >> 27;
+    h = h.wrapping_mul(0x94d0_49bb_1331_11eb);
+    h ^= h >> 31;
+    h | 1
+}
+
+/// `KeyboardEvent.code` for a typed char: the physical key Chrome reports, not
+/// the char itself. Letters map to `KeyX`, digits to `DigitN` (shifted symbols
+/// to their unshifted digit), the rest to their named key.
+fn key_code_for(ch: char) -> String {
+    if ch.is_ascii_alphabetic() {
+        return format!("Key{}", ch.to_ascii_uppercase());
+    }
+    if ch.is_ascii_digit() {
+        return format!("Digit{ch}");
+    }
+    let code = match ch {
+        ' ' => "Space",
+        '\t' => "Tab",
+        '\n' | '\r' => "Enter",
+        '.' | '>' => "Period",
+        ',' | '<' => "Comma",
+        '-' | '_' => "Minus",
+        '=' | '+' => "Equal",
+        '/' | '?' => "Slash",
+        ';' | ':' => "Semicolon",
+        '\'' | '"' => "Quote",
+        '[' | '{' => "BracketLeft",
+        ']' | '}' => "BracketRight",
+        '\\' | '|' => "Backslash",
+        '`' | '~' => "Backquote",
+        '!' => "Digit1",
+        '@' => "Digit2",
+        '#' => "Digit3",
+        '$' => "Digit4",
+        '%' => "Digit5",
+        '^' => "Digit6",
+        '&' => "Digit7",
+        '*' => "Digit8",
+        '(' => "Digit9",
+        ')' => "Digit0",
+        _ => "",
+    };
+    code.to_string()
 }
 
 /// A running engine: owns the isolate worker pool and hands out contexts.
@@ -668,10 +844,16 @@ impl Engine {
     ) -> Result<BrowserContext, EngineError> {
         let profile = self.inner.rotated_profile(&identity);
         let geo_key = proxy.as_ref().map(proxy_key).unwrap_or_default();
-        let client =
-            self.inner
-                .client_for(&identity, proxy, EngineInner::emulation_os_of(profile))?;
-        let geo = self.inner.geo_for(&geo_key, &client).await;
+        let os = EngineInner::emulation_os_of(profile);
+        // One geo result drives both the wire locale and the JS locale below.
+        let geo = self
+            .inner
+            .geo_for_context(&geo_key, proxy.clone(), os)
+            .await;
+        let accept_language = self.inner.accept_language_for(profile, geo.as_ref());
+        let client = self
+            .inner
+            .client_for(&identity, proxy, os, accept_language.as_deref())?;
         let bootstrap = self.inner.context_bootstrap(profile, geo.as_ref());
         self.build_context(client, None, bootstrap).await
     }
@@ -690,14 +872,16 @@ impl Engine {
     ) -> Result<BrowserContext, EngineError> {
         let profile = self.inner.rotated_profile(&name);
         let geo_key = proxy.as_ref().map(proxy_key).unwrap_or_default();
+        let os = EngineInner::emulation_os_of(profile);
         let jar = self.inner.session_jar(&name)?;
-        let client = self.inner.client_for_session(
-            &name,
-            jar,
-            proxy,
-            EngineInner::emulation_os_of(profile),
-        )?;
-        let geo = self.inner.geo_for(&geo_key, &client).await;
+        let geo = self
+            .inner
+            .geo_for_context(&geo_key, proxy.clone(), os)
+            .await;
+        let accept_language = self.inner.accept_language_for(profile, geo.as_ref());
+        let client =
+            self.inner
+                .client_for_session(&name, jar, proxy, os, accept_language.as_deref())?;
         let bootstrap = self.inner.context_bootstrap(profile, geo.as_ref());
         self.build_context(client, Some(name), bootstrap).await
     }
@@ -711,11 +895,16 @@ impl Engine {
         if identity.is_empty() {
             return;
         }
-        self.inner
+        let mut pool = self
+            .inner
             .client_pool
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(identity);
+            .unwrap_or_else(|e| e.into_inner());
+        // Pool keys carry the wire locale suffix (`id\0lang:…`); drop those too,
+        // or per-identity clients accumulate for the engine's lifetime.
+        pool.remove(identity);
+        let prefix = format!("{identity}\0");
+        pool.retain(|k, _| !k.starts_with(&prefix));
     }
 
     /// Shared tail of context creation: acquire a slot, place on the least-loaded
@@ -1008,7 +1197,8 @@ pub struct BrowserContext {
     /// times a second, or leaving its `setInterval` frozen between commands.
     next_timer_at: std::sync::Mutex<Option<std::time::Instant>>,
     _permit: tokio::sync::OwnedSemaphorePermit,
-    _load: nokk_pool::ContextLoadGuard,    /// Frame pump counter: the expensive extras do not run on every pump.
+    _load: nokk_pool::ContextLoadGuard,
+    /// Frame pump counter: the expensive extras do not run on every pump.
     frame_pump_count: std::sync::atomic::AtomicUsize,
     /// When frames last got a turn, so they get one during long sequences such as
     /// loading the page's scripts too.
@@ -1018,7 +1208,6 @@ pub struct BrowserContext {
     /// Frames are being pumped while the page waits on the network: do not re-enter
     /// them from the same pump.
     frames_live: std::sync::atomic::AtomicBool,
-
 }
 
 /// What a caller outside the engine can know about a live frame.
@@ -1177,6 +1366,9 @@ pub enum ChallengeKind {
     /// A reCAPTCHA checkbox, no token yet (Google's /sorry/ page). An image puzzle
     /// behind it is not something this engine solves.
     RecaptchaWidget,
+    /// An hCaptcha checkbox, no token yet. A task behind it is not something
+    /// this engine solves.
+    HcaptchaWidget,
 }
 
 impl ChallengeKind {
@@ -1187,6 +1379,7 @@ impl ChallengeKind {
             ChallengeKind::TurnstileWidget => "turnstile-widget",
             ChallengeKind::DataDome => "datadome",
             ChallengeKind::RecaptchaWidget => "recaptcha-widget",
+            ChallengeKind::HcaptchaWidget => "hcaptcha-widget",
         }
     }
 }
@@ -1217,7 +1410,9 @@ pub enum ChallengeStatus {
     /// The page showed no gate at all: nothing to solve.
     NoChallenge,
     /// The press was answered with a task for a person (reCAPTCHA's image or audio
-    /// puzzle, or its "try again later"): waiting out the budget changes nothing.
+    /// puzzle, hCaptcha's image grid or its unsupported area_select/slider/crop
+    /// drag variant, or a "try again later"): waiting out the budget changes
+    /// nothing.
     NeedsHuman,
 }
 
@@ -1233,7 +1428,10 @@ impl ChallengeStatus {
         }
     }
     pub fn is_success(&self) -> bool {
-        matches!(self, ChallengeStatus::Cleared | ChallengeStatus::TokenIssued | ChallengeStatus::NoChallenge)
+        matches!(
+            self,
+            ChallengeStatus::Cleared | ChallengeStatus::TokenIssued | ChallengeStatus::NoChallenge
+        )
     }
 }
 
@@ -1335,7 +1533,9 @@ impl BrowserContext {
         for _ in 0..MAX_META_HOPS {
             // Use the post-redirect URL as the document base, so `window.location`
             // and relative-URL resolution reflect where we actually landed.
-            let stop = self.stop_at_clearance.load(std::sync::atomic::Ordering::Acquire);
+            let stop = self
+                .stop_at_clearance
+                .load(std::sync::atomic::Ordering::Acquire);
             // The lock as the current document saw it — the first navigation has
             // no document yet, so the jar as it stands (a stale imported cookie
             // must not count as a fresh one).
@@ -1349,7 +1549,10 @@ impl BrowserContext {
                 None
             };
             let (final_url, html) = match post.take() {
-                Some((ctype, body)) => self.fetch_document_post(&current, referrer, ctype, body).await?,
+                Some((ctype, body)) => {
+                    self.fetch_document_post(&current, referrer, ctype, body)
+                        .await?
+                }
                 None => self.fetch_document_retrying(&current, referrer).await?,
             };
             // The lock is what a solve is for. A caller that takes the cookie
@@ -1361,7 +1564,8 @@ impl BrowserContext {
                 let after = self.clearance_value();
                 if after.is_some() && after != lock_before {
                     tracing::info!(target: "nokk", url = %final_url, "clearance received; not loading the page behind it");
-                    self.stopped_at_clearance.store(true, std::sync::atomic::Ordering::Release);
+                    self.stopped_at_clearance
+                        .store(true, std::sync::atomic::Ordering::Release);
                     return Ok(());
                 }
             }
@@ -1398,7 +1602,10 @@ impl BrowserContext {
     /// on the page's thread; a cross-origin frame on its own, as with site isolation.
     fn route(&self, index: usize) -> (nokk_pool::WorkerId, usize) {
         if index & OWN_THREAD != 0 {
-            (nokk_pool::WorkerId((index >> 32) & 0xFFFF), index & 0xFFFF_FFFF)
+            (
+                nokk_pool::WorkerId((index >> 32) & 0xFFFF),
+                index & 0xFFFF_FFFF,
+            )
         } else {
             (self.worker, index)
         }
@@ -1451,9 +1658,11 @@ impl BrowserContext {
     /// `src`s. Page scripts that throw are logged and skipped — a broken page
     /// script must not fail the load, matching browser behaviour.
     pub async fn load_html(&self, base_url: &str, html: &str) -> Result<(), EngineError> {
-        self.loading.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        self.loading
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         let r = self.load_html_now(base_url, html).await;
-        self.loading.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        self.loading
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
         r
     }
 
@@ -1480,7 +1689,8 @@ impl BrowserContext {
         }
         self.carry_in(base_url).await;
         self.load_html_into(self.idx(), base_url, html).await?;
-        self.doc_seq.fetch_add(1, std::sync::atomic::Ordering::Release);
+        self.doc_seq
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
         // Timers and async continuations scheduled during load (and by the load
         // handlers) get their turn now — with the load-time patience for delays
         // the page actually asked for.
@@ -1494,10 +1704,16 @@ impl BrowserContext {
     async fn fresh_realm(&self) -> Result<(), EngineError> {
         let old = self.idx();
         let out = self
-            .eval_in(old, "typeof __pt_carryOut === 'function' ? __pt_carryOut() : ''")
+            .eval_in(
+                old,
+                "typeof __pt_carryOut === 'function' ? __pt_carryOut() : ''",
+            )
             .await
             .ok()
-            .and_then(|v| v.as_str().and_then(|s| serde_json::from_str::<Value>(s).ok()));
+            .and_then(|v| {
+                v.as_str()
+                    .and_then(|s| serde_json::from_str::<Value>(s).ok())
+            });
         if let Some(out) = out {
             let origin = origin_of(&self.document_url());
             if let Ok(mut c) = self.carry.lock() {
@@ -1534,13 +1750,17 @@ impl BrowserContext {
             .dispatch(self.worker, move |iso| iso.create_context(&boot))
             .await?
             .map_err(EngineError::Js)?;
-        self.index.store(fresh, std::sync::atomic::Ordering::Release);
+        self.index
+            .store(fresh, std::sync::atomic::Ordering::Release);
         // Its clock runs from the start of the navigation, as a frame's does.
         let started = self.nav_started.lock().ok().and_then(|mut n| n.take());
         if let Some(t) = started {
             let ago = t.elapsed().as_secs_f64() * 1000.0;
             let _ = self
-                .eval_in(fresh, &format!("globalThis.__pt_shiftOrigin && __pt_shiftOrigin({ago:.3});"))
+                .eval_in(
+                    fresh,
+                    &format!("globalThis.__pt_shiftOrigin && __pt_shiftOrigin({ago:.3});"),
+                )
                 .await;
         }
         let _ = self
@@ -1562,7 +1782,10 @@ impl BrowserContext {
     async fn carry_in(&self, base_url: &str) {
         let v = {
             let Ok(c) = self.carry.lock() else { return };
-            let mut v = c.get(&origin_of(base_url)).cloned().unwrap_or_else(|| serde_json::json!({}));
+            let mut v = c
+                .get(&origin_of(base_url))
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
             if let Some(h) = c.get("") {
                 v["hist"] = h.clone();
             }
@@ -1582,17 +1805,23 @@ impl BrowserContext {
     /// the navigation ends there instead of loading the page behind it, and the
     /// solver reports `cleared` at once. For callers that only want the cookie.
     pub fn set_stop_at_clearance(&self, on: bool) {
-        self.stop_at_clearance.store(on, std::sync::atomic::Ordering::Release);
+        self.stop_at_clearance
+            .store(on, std::sync::atomic::Ordering::Release);
     }
 
     /// Whether a navigation stopped at a fresh clearance (stop-at-clearance
     /// mode): the page still shows the gate, and the lock is in the jar.
     pub fn stopped_at_clearance(&self) -> bool {
-        self.stopped_at_clearance.load(std::sync::atomic::Ordering::Acquire)
+        self.stopped_at_clearance
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     fn clearance_value(&self) -> Option<String> {
-        self.client.cookies().into_iter().find(|c| c.name == "cf_clearance").map(|c| c.value)
+        self.client
+            .cookies()
+            .into_iter()
+            .find(|c| c.name == "cf_clearance")
+            .map(|c| c.value)
     }
 
     /// The number of documents this page has loaded so far (see `doc_seq`).
@@ -1611,7 +1840,11 @@ impl BrowserContext {
         let log = self.requests.lock().ok()?;
         let r = log.iter().rev().find(|r| r.url == url)?;
         let v = r.headers.get("content-security-policy")?;
-        if v.trim().is_empty() { None } else { Some(v.to_string()) }
+        if v.trim().is_empty() {
+            None
+        } else {
+            Some(v.to_string())
+        }
     }
 
     /// Charset declared by the document response's `Content-Type`, if any.
@@ -1626,7 +1859,11 @@ impl BrowserContext {
             .chars()
             .take_while(|c| !matches!(c, ';' | '"' | ' ' | ','))
             .collect();
-        if label.is_empty() { None } else { Some(label) }
+        if label.is_empty() {
+            None
+        } else {
+            Some(label)
+        }
     }
 
     /// [`Self::load_html`] against a chosen context — the same steps, so an
@@ -1642,7 +1879,11 @@ impl BrowserContext {
         if let Some(js) = location_setter(base_url) {
             let _ = self.eval_in(index, &js).await;
         }
-        let doc_type = self.doc_types.lock().ok().and_then(|mut t| t.remove(base_url));
+        let doc_type = self
+            .doc_types
+            .lock()
+            .ok()
+            .and_then(|mut t| t.remove(base_url));
         if let Some(mime) = doc_type {
             let js = format!(
                 "Object.defineProperty(document, '__ptDocType', {{ value: {}, writable: true, configurable: true }});",
@@ -1720,10 +1961,14 @@ impl BrowserContext {
         let mut preload: HashMap<String, Preloaded> = HashMap::new();
         if index == self.idx() && std::env::var_os("NOKK_NO_PRELOAD").is_none() {
             for script in &page.scripts {
-                let (nokk_dom::Script::External(src) | nokk_dom::Script::ExternalModule(src)) = script else {
+                let (nokk_dom::Script::External(src) | nokk_dom::Script::ExternalModule(src)) =
+                    script
+                else {
                     continue;
                 };
-                let Some(abs) = resolve_url(base_url, src) else { continue };
+                let Some(abs) = resolve_url(base_url, src) else {
+                    continue;
+                };
                 if preload.contains_key(&abs)
                     || (self.engine.block_trackers && nokk_net::is_blocked_url(&abs))
                 {
@@ -1753,7 +1998,15 @@ impl BrowserContext {
             if index == self.idx() {
                 self.frames_take_a_turn().await;
                 let is_async = page.script_modes.get(idx) == Some(&nokk_dom::ScriptMode::Async);
-                self.wait_for_blocking_sheets(index, if is_async { SHEETS_WAIT_ASYNC } else { SHEETS_WAIT }).await;
+                self.wait_for_blocking_sheets(
+                    index,
+                    if is_async {
+                        SHEETS_WAIT_ASYNC
+                    } else {
+                        SHEETS_WAIT
+                    },
+                )
+                .await;
             }
             // `<script nomodule>` is addressed to a browser without modules. We
             // have them, so we are not the audience — and a site that ships both
@@ -1784,7 +2037,10 @@ impl BrowserContext {
                     self.run_module(index, base_url, code.clone()).await
                 } else {
                     match resolve_url(base_url, code) {
-                        Some(abs) => match self.with_frames_live(self.take_preloaded(preload.remove(&abs), &abs)).await {
+                        Some(abs) => match self
+                            .with_frames_live(self.take_preloaded(preload.remove(&abs), &abs))
+                            .await
+                        {
                             Ok((_, source)) => self.run_module(index, &abs, source).await,
                             Err(e) => Err(EngineError::Js(e.to_string())),
                         },
@@ -1819,7 +2075,10 @@ impl BrowserContext {
                             self.record("GET", &abs, "script", 0, &[]);
                             continue;
                         }
-                        match self.with_frames_live(self.take_preloaded(preload.remove(&abs), &abs)).await {
+                        match self
+                            .with_frames_live(self.take_preloaded(preload.remove(&abs), &abs))
+                            .await
+                        {
                             // `sourceURL` matters: without it every stack frame reads `<anonymous>` instead
                             // of the script URL, and the stack shape is part of the fingerprint.
                             Ok((_, code)) => {
@@ -1850,7 +2109,8 @@ impl BrowserContext {
                 .eval_in(index, &format!("__pt_beginScript({idx})"))
                 .await;
             let ran = if index == self.idx() {
-                self.with_frames_live(self.eval_named_in(index, &code, &whose)).await
+                self.with_frames_live(self.eval_named_in(index, &code, &whose))
+                    .await
             } else {
                 self.eval_named_in(index, &code, &whose).await
             };
@@ -1944,7 +2204,10 @@ impl BrowserContext {
             // Stopped at a fresh clearance: the gate's page has nothing more to
             // give, and running its timers out only delayed the solver's answer
             // by a second and a half.
-            if self.stopped_at_clearance.load(std::sync::atomic::Ordering::Acquire) {
+            if self
+                .stopped_at_clearance
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
                 break;
             }
 
@@ -2038,12 +2301,19 @@ impl BrowserContext {
                         // is a recursive async call and needs an indirection.
                         let from = base.clone();
                         let from = (!from.is_empty() && from != "about:blank").then_some(from);
-                        let post = (op["method"].as_str() == Some("POST")).then(|| (
-                            op["contentType"].as_str().unwrap_or("application/x-www-form-urlencoded").to_string(),
-                            op["body"].as_str().unwrap_or("").to_string(),
-                        ));
+                        let post = (op["method"].as_str() == Some("POST")).then(|| {
+                            (
+                                op["contentType"]
+                                    .as_str()
+                                    .unwrap_or("application/x-www-form-urlencoded")
+                                    .to_string(),
+                                op["body"].as_str().unwrap_or("").to_string(),
+                            )
+                        });
                         let post_ref = post.as_ref().map(|(c, b)| (c.as_str(), b.as_str()));
-                        if let Err(e) = Box::pin(self.navigate_inner(&to, from.as_deref(), post_ref)).await {
+                        if let Err(e) =
+                            Box::pin(self.navigate_inner(&to, from.as_deref(), post_ref)).await
+                        {
                             tracing::debug!(url = %to, error = %e, "self-navigation failed");
                         }
                         return Ok(total_timers);
@@ -2087,7 +2357,10 @@ impl BrowserContext {
                     })
                     .collect();
                 let all_done = async {
-                    while started.iter().any(|s| matches!(s, Ok((_, h)) if !h.is_finished())) {
+                    while started
+                        .iter()
+                        .any(|s| matches!(s, Ok((_, h)) if !h.is_finished()))
+                    {
                         tokio::time::sleep(std::time::Duration::from_millis(2)).await;
                     }
                 };
@@ -2108,7 +2381,12 @@ impl BrowserContext {
                             tracing::debug!(target: "nokk::load", url = %info.url, "slow request left in flight");
                             let doc = Some(self.doc_seq.load(std::sync::atomic::Ordering::Acquire));
                             if let Ok(mut v) = self.inflight.lock() {
-                                v.push(InFlight { deliver: Deliver::Frame(index), info, handle, doc });
+                                v.push(InFlight {
+                                    deliver: Deliver::Frame(index),
+                                    info,
+                                    handle,
+                                    doc,
+                                });
                             }
                         }
                     }
@@ -2165,7 +2443,10 @@ impl BrowserContext {
                     .eval_in(index, "globalThis.__ptBlockingSheets | 0")
                     .await
                     .ok()
-                    .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                    .and_then(|v| {
+                        v.as_i64()
+                            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+                    })
                     .unwrap_or(0);
                 if left == 0 {
                     break;
@@ -2214,7 +2495,7 @@ impl BrowserContext {
                             && std::time::Instant::now() < deadline
                         {
                             last_frame_pump = std::time::Instant::now();
-                                    self.pump_frames().await?;
+                            self.pump_frames().await?;
                         }
                     }
                     continue;
@@ -2224,7 +2505,9 @@ impl BrowserContext {
             // Page idle: top up spare realms on its thread and one ready worker context on
             // each pool thread (at most every 500 ms: even an empty check is a queued task).
             if std::env::var_os("NOKK_NO_SPARE_REALMS").is_none() {
-                self.engine.pool.dispatch_detached(self.worker, |iso| iso.top_up_realms(4, 1));
+                self.engine
+                    .pool
+                    .dispatch_detached(self.worker, |iso| iso.top_up_realms(4, 1));
                 if last_spare_topup.elapsed() >= std::time::Duration::from_millis(500) {
                     last_spare_topup = std::time::Instant::now();
                     for w in self.engine.pool.live_worker_ids() {
@@ -2251,7 +2534,7 @@ impl BrowserContext {
                 break;
             }
         }
-        
+
         Ok(total_timers)
     }
 
@@ -2265,7 +2548,9 @@ impl BrowserContext {
     /// What `document.cookie` reads at `url`: the jar's cookies for it, HttpOnly
     /// left out (and Secure ones on plain http), longer paths first as Chrome lists them.
     fn document_cookie_for(&self, url: &str) -> String {
-        let Ok(u) = url::Url::parse(url) else { return String::new() };
+        let Ok(u) = url::Url::parse(url) else {
+            return String::new();
+        };
         if !matches!(u.scheme(), "http" | "https") {
             return String::new();
         }
@@ -2276,7 +2561,10 @@ impl BrowserContext {
             .filter(|c| !c.http_only && (https || !c.secure))
             .collect();
         v.sort_by_key(|c| std::cmp::Reverse(c.path.as_deref().unwrap_or("/").len()));
-        v.iter().map(|c| format!("{}={}", c.name, c.value)).collect::<Vec<_>>().join("; ")
+        v.iter()
+            .map(|c| format!("{}={}", c.name, c.value))
+            .collect::<Vec<_>>()
+            .join("; ")
     }
 
     /// Bring the document's `document.cookie` to what the jar holds.
@@ -2296,8 +2584,19 @@ impl BrowserContext {
         }
         let mut stored = false;
         for raw in ops.iter().filter_map(Value::as_str) {
-            let name = raw.split(';').next().unwrap_or("").split('=').next().unwrap_or("").trim();
-            if self.cookies(&[url.to_string()]).iter().any(|c| c.http_only && c.name == name) {
+            let name = raw
+                .split(';')
+                .next()
+                .unwrap_or("")
+                .split('=')
+                .next()
+                .unwrap_or("")
+                .trim();
+            if self
+                .cookies(&[url.to_string()])
+                .iter()
+                .any(|c| c.http_only && c.name == name)
+            {
                 continue;
             }
             self.client.set_cookie(raw, url);
@@ -2397,16 +2696,20 @@ impl BrowserContext {
     /// The `<iframe>` (its `FrameInfo::id`) whose context this is; `None` for the
     /// page and anything that is not a frame.
     pub fn frame_of_context(&self, context: usize) -> Option<u32> {
-        self.frames
-            .lock()
-            .ok()
-            .and_then(|f| f.iter().find(|(_, s)| s.index == context).map(|(id, _)| *id))
+        self.frames.lock().ok().and_then(|f| {
+            f.iter()
+                .find(|(_, s)| s.index == context)
+                .map(|(id, _)| *id)
+        })
     }
 
     /// The `<iframe>` whose document is being fetched from `url`, before the
     /// frame has a context of its own.
     pub fn frame_for_document(&self, url: &str) -> Option<u32> {
-        self.frame_docs.lock().ok().and_then(|d| d.get(url).copied())
+        self.frame_docs
+            .lock()
+            .ok()
+            .and_then(|d| d.get(url).copied())
     }
 
     pub fn frame_list(&self) -> Vec<FrameInfo> {
@@ -2449,6 +2752,10 @@ impl BrowserContext {
     /// repeat inside that frame in its own coordinates. Turnstile's checkbox
     /// sits exactly there — an iframe in a closed shadow root — so without the
     /// descent there is nothing at those coordinates to click.
+    ///
+    /// A bare press with no trail is not a human click: the pointer appears dead
+    /// centre and presses in zero time. So a `mousePressed` first walks an arc in
+    /// from a distance (18-25 points, like [`Self::human_press`]), then presses.
     pub async fn dispatch_mouse(
         &self,
         kind: &str,
@@ -2481,16 +2788,183 @@ impl BrowserContext {
             fx = nx;
             fy = ny;
         }
+        let (ox, oy) = self.screen_origin(frame).await;
+        let emit = |js: String| async move {
+            match frame {
+                None => self.evaluate(&js).await,
+                Some(id) => self.evaluate_in_frame(id, &js).await,
+            }
+        };
+        // The approach a hand makes: arc in from afar, slowing near the target.
+        // Only for a press — a move the driver sends already is the trail.
+        if kind == "mousePressed" {
+            let mut seed = press_seed(fx, fy);
+            let mut rnd = move || {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                (seed % 10_000) as f64 / 10_000.0
+            };
+            let steps = 18 + (rnd() * 8.0) as usize;
+            let (sx0, sy0) = (fx + 55.0 + rnd() * 20.0, fy + 18.0 + rnd() * 12.0);
+            for i in 1..=steps {
+                let t = i as f64 / steps as f64;
+                let e = 1.0 - (1.0 - t).powi(3);
+                let bow = (t * std::f64::consts::PI).sin();
+                let px = sx0 + (fx - sx0) * e + bow * (4.0 + rnd() * 2.0);
+                let py = sy0 + (fy - sy0) * e - bow * (6.0 + rnd() * 3.0);
+                let _ = emit(format!(
+                    "__pt_mouse(\"mouseMoved\", {px:.4}, {py:.4}, \"left\", 0, {ox:.4}, {oy:.4})"
+                ))
+                .await;
+                let gap = if rnd() < 0.12 {
+                    60.0 + rnd() * 120.0
+                } else {
+                    8.0 + rnd() * 40.0
+                };
+                self.settle(std::time::Duration::from_millis(gap as u64))
+                    .await;
+            }
+            self.settle(std::time::Duration::from_millis(
+                90 + (rnd() * 140.0) as u64,
+            ))
+            .await;
+        }
         let js = format!(
-            "__pt_mouse({}, {fx}, {fy}, {}, {clicks})",
+            "__pt_mouse({}, {fx}, {fy}, {}, {clicks}, {ox:.4}, {oy:.4})",
             serde_json::to_string(kind).unwrap_or_else(|_| "\"\"".into()),
             serde_json::to_string(button).unwrap_or_else(|_| "\"left\"".into()),
         );
-        let out = match frame {
-            None => self.evaluate(&js).await?,
-            Some(id) => self.evaluate_in_frame(id, &js).await?,
-        };
+        let out = emit(js).await?;
         Ok(out.as_bool().unwrap_or(false))
+    }
+
+    /// Screen position of the document origin holding a point: window plus browser
+    /// chrome plus the frame's offset. Without it screenX/Y equal clientX/Y, which
+    /// a real mouse never gives. Evaluated on the page (it owns the frame rects).
+    async fn screen_origin(&self, frame: Option<u32>) -> (f64, f64) {
+        let js = match frame {
+            None => "__pt_screenOrigin()".to_string(),
+            Some(id) => format!(
+                "(() => {{ const o = JSON.parse(__pt_screenOrigin()); let r = null; try {{ r = JSON.parse(__pt_frameRectById({id}) || 'null'); }} catch (e) {{}} return JSON.stringify([o[0] + (r ? r.x : 0), o[1] + (r ? r.y : 0)]); }})()"
+            ),
+        };
+        self.evaluate(&js)
+            .await
+            .ok()
+            .and_then(|v| {
+                v.as_str()
+                    .and_then(|t| serde_json::from_str::<Vec<f64>>(t).ok())
+            })
+            .filter(|v| v.len() == 2)
+            .map(|v| (v[0], v[1]))
+            .unwrap_or((0.0, 0.0))
+    }
+
+    /// Drag from (`x1`, `y1`) to (`x2`, `y2`) in page coordinates the way a hand
+    /// does: trail in, press, stepped moves at ~15 ms along a slight arc, release,
+    /// then a small micro-correction. Slider and crop tasks score the whole trail,
+    /// not just the endpoints — a teleport from start to end fails them.
+    pub async fn dispatch_drag(
+        &self,
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+    ) -> Result<bool, EngineError> {
+        // Resolve the owning frame once from the start; the end follows by the
+        // same delta so a drag never changes documents mid-gesture.
+        let mut frame: Option<u32> = None;
+        let (mut fx1, mut fy1) = (x1, y1);
+        for _ in 0..8 {
+            let probe = format!("__pt_hitFrame({fx1}, {fy1})");
+            let hit = match frame {
+                None => self.evaluate(&probe).await?,
+                Some(id) => self.evaluate_in_frame(id, &probe).await?,
+            };
+            let Some(text) = hit.as_str().filter(|s| !s.is_empty()) else {
+                break;
+            };
+            let Ok(v) = serde_json::from_str::<Value>(text) else {
+                break;
+            };
+            let (Some(id), Some(nx), Some(ny)) =
+                (v["frame"].as_u64(), v["x"].as_f64(), v["y"].as_f64())
+            else {
+                break;
+            };
+            frame = Some(id as u32);
+            fx1 = nx;
+            fy1 = ny;
+        }
+        let (dx, dy) = (x2 - x1, y2 - y1);
+        let (fx2, fy2) = (fx1 + dx, fy1 + dy);
+        let (ox, oy) = self.screen_origin(frame).await;
+        let emit = |js: String| async move {
+            match frame {
+                None => self.evaluate(&js).await,
+                Some(id) => self.evaluate_in_frame(id, &js).await,
+            }
+        };
+        let mut seed = press_seed(fx1, fy1);
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % 10_000) as f64 / 10_000.0
+        };
+        // Trail in to the grab point.
+        let steps = 18 + (rnd() * 8.0) as usize;
+        let (sx0, sy0) = (fx1 + 55.0 + rnd() * 20.0, fy1 + 18.0 + rnd() * 12.0);
+        for i in 1..=steps {
+            let t = i as f64 / steps as f64;
+            let e = 1.0 - (1.0 - t).powi(3);
+            let bow = (t * std::f64::consts::PI).sin();
+            let px = sx0 + (fx1 - sx0) * e + bow * (4.0 + rnd() * 2.0);
+            let py = sy0 + (fy1 - sy0) * e - bow * (6.0 + rnd() * 3.0);
+            let _ = emit(format!(
+                "__pt_mouse(\"mouseMoved\", {px:.4}, {py:.4}, \"left\", 0, {ox:.4}, {oy:.4})"
+            ))
+            .await;
+            self.settle(std::time::Duration::from_millis(8 + (rnd() * 40.0) as u64))
+                .await;
+        }
+        self.settle(std::time::Duration::from_millis(
+            90 + (rnd() * 140.0) as u64,
+        ))
+        .await;
+        let _ = emit(format!(
+            "__pt_mouse(\"mousePressed\", {fx1:.4}, {fy1:.4}, \"left\", 1, {ox:.4}, {oy:.4})"
+        ))
+        .await;
+        self.settle(std::time::Duration::from_millis(80 + (rnd() * 60.0) as u64))
+            .await;
+        // The drag itself: even ~15 ms steps along a slight arc with jitter.
+        let dist = dx.hypot(dy).max(1.0);
+        let moves = (dist / 4.0).ceil().clamp(12.0, 40.0) as usize;
+        for i in 1..=moves {
+            let t = i as f64 / moves as f64;
+            let bow = (t * std::f64::consts::PI).sin();
+            let px = fx1 + (fx2 - fx1) * t + bow * (1.5 + rnd() * 1.5);
+            let py = fy1 + (fy2 - fy1) * t - bow * (1.0 + rnd() * 1.5);
+            let _ = emit(format!(
+                "__pt_mouse(\"mouseMoved\", {px:.4}, {py:.4}, \"left\", 1, {ox:.4}, {oy:.4})"
+            ))
+            .await;
+            self.settle(std::time::Duration::from_millis(15)).await;
+        }
+        let _ = emit(format!(
+            "__pt_mouse(\"mouseReleased\", {fx2:.4}, {fy2:.4}, \"left\", 1, {ox:.4}, {oy:.4})"
+        ))
+        .await;
+        // The hand overshoots by a pixel or two, then settles.
+        self.settle(std::time::Duration::from_millis(30)).await;
+        let (ex, ey) = (fx2 + 1.0 + rnd() * 2.0, fy2 + 1.0 + rnd() * 2.0);
+        let out = emit(format!(
+            "__pt_mouse(\"mouseMoved\", {ex:.4}, {ey:.4}, \"left\", 0, {ox:.4}, {oy:.4})"
+        ))
+        .await?;
+        Ok(out.as_bool().unwrap_or(true))
     }
 
     /// Hand the page the Resource Timing entries for whatever it has fetched
@@ -2647,7 +3121,8 @@ impl BrowserContext {
 
     /// What stands between the page and the site right now, as a driver would
     /// want to hear it: nothing, a Cloudflare interstitial ("Just a moment…"),
-    /// a standalone Turnstile widget, or another vendor's gate (DataDome).
+    /// a standalone Turnstile, reCAPTCHA or hCaptcha widget, or another
+    /// vendor's gate (DataDome).
     pub async fn challenge_state(&self) -> ChallengeState {
         let js = "typeof __pt_gateInfo === 'function' ? __pt_gateInfo() : '{}'";
         let v = self.evaluate(js).await.ok();
@@ -2655,7 +3130,12 @@ impl BrowserContext {
             .as_ref()
             .and_then(|x| x.as_str())
             .and_then(|t| serde_json::from_str(t).ok());
-        let g = |k: &str| parsed.as_ref().and_then(|o| o[k].as_bool()).unwrap_or(false);
+        let g = |k: &str| {
+            parsed
+                .as_ref()
+                .and_then(|o| o[k].as_bool())
+                .unwrap_or(false)
+        };
         let cleared = self.cookies(&[]).iter().any(|c| c.name == "cf_clearance");
         let kind = if g("inter") {
             ChallengeKind::CloudflareInterstitial
@@ -2665,13 +3145,23 @@ impl BrowserContext {
             ChallengeKind::TurnstileWidget
         } else if g("recaptcha") && !g("token") {
             ChallengeKind::RecaptchaWidget
+        } else if g("hcaptcha") && !g("token") {
+            ChallengeKind::HcaptchaWidget
         } else {
             ChallengeKind::None
         };
         ChallengeState {
             kind,
-            title: parsed.as_ref().and_then(|o| o["title"].as_str()).unwrap_or("").to_string(),
-            url: parsed.as_ref().and_then(|o| o["url"].as_str()).unwrap_or("").to_string(),
+            title: parsed
+                .as_ref()
+                .and_then(|o| o["title"].as_str())
+                .unwrap_or("")
+                .to_string(),
+            url: parsed
+                .as_ref()
+                .and_then(|o| o["url"].as_str())
+                .unwrap_or("")
+                .to_string(),
             token: g("token"),
             cleared,
         }
@@ -2704,7 +3194,8 @@ impl BrowserContext {
             let worked = self.run_event_loop().await.unwrap_or(0);
             let cleared = self.cookies(&[]).iter().any(|c| c.name == "cf_clearance");
             // A standalone widget (not an interstitial) sets no cookie: its
-            // success is the token in `cf-turnstile-response`.
+            // success is the token in `cf-turnstile-response`,
+            // `g-recaptcha-response` or `h-captcha-response`.
             let token = self
                 .evaluate("typeof __pt_widgetToken === 'function' && __pt_widgetToken() !== ''")
                 .await
@@ -2721,8 +3212,12 @@ impl BrowserContext {
                 }
                 break ChallengeStatus::TokenIssued;
             }
-            if self.stop_at_clearance.load(std::sync::atomic::Ordering::Acquire)
-                && (self.stopped_at_clearance.load(std::sync::atomic::Ordering::Acquire)
+            if self
+                .stop_at_clearance
+                .load(std::sync::atomic::Ordering::Acquire)
+                && (self
+                    .stopped_at_clearance
+                    .load(std::sync::atomic::Ordering::Acquire)
                     || (cleared && self.clearance_value() != lock_at_start))
             {
                 tracing::info!(target: "nokk", elapsed_ms = t.elapsed().as_millis(), presses = pressed, "challenge cleared");
@@ -2759,7 +3254,7 @@ impl BrowserContext {
                 tracing::warn!(target: "nokk", presses = pressed, "challenge did not clear in time");
                 break ChallengeStatus::Timeout;
             }
-            // A pressed reCAPTCHA that answers with a puzzle is not going to clear by
+            // A pressed widget that answers with a puzzle is not going to clear by
             // itself. Give a checkbox-only pass its moment, then stop.
             if pressed > 0
                 && last_press.is_some_and(|at| at.elapsed() >= std::time::Duration::from_secs(2))
@@ -2774,7 +3269,11 @@ impl BrowserContext {
             // Press only what is offered, once per control that appears: a
             // widget that ignores a press is not asking for another, and a
             // flurry of clicks is its own signature.
-            if pressed < MAX_PRESSES && !self.stopped_at_clearance.load(std::sync::atomic::Ordering::Acquire) {
+            if pressed < MAX_PRESSES
+                && !self
+                    .stopped_at_clearance
+                    .load(std::sync::atomic::Ordering::Acquire)
+            {
                 if let Ok(Some(what)) = self.press_widget_control().await {
                     if seen_controls.insert(what.clone()) {
                         pressed += 1;
@@ -2783,9 +3282,12 @@ impl BrowserContext {
                         // The second and a half after a press is work, not sleep:
                         // the widget counts in exactly that window, and an engine
                         // asleep then shows a gap no browser has.
-                        let until = std::time::Instant::now() + std::time::Duration::from_millis(1_500);
+                        let until =
+                            std::time::Instant::now() + std::time::Duration::from_millis(1_500);
                         while std::time::Instant::now() < until
-                            && !self.stopped_at_clearance.load(std::sync::atomic::Ordering::Acquire)
+                            && !self
+                                .stopped_at_clearance
+                                .load(std::sync::atomic::Ordering::Acquire)
                         {
                             let _ = self.run_event_loop().await;
                             tokio::time::sleep(std::time::Duration::from_millis(1)).await;
@@ -2817,7 +3319,11 @@ impl BrowserContext {
         while self.is_loading() && settle.elapsed() < std::time::Duration::from_secs(15) {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-        ChallengeOutcome { status, presses: pressed, elapsed_ms: t.elapsed().as_millis() as u64 }
+        ChallengeOutcome {
+            status,
+            presses: pressed,
+            elapsed_ms: t.elapsed().as_millis() as u64,
+        }
     }
 
     /// Press at (`x`, `y`) in `frame` (or the page) the way a hand does: an arc in from
@@ -2854,25 +3360,28 @@ impl BrowserContext {
             .evaluate(&origin_js)
             .await
             .ok()
-            .and_then(|v| v.as_str().and_then(|t| serde_json::from_str::<Vec<f64>>(t).ok()))
+            .and_then(|v| {
+                v.as_str()
+                    .and_then(|t| serde_json::from_str::<Vec<f64>>(t).ok())
+            })
             .filter(|v| v.len() == 2)
             .map(|v| (v[0], v[1]))
             .unwrap_or((0.0, 0.0));
-        // Spread derived from the coordinates: stable per target, different across
-        // targets, no randomness.
-        let spread = ((x + y * 7.0) as i64).unsigned_abs() % 5;
-        let mut seed = ((x * 131.0 + y * 977.0) as i64).unsigned_abs() | 1;
+        // The press varies per session, not per target: the seed mixes time,
+        // process and a counter with the coordinates, so the same checkbox
+        // takes a different arc every run.
+        let mut seed = press_seed(x, y);
         let mut rnd = move || {
             seed ^= seed << 13;
             seed ^= seed >> 7;
             seed ^= seed << 17;
             (seed % 10_000) as f64 / 10_000.0
         };
-        let (tx, ty) = (x + 1.0 + spread as f64 * 0.37 + rnd() * 0.6, y - 1.0 + (spread % 3) as f64 * 0.41 + rnd() * 0.6);
+        let (tx, ty) = (x + 1.0 + rnd() * 2.4, y - 1.0 + rnd() * 1.8);
         // Approach like a recorded hand in Chrome: about twenty points over half a second,
         // uneven steps (8-60 ms, occasionally longer), arcing in from afar and slowing near
         // the target.
-        let steps = 18 + (spread as usize * 2) % 7;
+        let steps = 18 + (rnd() * 8.0) as usize;
         let (sx0, sy0) = (tx + 55.0 + rnd() * 20.0, ty + 18.0 + rnd() * 12.0);
         for i in 1..=steps {
             let t = i as f64 / steps as f64;
@@ -2884,20 +3393,40 @@ impl BrowserContext {
                 "__pt_mouse(\"mouseMoved\", {px:.4}, {py:.4}, \"left\", 0, {ox:.4}, {oy:.4})"
             ))
             .await;
-            let gap = if rnd() < 0.12 { 60.0 + rnd() * 120.0 } else { 8.0 + rnd() * 40.0 };
-            self.settle(std::time::Duration::from_millis(gap as u64)).await;
+            let gap = if rnd() < 0.12 {
+                60.0 + rnd() * 120.0
+            } else {
+                8.0 + rnd() * 40.0
+            };
+            self.settle(std::time::Duration::from_millis(gap as u64))
+                .await;
         }
-        self.settle(std::time::Duration::from_millis(90 + (rnd() * 140.0) as u64))
-            .await;
-        send(format!("__pt_mouse(\"mousePressed\", {tx:.4}, {ty:.4}, \"left\", 1, {ox:.4}, {oy:.4})")).await;
+        self.settle(std::time::Duration::from_millis(
+            90 + (rnd() * 140.0) as u64,
+        ))
+        .await;
+        send(format!(
+            "__pt_mouse(\"mousePressed\", {tx:.4}, {ty:.4}, \"left\", 1, {ox:.4}, {oy:.4})"
+        ))
+        .await;
         self.settle(std::time::Duration::from_millis(85 + (rnd() * 50.0) as u64))
             .await;
-        send(format!("__pt_mouse(\"mouseReleased\", {tx:.4}, {ty:.4}, \"left\", 1, {ox:.4}, {oy:.4})")).await;
+        send(format!(
+            "__pt_mouse(\"mouseReleased\", {tx:.4}, {ty:.4}, \"left\", 1, {ox:.4}, {oy:.4})"
+        ))
+        .await;
         // The hand does not freeze after the press: a few points off to the side.
         for k in 1..=3 {
-            self.settle(std::time::Duration::from_millis(30 + (rnd() * 60.0) as u64)).await;
-            let (px, py) = (tx + k as f64 * (2.0 + rnd() * 3.0), ty + k as f64 * (4.0 + rnd() * 5.0));
-            send(format!("__pt_mouse(\"mouseMoved\", {px:.4}, {py:.4}, \"left\", 0, {ox:.4}, {oy:.4})")).await;
+            self.settle(std::time::Duration::from_millis(30 + (rnd() * 60.0) as u64))
+                .await;
+            let (px, py) = (
+                tx + k as f64 * (2.0 + rnd() * 3.0),
+                ty + k as f64 * (4.0 + rnd() * 5.0),
+            );
+            send(format!(
+                "__pt_mouse(\"mouseMoved\", {px:.4}, {py:.4}, \"left\", 0, {ox:.4}, {oy:.4})"
+            ))
+            .await;
         }
     }
 
@@ -2906,7 +3435,11 @@ impl BrowserContext {
     /// widget's own buttons (reCAPTCHA's audio, verify, reload) are read for the
     /// pointer trail that led to them; a script `click()` has none. False when
     /// there is no such frame or element.
-    pub async fn press_selector(&self, frame_url: Option<&str>, selector: &str) -> Result<bool, EngineError> {
+    pub async fn press_selector(
+        &self,
+        frame_url: Option<&str>,
+        selector: &str,
+    ) -> Result<bool, EngineError> {
         let frame = match frame_url {
             Some(part) => match self.frame_list().into_iter().find(|f| f.url.contains(part)) {
                 Some(f) => Some(f.id),
@@ -2930,16 +3463,27 @@ impl BrowserContext {
         else {
             return Ok(false);
         };
-        let target = format!("typeof __pt_setPressTarget === 'function' && __pt_setPressTarget({})", js_str(selector));
+        let target = format!(
+            "typeof __pt_setPressTarget === 'function' && __pt_setPressTarget({})",
+            js_str(selector)
+        );
         let clear = "typeof __pt_setPressTarget === 'function' && __pt_setPressTarget(null)";
         match frame {
-            Some(id) => { let _ = self.evaluate_in_frame(id, &target).await; }
-            None => { let _ = self.evaluate(&target).await; }
+            Some(id) => {
+                let _ = self.evaluate_in_frame(id, &target).await;
+            }
+            None => {
+                let _ = self.evaluate(&target).await;
+            }
         }
         self.human_press(frame, x, y).await;
         match frame {
-            Some(id) => { let _ = self.evaluate_in_frame(id, clear).await; }
-            None => { let _ = self.evaluate(clear).await; }
+            Some(id) => {
+                let _ = self.evaluate_in_frame(id, clear).await;
+            }
+            None => {
+                let _ = self.evaluate(clear).await;
+            }
         }
         Ok(true)
     }
@@ -2947,7 +3491,12 @@ impl BrowserContext {
     /// Type `text` into the element matching `selector` in a frame (or the page):
     /// focus it, then a key down/up per character at a typing pace, so the page
     /// sees keystrokes rather than a value appearing.
-    pub async fn type_selector(&self, frame_url: Option<&str>, selector: &str, text: &str) -> Result<bool, EngineError> {
+    pub async fn type_selector(
+        &self,
+        frame_url: Option<&str>,
+        selector: &str,
+        text: &str,
+    ) -> Result<bool, EngineError> {
         let frame = match frame_url {
             Some(part) => match self.frame_list().into_iter().find(|f| f.url.contains(part)) {
                 Some(f) => Some(f.id),
@@ -2961,38 +3510,80 @@ impl BrowserContext {
                 None => self.evaluate(&js).await,
             }
         };
-        let focused = run(format!("(e => e ? (e.focus(), 'ok') : '')(document.querySelector({}))", js_str(selector))).await?;
+        let focused = run(format!(
+            "(e => e ? (e.focus(), 'ok') : '')(document.querySelector({}))",
+            js_str(selector)
+        ))
+        .await?;
         if focused.as_str() != Some("ok") {
             return Ok(false);
         }
-        let mut seed = (text.len() as u64).wrapping_mul(2654435761) | 1;
+        // Typing pace varies per session, and each char carries its physical
+        // `code` — an empty code on every key is not a keyboard.
+        let mut seed = press_seed(text.len() as f64, 0.5);
         for ch in text.chars() {
-            seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17;
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
             let key = ch.to_string();
-            let init = serde_json::json!({ "key": key, "text": key, "code": "" }).to_string();
+            let code = key_code_for(ch);
+            let init = serde_json::json!({ "key": key, "text": key, "code": code }).to_string();
             run(format!("__pt_key('keyDown', {init})")).await?;
-            self.settle(std::time::Duration::from_millis(40 + seed % 60)).await;
+            self.settle(std::time::Duration::from_millis(40 + seed % 60))
+                .await;
             run(format!("__pt_key('keyUp', {init})")).await?;
-            self.settle(std::time::Duration::from_millis(60 + (seed >> 8) % 140)).await;
+            self.settle(std::time::Duration::from_millis(60 + (seed >> 8) % 140))
+                .await;
         }
         Ok(true)
     }
 
-    /// Whether a reCAPTCHA challenge frame shows a task for a person: the image
-    /// grid, the audio task, or the "try again later" refusal.
-    async fn recaptcha_wants_a_person(&self) -> bool {
-        const JS: &str = "!!document.querySelector('.rc-imageselect-challenge .rc-imageselect-tile, .rc-imageselect-target, .rc-audiochallenge-response-field, .rc-doscaptcha-header')";
+    /// Whether a widget challenge frame shows a task for a person: reCAPTCHA's
+    /// image grid, audio task, or "try again later" refusal, or hCaptcha's
+    /// task view. Either way waiting out the budget changes nothing.
+    /// Covers the 3x3 `image_label_binary` grid *and* the unsupported
+    /// `area_select`/slider/crop/drag variants (no vision backend in the
+    /// default build): those must surface `NeedsHuman` via this path rather
+    /// than a coordinate guess. `dispatch_drag` stays available for the
+    /// human operator's own use, never for an engine guess.
+    async fn captcha_wants_a_person(&self) -> bool {
+        const RECAPTCHA_JS: &str = "!!document.querySelector('.rc-imageselect-challenge .rc-imageselect-tile, .rc-imageselect-target, .rc-audiochallenge-response-field, .rc-doscaptcha-header')";
+        // Inside hCaptcha's own frame the task is an image / challenge view; on
+        // the page it only ever appears under the `.h-captcha` container, so a
+        // bare checkbox (no task yet) does not count. The tail of each list is
+        // the area_select/slider/crop markers: those flavors are unsupported by
+        // nokk-captcha (see is_supported_request_type) and resolve here to
+        // NeedsHuman by design.
+        const HCAPTCHA_FRAME_JS: &str = "!!document.querySelector('.h-captcha, .task-image, .challenge-view, .challenge-container, .slider, .slider-container, .challenge-slider, canvas, [data-challenge=\"area_select\"], .area-select, .crop-challenge')";
+        const HCAPTCHA_PAGE_JS: &str = "!!document.querySelector('.h-captcha .task-image, .h-captcha .challenge-view, .task-image, .challenge-view, .h-captcha .slider, .h-captcha canvas, .challenge-slider, [data-challenge=\"area_select\"]')";
         for f in self.frame_list() {
-            if !f.url.contains("/recaptcha/") || !f.url.contains("/bframe") {
+            let is_recaptcha = f.url.contains("/recaptcha/") && f.url.contains("/bframe");
+            let is_hcaptcha = f.url.contains("hcaptcha.com");
+            if !is_recaptcha && !is_hcaptcha {
                 continue;
             }
-            if let Ok(v) = self.evaluate_in_frame(f.id, JS).await {
+            let js = if is_recaptcha {
+                RECAPTCHA_JS
+            } else {
+                HCAPTCHA_FRAME_JS
+            };
+            if let Ok(v) = self.evaluate_in_frame(f.id, js).await {
                 if v.as_bool() == Some(true) || v.as_str() == Some("true") {
                     return true;
                 }
             }
         }
+        if let Ok(v) = self.evaluate(HCAPTCHA_PAGE_JS).await {
+            if v.as_bool() == Some(true) || v.as_str() == Some("true") {
+                return true;
+            }
+        }
         false
+    }
+
+    /// The old name, kept for callers: now answers for either widget family.
+    async fn recaptcha_wants_a_person(&self) -> bool {
+        self.captcha_wants_a_person().await
     }
 
     pub async fn press_widget_control(&self) -> Result<Option<String>, EngineError> {
@@ -3012,8 +3603,17 @@ impl BrowserContext {
             };
             if std::env::var_os("NOKK_TRACE_CONTROLS").is_some() {
                 let dbg = match frame {
-                    None => self.evaluate("typeof __pt_ctlDebug === 'function' ? __pt_ctlDebug() : ''").await,
-                    Some(id) => self.evaluate_in_frame(id, "typeof __pt_ctlDebug === 'function' ? __pt_ctlDebug() : ''").await,
+                    None => {
+                        self.evaluate("typeof __pt_ctlDebug === 'function' ? __pt_ctlDebug() : ''")
+                            .await
+                    }
+                    Some(id) => {
+                        self.evaluate_in_frame(
+                            id,
+                            "typeof __pt_ctlDebug === 'function' ? __pt_ctlDebug() : ''",
+                        )
+                        .await
+                    }
                 };
                 tracing::info!(target: "nokk::press", ?frame, found = ?found.as_ref().ok(), dbg = ?dbg.ok(), "controls");
             }
@@ -3140,7 +3740,10 @@ impl BrowserContext {
                     // A worker gets its own thread, as in a browser: page and worker compute in
                     // parallel and a reply costs message latency, not "the page is free". On a shared
                     // isolate every worker turn was taken from the page.
-                    let place = self.engine.pool.pick_worker_avoiding(&[self.worker, self.frame_worker()]);
+                    let place = self
+                        .engine
+                        .pool
+                        .pick_worker_avoiding(&[self.worker, self.frame_worker()]);
                     let load = std::sync::Arc::new(self.engine.pool.register_context(place));
                     let t_create = std::time::Instant::now();
                     let Ok(Ok(child)) = self
@@ -3155,7 +3758,12 @@ impl BrowserContext {
                         continue;
                     };
 
-                    tracing::debug!(worker = id, place = place.0, context_ms = t_create.elapsed().as_millis() as u64, "worker context ready");
+                    tracing::debug!(
+                        worker = id,
+                        place = place.0,
+                        context_ms = t_create.elapsed().as_millis() as u64,
+                        "worker context ready"
+                    );
                     let name = op["name"].as_str().unwrap_or("");
                     // A blob's address is its own — resolving it against the
                     // document turns `blob:http://host/uuid` into nonsense, and
@@ -3242,7 +3850,8 @@ impl BrowserContext {
                             // multi-KB WebAssembly module that does not fit a log line and must be compared
                             // with the browser verbatim.
                             if let Ok(dir) = std::env::var("NOKK_DUMP_WORKER_TASKS") {
-                                let n = WORKER_TASK_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                let n = WORKER_TASK_SEQ
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 let _ = std::fs::create_dir_all(&dir);
                                 let _ = std::fs::write(
                                     std::path::Path::new(&dir).join(format!("task-{n:03}.js")),
@@ -3250,14 +3859,22 @@ impl BrowserContext {
                                 );
                             }
                             let _ = self
-                                .eval_at(place, child, &format!("__pt_workerDeliver({})", js_str(data)))
+                                .eval_at(
+                                    place,
+                                    child,
+                                    &format!("__pt_workerDeliver({})", js_str(data)),
+                                )
                                 .await;
                             // Give the worker a turn right away. The task usually sets a short timer and the
                             // challenge measures it ("reply in 55 ms"); waiting for the general round added
                             // our ~30 ms to it.
                             self.serve_worker_soon(index, id, place, child).await;
                         }
-                        None => tracing::debug!(owner = index, worker = id, "worker post: no such worker"),
+                        None => tracing::debug!(
+                            owner = index,
+                            worker = id,
+                            "worker post: no such worker"
+                        ),
                     }
                 }
                 "close" => {
@@ -3306,7 +3923,9 @@ impl BrowserContext {
                 .unwrap_or_default();
             if let Some(reqs) = queues["fetch"].as_array() {
                 for r in reqs.iter().take(32) {
-                    if let Some(settle) = self.start_fetch(Deliver::Worker(place, child), owner, &fetch_base, r) {
+                    if let Some(settle) =
+                        self.start_fetch(Deliver::Worker(place, child), owner, &fetch_base, r)
+                    {
                         let _ = self.eval_at(place, child, &settle).await;
                     }
                 }
@@ -3388,7 +4007,11 @@ impl BrowserContext {
             work += ran as usize;
             // What an idle worker waits on: its own timer (and how soon), or nothing (a promise).
             let pending = self
-                .eval_at(place, child, "typeof __pt_nextTimerDelay === 'function' ? __pt_nextTimerDelay() : -1")
+                .eval_at(
+                    place,
+                    child,
+                    "typeof __pt_nextTimerDelay === 'function' ? __pt_nextTimerDelay() : -1",
+                )
                 .await
                 .ok()
                 .and_then(|v| v.as_i64())
@@ -3412,7 +4035,9 @@ impl BrowserContext {
             if let Some(reqs) = queues["fetch"].as_array() {
                 for r in reqs.iter().take(32) {
                     work += 1;
-                    if let Some(settle) = self.start_fetch(Deliver::Worker(place, child), owner, &state.fetch_base, r) {
+                    if let Some(settle) =
+                        self.start_fetch(Deliver::Worker(place, child), owner, &state.fetch_base, r)
+                    {
                         let _ = self.eval_at(place, child, &settle).await;
                     }
                 }
@@ -3632,12 +4257,10 @@ impl BrowserContext {
                         && std::env::var_os("NOKK_NO_SPARE_REALMS").is_none()
                     {
                         let boot = self.bootstrap.clone();
-                        self.engine
-                            .pool
-                            .dispatch_detached(self.frame_worker(), {
-                                let boot = boot.clone();
-                                move |iso| iso.prewarm_realms(&boot, 3)
-                            });
+                        self.engine.pool.dispatch_detached(self.frame_worker(), {
+                            let boot = boot.clone();
+                            move |iso| iso.prewarm_realms(&boot, 3)
+                        });
                         // And one ready worker context on each pool thread: the challenge program starts
                         // workers one after another and expects replies within hundreds of milliseconds.
                         for w in self.engine.pool.live_worker_ids() {
@@ -3661,7 +4284,9 @@ impl BrowserContext {
                         self.fetch_document_post(
                             &url,
                             from,
-                            op["contentType"].as_str().unwrap_or("application/x-www-form-urlencoded"),
+                            op["contentType"]
+                                .as_str()
+                                .unwrap_or("application/x-www-form-urlencoded"),
                             op["body"].as_str().unwrap_or(""),
                         )
                         .await
@@ -3696,20 +4321,31 @@ impl BrowserContext {
                     } else {
                         (
                             own_thread_index(place, raw_index),
-                            Some(std::sync::Arc::new(self.engine.pool.register_context(place))),
+                            Some(std::sync::Arc::new(
+                                self.engine.pool.register_context(place),
+                            )),
                         )
                     };
                     // The frame's clock starts at its navigation, not at context construction: the
                     // document has already arrived by now.
                     let ago = nav_started.elapsed().as_secs_f64() * 1000.0;
                     let _ = self
-                        .eval_in(index, &format!("globalThis.__pt_shiftOrigin && __pt_shiftOrigin({ago:.3});"))
+                        .eval_in(
+                            index,
+                            &format!("globalThis.__pt_shiftOrigin && __pt_shiftOrigin({ago:.3});"),
+                        )
                         .await;
                     // Teach the child who it is before anything runs in it: its own
                     // frame id (so its `postMessage` can be routed back) and that it
                     // is not the top-level window.
                     let _ = self
-                        .eval_in(index, &format!("__pt_markAsFrame({id}, {});", js_str(op["name"].as_str().unwrap_or(""))))
+                        .eval_in(
+                            index,
+                            &format!(
+                                "__pt_markAsFrame({id}, {});",
+                                js_str(op["name"].as_str().unwrap_or(""))
+                            ),
+                        )
                         .await;
                     // Third-party status and referrer: in a third-party frame Chrome answers "denied"
                     // to permissions, and `document.referrer` under strict-origin-when-cross-origin is
@@ -3738,7 +4374,9 @@ impl BrowserContext {
                         op["h"].as_f64().unwrap_or(150.0),
                     );
                     // The element may get its size after insertion (styles parse later): ask the parent again now.
-                    let raw = self.eval_in(self.idx(), &format!("__pt_frameBox({id})")).await;
+                    let raw = self
+                        .eval_in(self.idx(), &format!("__pt_frameBox({id})"))
+                        .await;
                     tracing::debug!(?raw, "frame box from parent");
                     if let Ok(Value::String(box_)) = raw {
                         if let Ok(v) = serde_json::from_str::<Vec<f64>>(&box_) {
@@ -3827,7 +4465,10 @@ impl BrowserContext {
                     let Some(frame) = target else { continue };
                     // From one frame to a sibling (`parent.frames[name].postMessage`).
                     let sibling = op["toFrame"].as_u64().and_then(|to| {
-                        self.frames.lock().ok().and_then(|f| f.get(&(to as u32)).map(|t| t.index))
+                        self.frames
+                            .lock()
+                            .ok()
+                            .and_then(|f| f.get(&(to as u32)).map(|t| t.index))
                     });
                     if op["toFrame"].is_u64() && sibling.is_none() {
                         continue;
@@ -3841,10 +4482,18 @@ impl BrowserContext {
                     };
                     let ports: Vec<String> = op["ports"]
                         .as_array()
-                        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| v.as_str().map(str::to_string))
+                                .collect()
+                        })
                         .unwrap_or_default();
                     if !ports.is_empty() {
-                        let sender = if to_parent || sibling.is_some() { frame.index } else { self.idx() };
+                        let sender = if to_parent || sibling.is_some() {
+                            frame.index
+                        } else {
+                            self.idx()
+                        };
                         if let Ok(mut ends) = self.port_ends.lock() {
                             for p in &ports {
                                 // A port passed on again keeps its stayed end where it was.
@@ -3874,7 +4523,11 @@ impl BrowserContext {
                 "portpost" => {
                     let end = op["end"].as_str().unwrap_or("").to_string();
                     let data = op["data"].as_str().unwrap_or("null").to_string();
-                    let target = self.port_ends.lock().ok().and_then(|e| e.get(&end).copied());
+                    let target = self
+                        .port_ends
+                        .lock()
+                        .ok()
+                        .and_then(|e| e.get(&end).copied());
                     if let Some(index) = target {
                         tracing::debug!(%end, payload = %&data[..data.len().min(200)], "port message");
                         let _ = self
@@ -3955,7 +4608,9 @@ impl BrowserContext {
             }
             let got = self
                 .with_frames_live(futures_util::future::join_all(
-                    to_fetch.iter().map(|t| self.fetch_text_in(index, t, "script", None)),
+                    to_fetch
+                        .iter()
+                        .map(|t| self.fetch_text_in(index, t, "script", None)),
                 ))
                 .await;
             for (target, res) in to_fetch.into_iter().zip(got) {
@@ -3973,7 +4628,11 @@ impl BrowserContext {
             .pool
             .dispatch(mw, move |iso| iso.eval_module(i, &u));
         let run = async move { run.await };
-        let out = if index == self.idx() { self.with_frames_live(run).await } else { run.await };
+        let out = if index == self.idx() {
+            self.with_frames_live(run).await
+        } else {
+            run.await
+        };
         out?.map_err(EngineError::Js)
     }
 
@@ -3998,7 +4657,12 @@ impl BrowserContext {
         let away: Vec<usize> = self
             .frames
             .lock()
-            .map(|f| f.values().map(|s| s.index).filter(|i| i & OWN_THREAD != 0).collect())
+            .map(|f| {
+                f.values()
+                    .map(|s| s.index)
+                    .filter(|i| i & OWN_THREAD != 0)
+                    .collect()
+            })
             .unwrap_or_default();
         for index in away {
             let (w, raw) = self.route(index);
@@ -4016,10 +4680,11 @@ impl BrowserContext {
             // The referrer is the address the module was compiled under, so a
             // relative specifier resolves against it exactly as in a browser.
             let outcome = match resolve_url(&referrer, &specifier) {
-                None => Err(format!(
-                    "Failed to resolve module specifier '{specifier}'"
-                )),
-                Some(target) => match self.with_frames_live(self.fetch_text_in(index, &target, "script", None)).await {
+                None => Err(format!("Failed to resolve module specifier '{specifier}'")),
+                Some(target) => match self
+                    .with_frames_live(self.fetch_text_in(index, &target, "script", None))
+                    .await
+                {
                     Err(e) => Err(format!("Failed to fetch dynamically imported module: {e}")),
                     Ok((final_url, code)) => match self.run_module(index, &final_url, code).await {
                         Err(e) => Err(e.to_string()),
@@ -4164,7 +4829,11 @@ impl BrowserContext {
         // arrive for the next script, and a SvelteKit page carries dozens (stake.com sat
         // like this for half an hour at 100% CPU).
         let doc = self.doc_seq.load(std::sync::atomic::Ordering::Acquire);
-        if self.sheets_gave_up.load(std::sync::atomic::Ordering::Acquire) == doc + 1 {
+        if self
+            .sheets_gave_up
+            .load(std::sync::atomic::Ordering::Acquire)
+            == doc + 1
+        {
             return;
         }
         let deadline = std::time::Instant::now() + cap;
@@ -4173,7 +4842,10 @@ impl BrowserContext {
                 .eval_in(index, "globalThis.__ptBlockingSheets | 0")
                 .await
                 .ok()
-                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .and_then(|v| {
+                    v.as_i64()
+                        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+                })
                 .unwrap_or(0);
             if pending == 0 {
                 return;
@@ -4184,17 +4856,25 @@ impl BrowserContext {
                     return;
                 }
                 let urls = self
-                    .eval_in(index, "JSON.stringify([...(globalThis.__ptBlockingSheetUrls || [])])")
+                    .eval_in(
+                        index,
+                        "JSON.stringify([...(globalThis.__ptBlockingSheetUrls || [])])",
+                    )
                     .await
                     .ok()
                     .and_then(|v| v.as_str().map(str::to_string))
                     .unwrap_or_default();
                 tracing::warn!(pending, %urls, "stylesheets never arrived; running the page's scripts without them");
-                self.sheets_gave_up.store(doc + 1, std::sync::atomic::Ordering::Release);
+                self.sheets_gave_up
+                    .store(doc + 1, std::sync::atomic::Ordering::Release);
                 return;
             }
             // The loop may load a document itself, which then waits for sheets again.
-            let worked = match Box::pin(self.run_event_loop_waiting(std::time::Duration::ZERO, true)).await {
+            let worked = match Box::pin(
+                self.run_event_loop_waiting(std::time::Duration::ZERO, true),
+            )
+            .await
+            {
                 Ok(n) => n,
                 Err(_) => return,
             };
@@ -4267,7 +4947,11 @@ impl BrowserContext {
             // "loaded nothing", impossible for a live document. Timeline and frame size are
             // refreshed only every 8th pump: each is a separate isolate visit, and together
             // they cost more than the frame's own work.
-            let full = self.frame_pump_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 8 == 0;
+            let full = self
+                .frame_pump_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                % 8
+                == 0;
             if full {
                 self.flush_resource_timings(index).await;
             }
@@ -4286,7 +4970,9 @@ impl BrowserContext {
                 Ok(v) => v.unwrap_or(0),
                 Err(e) => {
                     tracing::debug!(frame = id, error = %e, "frame gone during pump");
-                    if let Ok(mut f) = self.frames.lock() { f.remove(&id); }
+                    if let Ok(mut f) = self.frames.lock() {
+                        f.remove(&id);
+                    }
                     continue;
                 }
             };
@@ -4296,7 +4982,9 @@ impl BrowserContext {
                 Ok(v) => v,
                 Err(e) => {
                     tracing::debug!(frame = id, error = %e, "frame gone during drain");
-                    if let Ok(mut f) = self.frames.lock() { f.remove(&id); }
+                    if let Ok(mut f) = self.frames.lock() {
+                        f.remove(&id);
+                    }
                     continue;
                 }
             };
@@ -4308,11 +4996,15 @@ impl BrowserContext {
             // building a realm holds the thread ~300 ms, and the frame timer behind it was
             // late by as much (report sections stretched 3x).
             let next_timer = queues["timers"].as_f64().unwrap_or(-1.0);
-            if ran == 0 && index & OWN_THREAD != 0 && (next_timer < 0.0 || next_timer > 400.0)
+            if ran == 0
+                && index & OWN_THREAD != 0
+                && (next_timer < 0.0 || next_timer > 400.0)
                 && std::env::var_os("NOKK_NO_SPARE_REALMS").is_none()
             {
                 let (w, _) = self.route(index);
-                self.engine.pool.dispatch_detached(w, |iso| iso.top_up_realms(8, 1));
+                self.engine
+                    .pool
+                    .dispatch_detached(w, |iso| iso.top_up_realms(8, 1));
             }
             let base = self.frame_base(id);
             self.log_console(&format!("frame {id}"), &queues);
@@ -4325,12 +5017,12 @@ impl BrowserContext {
             // A frame learns its size more than once: styles arrive after insertion and the
             // element can change. A browser then resizes the frame window; do the same until it settles.
             let boxed = if full {
-                self.eval_in(self.idx(), &format!("__pt_frameBox({id})")).await
+                self.eval_in(self.idx(), &format!("__pt_frameBox({id})"))
+                    .await
             } else {
                 Ok(Value::Null)
             };
-            if let Ok(Value::String(text)) = boxed
-            {
+            if let Ok(Value::String(text)) = boxed {
                 if let Ok(v) = serde_json::from_str::<Vec<f64>>(&text) {
                     if v.len() == 2 && v[0] > 0.0 && v[1] > 0.0 {
                         let changed = self
@@ -4439,7 +5131,10 @@ impl BrowserContext {
             .unwrap_or_default();
         for index in targets {
             let _ = self
-                .eval_in(index, &format!("typeof __pt_setSiblings === 'function' && __pt_setSiblings({list});"))
+                .eval_in(
+                    index,
+                    &format!("typeof __pt_setSiblings === 'function' && __pt_setSiblings({list});"),
+                )
                 .await;
         }
     }
@@ -4593,7 +5288,13 @@ impl BrowserContext {
     /// Run one queued `fetch` request and build the JS call that settles it.
     /// Start a frame or worker request without waiting: `settle_inflight` picks the reply
     /// up on a later pump. An instantly settled one (blocked URL) is returned now.
-    fn start_fetch(&self, deliver: Deliver, context: usize, base: &str, r: &Value) -> Option<String> {
+    fn start_fetch(
+        &self,
+        deliver: Deliver,
+        context: usize,
+        base: &str,
+        r: &Value,
+    ) -> Option<String> {
         match self.prepare_fetch(context, base, r) {
             Prepared::Settled(js) => Some(js),
             Prepared::Send(req, mut info) => {
@@ -4605,7 +5306,12 @@ impl BrowserContext {
                 let client = self.client.clone();
                 let handle = tokio::spawn(async move { client.send(*req).await });
                 if let Ok(mut v) = self.inflight.lock() {
-                    v.push(InFlight { deliver, info, handle, doc: None });
+                    v.push(InFlight {
+                        deliver,
+                        info,
+                        handle,
+                        doc: None,
+                    });
                 }
                 None
             }
@@ -4614,7 +5320,10 @@ impl BrowserContext {
 
     /// Frame and worker requests in flight, the ones an idle loop waits for.
     fn inflight_awaited(&self) -> bool {
-        self.inflight.lock().map(|v| v.iter().any(|f| f.doc.is_none())).unwrap_or(false)
+        self.inflight
+            .lock()
+            .map(|v| v.iter().any(|f| f.doc.is_none()))
+            .unwrap_or(false)
     }
 
     /// Deliver replies that have arrived: record the request and settle the promise
@@ -4686,7 +5395,11 @@ impl BrowserContext {
         // Page-initiated requests carry the document that made them, which is
         // also what decides `Sec-Fetch-Site`.
         let no_referrer = r["noReferrer"].as_bool().unwrap_or(false);
-        if !no_referrer && !base.is_empty() && base != "about:blank" && !headers.keys().any(|k| k.eq_ignore_ascii_case("referer")) {
+        if !no_referrer
+            && !base.is_empty()
+            && base != "about:blank"
+            && !headers.keys().any(|k| k.eq_ignore_ascii_case("referer"))
+        {
             headers.insert("Referer".to_string(), base.to_string());
         }
         // Blocked tracker: never hit the wire; reject like a real ad-blocker
@@ -4702,7 +5415,9 @@ impl BrowserContext {
         let body = r["body"].as_str().map(|s| {
             if r["bodyB64"].as_bool() == Some(true) {
                 use base64::Engine as _;
-                base64::engine::general_purpose::STANDARD.decode(s).unwrap_or_default()
+                base64::engine::general_purpose::STANDARD
+                    .decode(s)
+                    .unwrap_or_default()
             } else {
                 s.as_bytes().to_vec()
             }
@@ -4721,11 +5436,28 @@ impl BrowserContext {
             user_activated: false,
         };
         let method = req_method(&req);
-        Prepared::Send(Box::new(req), FetchInfo { context, id, url, method, kind, sent })
+        Prepared::Send(
+            Box::new(req),
+            FetchInfo {
+                context,
+                id,
+                url,
+                method,
+                kind,
+                sent,
+            },
+        )
     }
 
     fn settle_fetch(&self, info: &FetchInfo, res: Result<nokk_net::Response, NetError>) -> String {
-        let FetchInfo { context, id, url, method, kind, sent } = info;
+        let FetchInfo {
+            context,
+            id,
+            url,
+            method,
+            kind,
+            sent,
+        } = info;
         let (context, id) = (*context, *id);
         match res {
             Ok(resp) => {
@@ -4785,11 +5517,18 @@ impl BrowserContext {
                 let body = String::from_utf8_lossy(&resp.body);
                 // `response.url` is the final URL after redirects (fetch spec).
                 let url_s: &str = url;
-                let final_url: &str = if resp.url.is_empty() { url_s } else { &resp.url };
+                let final_url: &str = if resp.url.is_empty() {
+                    url_s
+                } else {
+                    &resp.url
+                };
                 // Bytes that are not UTF-8 also go as themselves, for `arrayBuffer()`.
                 let bytes64 = if std::str::from_utf8(&resp.body).is_err() {
                     use base64::Engine as _;
-                    format!("\"{}\"", base64::engine::general_purpose::STANDARD.encode(&resp.body))
+                    format!(
+                        "\"{}\"",
+                        base64::engine::general_purpose::STANDARD.encode(&resp.body)
+                    )
                 } else {
                     "null".to_string()
                 };
@@ -4848,7 +5587,8 @@ impl BrowserContext {
         resource_type: &str,
         referrer: Option<&str>,
     ) -> Result<(String, String), EngineError> {
-        self.fetch_text_at(context, url, resource_type, referrer).await
+        self.fetch_text_at(context, url, resource_type, referrer)
+            .await
     }
 
     /// The same, for a navigation the page made itself: `referrer` is the
@@ -4860,7 +5600,8 @@ impl BrowserContext {
         resource_type: &str,
         referrer: Option<&str>,
     ) -> Result<(String, String), EngineError> {
-        self.fetch_text_at(self.idx(), url, resource_type, referrer).await
+        self.fetch_text_at(self.idx(), url, resource_type, referrer)
+            .await
     }
 
     /// A document by GET, retried when the connection itself failed — no
@@ -4900,7 +5641,8 @@ impl BrowserContext {
         let mut req = self.get_request(url, "document", referrer);
         req.method = "POST".into();
         req.body = Some(body.as_bytes().to_vec());
-        req.headers.insert("Content-Type".to_string(), content_type.to_string());
+        req.headers
+            .insert("Content-Type".to_string(), content_type.to_string());
         let started = std::time::Instant::now();
         let sent = self.client.send(req).await;
         self.finish_text(self.idx(), url, "document", started, sent)
@@ -5025,7 +5767,13 @@ impl BrowserContext {
                         .headers
                         .iter()
                         .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
-                        .map(|(_, v)| v.split(';').next().unwrap_or("").trim().to_ascii_lowercase())
+                        .map(|(_, v)| {
+                            v.split(';')
+                                .next()
+                                .unwrap_or("")
+                                .trim()
+                                .to_ascii_lowercase()
+                        })
                         .unwrap_or_default();
                     if let Some(markup) = text_document_markup(&mime, &body) {
                         body = markup;
@@ -5049,7 +5797,11 @@ impl BrowserContext {
     /// arrived before it was taken.
     fn shift_last_record(&self, context: usize, url: &str, lag: f64) {
         if let Ok(mut log) = self.requests.lock() {
-            if let Some(r) = log.iter_mut().rev().find(|r| r.context == context && r.url == url) {
+            if let Some(r) = log
+                .iter_mut()
+                .rev()
+                .find(|r| r.context == context && r.url == url)
+            {
                 r.started_ms = (r.started_ms - lag).max(0.0);
             }
         }
@@ -5085,7 +5837,6 @@ impl BrowserContext {
             None,
         )
     }
-
 
     /// Log one request and tell any subscriber (the CDP layer) about it. Called
     /// once the outcome is known, which is why a subscriber receives the whole
@@ -5184,13 +5935,35 @@ impl BrowserContext {
 /// The parser drops one newline right after `<pre>`; Chrome builds this
 /// document directly and keeps it, hence the extra one.
 fn text_document_markup(mime: &str, body: &str) -> Option<String> {
-    let json = mime == "application/json" || mime == "text/json" || (mime.starts_with("application/") && mime.ends_with("+json"));
-    const SCRIPT: [&str; 4] = ["application/javascript", "application/x-javascript", "application/ecmascript", "application/x-ecmascript"];
+    let json = mime == "application/json"
+        || mime == "text/json"
+        || (mime.starts_with("application/") && mime.ends_with("+json"));
+    const SCRIPT: [&str; 4] = [
+        "application/javascript",
+        "application/x-javascript",
+        "application/ecmascript",
+        "application/x-ecmascript",
+    ];
     // Chrome downloads these instead of showing them.
     const DOWNLOADED: [&str; 19] = [
-        "text/calendar", "text/x-calendar", "text/x-vcalendar", "text/vcalendar", "text/vcard", "text/x-vcard",
-        "text/directory", "text/ldif", "text/qif", "text/x-qif", "text/x-csv", "text/x-vcf", "text/rtf",
-        "text/comma-separated-values", "text/csv", "text/tab-separated-values", "text/tsv", "text/ofx",
+        "text/calendar",
+        "text/x-calendar",
+        "text/x-vcalendar",
+        "text/vcalendar",
+        "text/vcard",
+        "text/x-vcard",
+        "text/directory",
+        "text/ldif",
+        "text/qif",
+        "text/x-qif",
+        "text/x-csv",
+        "text/x-vcf",
+        "text/rtf",
+        "text/comma-separated-values",
+        "text/csv",
+        "text/tab-separated-values",
+        "text/tsv",
+        "text/ofx",
         "text/vnd.sun.j2me.app-descriptor",
     ];
     let text = SCRIPT.contains(&mime)
@@ -5222,7 +5995,10 @@ fn text_document_markup(mime: &str, body: &str) -> Option<String> {
 static REQUEST_IDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 pub(crate) fn next_request_id() -> String {
-    format!("nokk-{}", REQUEST_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    format!(
+        "nokk-{}",
+        REQUEST_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )
 }
 
 /// One round trip that empties both JS-side I/O queues. Written as an expression
@@ -5370,14 +6146,19 @@ fn image_size(bytes: &[u8]) -> Option<(u32, u32)> {
     // WebP: three flavours, each keeping the size somewhere else.
     if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
         return match bytes.get(12..16)? {
-            b"VP8 " => Some((be16(26)?.swap_bytes() & 0x3fff, be16(28)?.swap_bytes() & 0x3fff)),
+            b"VP8 " => Some((
+                be16(26)?.swap_bytes() & 0x3fff,
+                be16(28)?.swap_bytes() & 0x3fff,
+            )),
             b"VP8L" => {
                 let b = u32::from_le_bytes(bytes.get(21..25)?.try_into().ok()?);
                 Some(((b & 0x3fff) + 1, ((b >> 14) & 0x3fff) + 1))
             }
             b"VP8X" => {
-                let w = u32::from(bytes[24]) | u32::from(bytes[25]) << 8 | u32::from(bytes[26]) << 16;
-                let h = u32::from(bytes[27]) | u32::from(bytes[28]) << 8 | u32::from(bytes[29]) << 16;
+                let w =
+                    u32::from(bytes[24]) | u32::from(bytes[25]) << 8 | u32::from(bytes[26]) << 16;
+                let h =
+                    u32::from(bytes[27]) | u32::from(bytes[28]) << 8 | u32::from(bytes[29]) << 16;
                 Some((w + 1, h + 1))
             }
             _ => None,
@@ -5774,7 +6555,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(same, Value::String(r#"["undefined",true,"v","w",3]"#.into()));
+        assert_eq!(
+            same,
+            Value::String(r#"["undefined",true,"v","w",3]"#.into())
+        );
 
         ctx.load_html("https://b.example/", "<html><body></body></html>")
             .await
@@ -5878,12 +6662,24 @@ mod tests {
         }
 
         let got = probe(&ctx, "__ptJSON.stringify(globalThis.__got)").await;
-        assert_eq!(got["said"]["kind"], "[object Uint8Array]", "bytes arrive as bytes: {got}");
+        assert_eq!(
+            got["said"]["kind"], "[object Uint8Array]",
+            "bytes arrive as bytes: {got}"
+        );
         assert_eq!(got["said"]["first"], 1, "{got}");
         assert_eq!(got["said"]["len"], 3, "{got}");
-        assert_eq!(got["said"]["mapKind"], "[object Map]", "Map stays a Map: {got}");
-        assert_eq!(got["said"]["dateKind"], "[object Date]", "a date stays a date: {got}");
-        assert_eq!(got["backKind"], "[object Uint8Array]", "and back too: {got}");
+        assert_eq!(
+            got["said"]["mapKind"], "[object Map]",
+            "Map stays a Map: {got}"
+        );
+        assert_eq!(
+            got["said"]["dateKind"], "[object Date]",
+            "a date stays a date: {got}"
+        );
+        assert_eq!(
+            got["backKind"], "[object Uint8Array]",
+            "and back too: {got}"
+        );
         assert_eq!(got["backFirst"], 7, "{got}");
     }
 
@@ -5962,7 +6758,11 @@ mod tests {
             });
 
             let engine = Engine::new(EngineConfig {
-                pool: PoolConfig { workers: 2, max_live_contexts: 6, max_heap_mb: None },
+                pool: PoolConfig {
+                    workers: 2,
+                    max_live_contexts: 6,
+                    max_heap_mb: None,
+                },
                 use_real_network: true,
                 ..Default::default()
             })
@@ -5994,7 +6794,10 @@ mod tests {
                 token.as_str().map_or(false, |t| t.contains("TOKEN")),
                 "key {key} must yield a token: events [{events}]"
             );
-            assert!(events.contains("complete"), "and report `complete`: [{events}]");
+            assert!(
+                events.contains("complete"),
+                "and report `complete`: [{events}]"
+            );
             if interactive {
                 assert!(
                     events.contains("interactiveBegin") && events.contains("interactiveEnd"),
@@ -6048,7 +6851,10 @@ mod tests {
 
         let out = probe(&ctx, "__ptJSON.stringify(globalThis.__r)").await;
         for key in ["adapter", "mediaCaps", "layout", "estimate", "perm", "opfs"] {
-            assert!(out.get(key).is_some(), "promise `{key}` did not settle: {out}");
+            assert!(
+                out.get(key).is_some(),
+                "promise `{key}` did not settle: {out}"
+            );
         }
     }
 
@@ -6137,8 +6943,8 @@ mod tests {
         )
         .await;
 
-                // Two declarations: two index properties over 745 names. Nine are `-epub-`: listed
-                // as own but without a descriptor, as in a browser. Browser order: indices first.
+        // Two declarations: two index properties over 745 names. Nine are `-epub-`: listed
+        // as own but without a descriptor, as in a browser. Browser order: indices first.
         assert_eq!(out["inlineOwn"], 747, "{out}");
         assert_eq!(
             out["firstThree"],
@@ -6150,13 +6956,22 @@ mod tests {
         assert_eq!(out["color"], "red", "{out}");
         assert_eq!(out["background"], "blue", "{out}");
         assert_eq!(out["inlineLength"], 2, "{out}");
-        assert_eq!(out["cssText"], "color: red; background-color: blue;", "{out}");
+        assert_eq!(
+            out["cssText"], "color: red; background-color: blue;",
+            "{out}"
+        );
         // Computed style: 475 indexed properties plus the same names, including the nine `-epub-`.
         assert_eq!(out["computedLength"], 475, "{out}");
         assert_eq!(out["computedOwn"], 1220, "{out}");
         assert_eq!(out["computedFirst"], "accent-color", "{out}");
-        assert!(out["computedDashed"].is_string(), "dashed name reads: {out}");
-        assert_eq!(out["sameProto"], true, "both declarations share an interface: {out}");
+        assert!(
+            out["computedDashed"].is_string(),
+            "dashed name reads: {out}"
+        );
+        assert_eq!(
+            out["sameProto"], true,
+            "both declarations share an interface: {out}"
+        );
         assert_eq!(
             out["inlineDesc"],
             serde_json::json!(["undefined", "red", true, true, true]),
@@ -6216,7 +7031,11 @@ mod tests {
         });
 
         let engine = Engine::new(EngineConfig {
-            pool: PoolConfig { workers: 1, max_live_contexts: 4, max_heap_mb: None },
+            pool: PoolConfig {
+                workers: 1,
+                max_live_contexts: 4,
+                max_heap_mb: None,
+            },
             use_real_network: true,
             ..Default::default()
         })
@@ -6306,7 +7125,11 @@ mod tests {
             })())"#,
         )
         .await;
-        assert_eq!(bad.as_array().map(Vec::len), Some(0), "not browser-shaped: {bad}");
+        assert_eq!(
+            bad.as_array().map(Vec::len),
+            Some(0),
+            "not browser-shaped: {bad}"
+        );
 
         // And the statics that live on the interface itself, which a graph walk
         // reads on its first step.
@@ -6346,7 +7169,10 @@ mod tests {
             })"#,
         )
         .await;
-        assert_eq!(got["inner"], got["doc"], "window and document disagree: {got}");
+        assert_eq!(
+            got["inner"], got["doc"],
+            "window and document disagree: {got}"
+        );
         assert!(got["inner"][0].as_u64().unwrap_or(0) > 0, "{got}");
         // Also the one frame question we answered with nothing.
         assert_eq!(got["filter"], "none", "{got}");
@@ -6376,7 +7202,11 @@ mod tests {
         )
         .await;
         // Snapshot of Chrome 148, interface by interface.
-        assert_eq!(got["counts"], serde_json::json!([15, 46, 10, 7, 6, 5, 4, 13]), "{got}");
+        assert_eq!(
+            got["counts"],
+            serde_json::json!([15, 46, 10, 7, 6, 5, 4, 13]),
+            "{got}"
+        );
         // And the members still answer — they read the object's own state, they
         // just live where the browser keeps them.
         assert_eq!(
@@ -6422,7 +7252,11 @@ mod tests {
         )
         .await;
         assert_eq!(got["onFirst"], serde_json::json!(["on", "lis"]), "{got}");
-        assert_eq!(got["listenerFirst"], serde_json::json!(["lis", "on"]), "{got}");
+        assert_eq!(
+            got["listenerFirst"],
+            serde_json::json!(["lis", "on"]),
+            "{got}"
+        );
     }
 
     /// A picture drawn on a canvas has to be the picture. The bytes reach JS as
@@ -6476,7 +7310,11 @@ mod tests {
         let _serial = serial().await;
         let (url, hits) = chunked_module_server().await;
         let engine = Engine::new(EngineConfig {
-            pool: PoolConfig { workers: 1, max_live_contexts: 4, max_heap_mb: None },
+            pool: PoolConfig {
+                workers: 1,
+                max_live_contexts: 4,
+                max_heap_mb: None,
+            },
             use_real_network: true,
             ..Default::default()
         })
@@ -6494,7 +7332,11 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
         let got = probe(&ctx, "__ptJSON.stringify(globalThis.__r || '(silence)')").await;
-        assert_eq!(got.as_str(), Some("loaded: \u{43f}\u{440}\u{438}\u{432}\u{435}\u{442}"), "{got}");
+        assert_eq!(
+            got.as_str(),
+            Some("loaded: \u{43f}\u{440}\u{438}\u{432}\u{435}\u{442}"),
+            "{got}"
+        );
         // And a module both chunks import is fetched once, as in a browser:
         // one module map per realm, one address in it.
         assert_eq!(
@@ -6514,12 +7356,16 @@ mod tests {
         let counted = hits.clone();
         tokio::spawn(async move {
             loop {
-                let Ok((mut sock, _)) = listener.accept().await else { break };
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    break;
+                };
                 let counted = counted.clone();
                 tokio::spawn(async move {
                     use tokio::io::{AsyncReadExt, AsyncWriteExt};
                     let mut buf = vec![0u8; 2048];
-                    let Ok(n) = sock.read(&mut buf).await else { return };
+                    let Ok(n) = sock.read(&mut buf).await else {
+                        return;
+                    };
                     let req = String::from_utf8_lossy(&buf[..n]).to_string();
                     let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
                     let (kind, body) = match path.as_str() {
@@ -6631,7 +7477,13 @@ mod tests {
         assert_eq!(got["noArgs"], "TypeError: Failed to execute 'getImageData' on 'CanvasRenderingContext2D': 4 arguments required, but only 0 present.", "{got}");
         assert_eq!(got["zeroWidth"], "IndexSizeError: Failed to execute 'getImageData' on 'CanvasRenderingContext2D': The source width is 0.", "{got}");
         assert_eq!(got["drawNoArgs"], "TypeError: Failed to execute 'drawImage' on 'CanvasRenderingContext2D': 3 arguments required, but only 0 present.", "{got}");
-        assert!(got["drawBad"].as_str().unwrap_or("").starts_with("TypeError: Failed to execute 'drawImage'"), "{got}");
+        assert!(
+            got["drawBad"]
+                .as_str()
+                .unwrap_or("")
+                .starts_with("TypeError: Failed to execute 'drawImage'"),
+            "{got}"
+        );
         assert_eq!(got["putNoArgs"], "TypeError: Failed to execute 'putImageData' on 'CanvasRenderingContext2D': 3 arguments required, but only 0 present.", "{got}");
         assert_eq!(got["createZero"], "IndexSizeError: Failed to execute 'createImageData' on 'CanvasRenderingContext2D': The source width is zero or not a number.", "{got}");
         assert_eq!(got["toBlobNoArgs"], "TypeError: Failed to execute 'toBlob' on 'HTMLCanvasElement': 1 argument required, but only 0 present.", "{got}");
@@ -6663,8 +7515,14 @@ mod tests {
         )
         .await;
         // Chrome 148, exactly.
-        assert_eq!(got["hidden"], ".z{color:red}\u{442}\u{435}\u{43a}\u{441}\u{442}", "{got}");
-        assert_eq!(got["shown"], "\u{442}\u{435}\u{43a}\u{441}\u{442}", "style is not rendered: {got}");
+        assert_eq!(
+            got["hidden"], ".z{color:red}\u{442}\u{435}\u{43a}\u{441}\u{442}",
+            "{got}"
+        );
+        assert_eq!(
+            got["shown"], "\u{442}\u{435}\u{43a}\u{441}\u{442}",
+            "style is not rendered: {got}"
+        );
     }
 
     /// A call made wrongly is answered exactly, and the answer names the method
@@ -6704,15 +7562,28 @@ mod tests {
         .await;
         // Chrome 148, word for word.
         assert_eq!(got["badSelector"], "SyntaxError: Failed to execute 'querySelector' on 'Document': '<<<' is not a valid selector.", "{got}");
-        assert_eq!(got["badMatches"], "SyntaxError: Failed to execute 'matches' on 'Element': '###' is not a valid selector.", "{got}");
+        assert_eq!(
+            got["badMatches"],
+            "SyntaxError: Failed to execute 'matches' on 'Element': '###' is not a valid selector.",
+            "{got}"
+        );
         assert_eq!(got["noSelector"], "TypeError: Failed to execute 'querySelector' on 'Document': 1 argument required, but only 0 present.", "{got}");
         assert_eq!(got["noAttr"], "TypeError: Failed to execute 'setAttribute' on 'Element': 2 arguments required, but only 0 present.", "{got}");
         assert_eq!(got["selfChild"], "HierarchyRequestError: Failed to execute 'appendChild' on 'Node': The new child element contains the parent.", "{got}");
         assert_eq!(got["notMine"], "NotFoundError: Failed to execute 'removeChild' on 'Node': The node to be removed is not a child of this node.", "{got}");
         assert_eq!(got["noListener"], "TypeError: Failed to execute 'addEventListener' on 'EventTarget': 2 arguments required, but only 0 present.", "{got}");
-        assert_eq!(got["badUrl"], "TypeError: Failed to construct 'URL': Invalid URL", "{got}");
+        assert_eq!(
+            got["badUrl"], "TypeError: Failed to construct 'URL': Invalid URL",
+            "{got}"
+        );
         assert_eq!(got["noItem"], "TypeError: Failed to execute 'setItem' on 'Storage': 2 arguments required, but only 0 present.", "{got}");
-        assert!(got["badPosition"].as_str().unwrap_or("").starts_with("SyntaxError: Failed to execute 'insertAdjacentHTML'"), "{got}");
+        assert!(
+            got["badPosition"]
+                .as_str()
+                .unwrap_or("")
+                .starts_with("SyntaxError: Failed to execute 'insertAdjacentHTML'"),
+            "{got}"
+        );
         // And a call made properly is untouched.
         assert_eq!(got["goodSelector"], "answered", "{got}");
     }
@@ -6752,7 +7623,11 @@ mod tests {
         let got = probe(&ctx, "__ptJSON.stringify(globalThis.__got)").await;
         // Built without the rasterizer there is no file behind the handle, and
         // nothing here to measure.
-        let backed = probe(&ctx, "__ptJSON.stringify(typeof __pt_fsOpen === 'function')").await;
+        let backed = probe(
+            &ctx,
+            "__ptJSON.stringify(typeof __pt_fsOpen === 'function')",
+        )
+        .await;
         if backed != true {
             return;
         }
@@ -6771,9 +7646,12 @@ mod tests {
         let _serial = serial().await;
         let engine = engine(2, 4);
         let ctx = engine.new_context().await.unwrap();
-        ctx.load_html("https://example.com/", "<html><body><div class='a b'></div></body></html>")
-            .await
-            .unwrap();
+        ctx.load_html(
+            "https://example.com/",
+            "<html><body><div class='a b'></div></body></html>",
+        )
+        .await
+        .unwrap();
         let got = probe(
             &ctx,
             r#"__ptJSON.stringify((() => {
@@ -6795,7 +7673,13 @@ mod tests {
         )
         .await;
         for k in [
-            "nodeList", "live", "collection", "tokens", "attrs", "sheets", "shadowSheets",
+            "nodeList",
+            "live",
+            "collection",
+            "tokens",
+            "attrs",
+            "sheets",
+            "shadowSheets",
         ] {
             assert_eq!(got[k], true, "{k} must live on its own interface: {got}");
         }
@@ -6858,8 +7742,8 @@ mod tests {
     fn an_image_states_its_size_in_its_own_header() {
         // A one-pixel PNG, GIF and JPEG: the three a page is most likely to meet.
         let png = [
-            0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, b'I', b'H', b'D', b'R',
-            0, 0, 1, 0x10, 0, 0, 0, 0x5c,
+            0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, b'I', b'H', b'D', b'R', 0,
+            0, 1, 0x10, 0, 0, 0, 0x5c,
         ];
         assert_eq!(image_size(&png), Some((272, 92)));
         let mut gif = b"GIF89a".to_vec();
@@ -7051,11 +7935,18 @@ mod tests {
         // Drawing still works, and the two canvases stay distinct.
         assert_eq!(out["style"], "#ff6600", "{out}");
         assert_eq!(out["otherStyle"], "#00aaff", "{out}");
-        assert_eq!(out["painted"], serde_json::json!([255, 102, 0, 255]), "{out}");
+        assert_eq!(
+            out["painted"],
+            serde_json::json!([255, 102, 0, 255]),
+            "{out}"
+        );
         assert_eq!(out["differ"], true, "{out}");
         assert_eq!(out["ownGl"], 0, "{out}");
         assert_eq!(out["protoGl"], 443, "{out}");
-        assert_eq!(out["constOnProto"], 256, "constants on the prototype too: {out}");
+        assert_eq!(
+            out["constOnProto"], 256,
+            "constants on the prototype too: {out}"
+        );
         assert_eq!(out["vendor"], "WebKit", "{out}");
     }
 
@@ -7149,8 +8040,14 @@ mod tests {
         .await;
 
         assert_eq!(out["back"], "abc123", "{out}");
-        assert_eq!(out["viaProp"], "abc123", "a key reads as a property too: {out}");
-        assert_eq!(out["fromProperty"], "via property", "and writes as a property: {out}");
+        assert_eq!(
+            out["viaProp"], "abc123",
+            "a key reads as a property too: {out}"
+        );
+        assert_eq!(
+            out["fromProperty"], "via property",
+            "and writes as a property: {out}"
+        );
         assert_eq!(out["len"], 2, "{out}");
         assert_eq!(out["key0"], "cf.turnstile.u", "{out}");
         assert_eq!(
@@ -7171,9 +8068,12 @@ mod tests {
         let _serial = serial().await;
         let engine = engine(2, 4);
         let ctx = engine.new_context().await.unwrap();
-        ctx.load_html("https://example.com/", "<html><body><div id=t>x</div></body></html>")
-            .await
-            .unwrap();
+        ctx.load_html(
+            "https://example.com/",
+            "<html><body><div id=t>x</div></body></html>",
+        )
+        .await
+        .unwrap();
 
         ctx.evaluate(
             r#"(() => {
@@ -7249,8 +8149,14 @@ mod tests {
         assert_eq!(tags["visible"], true, "{tags}");
         // Prototype name order is read too: members, then `constructor`.
         assert_eq!(tags["order"], "visible,constructor", "{tags}");
-        assert_eq!(tags["width"], true, "the visual viewport is the window: {tags}");
-        assert_eq!(tags["sameNavigator"], true, "one value under two names: {tags}");
+        assert_eq!(
+            tags["width"], true,
+            "the visual viewport is the window: {tags}"
+        );
+        assert_eq!(
+            tags["sameNavigator"], true,
+            "one value under two names: {tags}"
+        );
     }
 
     /// Every Vite build ships twice: a module half and a `nomodule` fallback. A module
@@ -7399,17 +8305,34 @@ mod tests {
             });
         })()"#).await;
 
-        assert_eq!(out["kidsArray"], false, "childNodes is a NodeList, not an Array");
-        assert_eq!(out["kidsSame"], true, "the same list object comes back each read");
+        assert_eq!(
+            out["kidsArray"], false,
+            "childNodes is a NodeList, not an Array"
+        );
+        assert_eq!(
+            out["kidsSame"], true,
+            "the same list object comes back each read"
+        );
         assert_eq!(out["kidsLen"], 1, "and it still counts the children");
         assert_eq!(out["kidsIter"], 1, "and still spreads");
         assert_eq!(out["kidsTag"], "[object NodeList]");
         // Chrome's document has exactly one own property, and it is `location` —
         // measured, not assumed. Everything else lives on the interfaces.
-        assert_eq!(out["docOwn"], 1, "a document owns `location`, and nothing else");
+        assert_eq!(
+            out["docOwn"], 1,
+            "a document owns `location`, and nothing else"
+        );
         assert_eq!(out["navOwn"], 0, "nor does a real navigator");
-        assert!(out["docGraph"].as_u64().unwrap() > 280, "document graph: {}", out["docGraph"]);
-        assert!(out["navGraph"].as_u64().unwrap() > 75, "navigator graph: {}", out["navGraph"]);
+        assert!(
+            out["docGraph"].as_u64().unwrap() > 280,
+            "document graph: {}",
+            out["docGraph"]
+        );
+        assert!(
+            out["navGraph"].as_u64().unwrap() > 75,
+            "navigator graph: {}",
+            out["navGraph"]
+        );
         // Measured against Chrome 148 in the same shape of page: 243 enumerable
         // names up the window's chain — 237 own, two on `Window.prototype`, four
         // on `EventTarget.prototype`. The own set is now Chrome's exactly;
@@ -7427,16 +8350,25 @@ mod tests {
         );
         assert_eq!(out["docRemove"], false, "Document has no ChildNode.remove");
         assert_eq!(out["elRemove"], "function", "elements keep theirs");
-        assert_eq!(out["sab"], "undefined", "no SharedArrayBuffer without isolation");
+        assert_eq!(
+            out["sab"], "undefined",
+            "no SharedArrayBuffer without isolation"
+        );
         assert_eq!(out["isolated"], false);
         assert_eq!(out["locOwn"], 15, "Location's members are the object's own");
-        assert_eq!(out["locValueOf"], true, "and `valueOf` among them, non-enumerable");
+        assert_eq!(
+            out["locValueOf"], true,
+            "and `valueOf` among them, non-enumerable"
+        );
         assert_eq!(
             out["locProto"],
             serde_json::json!(["constructor"]),
             "Location.prototype carries nothing but its constructor"
         );
-        assert_eq!(out["charset"], "windows-1252", "undeclared documents are windows-1252");
+        assert_eq!(
+            out["charset"], "windows-1252",
+            "undeclared documents are windows-1252"
+        );
     }
 
     /// Fingerprint regression guard. The page-visible surface must carry no trace
@@ -7497,13 +8429,19 @@ mod tests {
 
         // A real DOM node / event / document exposes no own properties — ours must
         // keep its state in hidden (__pt-prefixed, filtered) backing fields.
-        for key in ["bodyOwn", "btnOwn", "inpOwn", "textOwn", "evtOwn", "navOwn", "navKeys"] {
+        for key in [
+            "bodyOwn", "btnOwn", "inpOwn", "textOwn", "evtOwn", "navOwn", "navKeys",
+        ] {
             let leaked = p[key]
                 .as_array()
                 .unwrap_or_else(|| panic!("probe missing {key}"));
             // A browser event has one own property too: `isTrusted` ([LegacyUnforgeable]).
             if key == "evtOwn" {
-                assert_eq!(leaked, &vec![serde_json::json!("isTrusted")], "evtOwn: {leaked:?}");
+                assert_eq!(
+                    leaked,
+                    &vec![serde_json::json!("isTrusted")],
+                    "evtOwn: {leaked:?}"
+                );
                 continue;
             }
             assert!(
@@ -7782,10 +8720,18 @@ mod tests {
             .as_array()
             .map(|a| a.iter().filter_map(|v| v.as_f64()).collect())
             .unwrap_or_default();
-        let chrome = [-0.10808052122592926, -0.3909117579460144, -0.005692707374691963, 0.3892313539981842];
+        let chrome = [
+            -0.10808052122592926,
+            -0.3909117579460144,
+            -0.005692707374691963,
+            0.3892313539981842,
+        ];
         assert_eq!(mid.len(), 4, "four samples: {p}");
         for (got, want) in mid.iter().zip(chrome) {
-            assert!((got - want).abs() < tolerance, "samples bit for bit on x86_64 Linux: {p}");
+            assert!(
+                (got - want).abs() < tolerance,
+                "samples bit for bit on x86_64 Linux: {p}"
+            );
         }
         // Live context: card rate, buffer latency, suspended until a gesture.
         assert_eq!(p["rate"], 48000);
@@ -7845,8 +8791,14 @@ mod tests {
             serde_json::json!([]),
             "a source a browser accepts was refused"
         );
-        assert_eq!(p["offscreen"], "255,0,0,255", "OffscreenCanvas pixels did not arrive");
-        assert_eq!(p["bitmap"], "255,0,0,255", "ImageBitmap pixels did not arrive");
+        assert_eq!(
+            p["offscreen"], "255,0,0,255",
+            "OffscreenCanvas pixels did not arrive"
+        );
+        assert_eq!(
+            p["bitmap"], "255,0,0,255",
+            "ImageBitmap pixels did not arrive"
+        );
         assert_eq!(p["canvas"], "0,0,255,255", "canvas pixels did not arrive");
         assert_eq!(p["bitmapIsBitmap"], "[object ImageBitmap]");
     }
@@ -7902,7 +8854,9 @@ mod tests {
         // As with every object we expose, state lives on the prototype.
         assert_eq!(p["own"], 0, "MemoryInfo exposes own properties");
         // Chrome derives it from physical memory, rounded to a power of two; 8 is no longer the cap.
-        let dm = p["deviceMemory"].as_u64().expect("deviceMemory is a number");
+        let dm = p["deviceMemory"]
+            .as_u64()
+            .expect("deviceMemory is a number");
         assert!(
             dm.is_power_of_two() && (1..=64).contains(&dm),
             "deviceMemory is not a plausible Chrome value: {dm}"
@@ -8423,6 +9377,37 @@ mod tests {
 
         // Cached: same inputs return the identical rendering.
         assert_eq!(with_geo, eng.inner.context_bootstrap(profile, Some(&geo)));
+    }
+
+    #[test]
+    fn geo_wire_locale_matches_js_locale_atomically() {
+        // --geoip-timezone must move navigator.languages and the wire
+        // Accept-Language together, from the same geo result. Both derive from
+        // stealth_for_context, so they can never disagree; without geo the
+        // wire keeps the emulation default (None).
+        let eng = Engine::new(EngineConfig {
+            geoip_timezone: true,
+            ..Default::default()
+        })
+        .unwrap();
+        let profile = Some(nokk_stealth::FingerprintProfile::ChromeWindows);
+        let geo = nokk_net::GeoInfo {
+            timezone: "Europe/Berlin".to_string(),
+            country_code: "DE".to_string(),
+        };
+        let stealth = eng.inner.stealth_for_context(profile, Some(&geo));
+        assert_eq!(
+            stealth.languages,
+            vec!["de-DE".to_string(), "de".to_string(), "en".to_string()]
+        );
+        let wire = eng.inner.accept_language_for(profile, Some(&geo)).unwrap();
+        assert_eq!(
+            wire,
+            nokk_stealth::accept_language_header(&stealth.languages)
+        );
+        assert!(wire.starts_with("de-DE,de;q=0.9"));
+        // No geo → no override: the emulation default stands.
+        assert!(eng.inner.accept_language_for(profile, None).is_none());
     }
 
     #[tokio::test]
@@ -9084,12 +10069,9 @@ mod tests {
         let _serial = serial().await;
         let engine = engine(1, 2);
         let ctx = engine.new_context().await.unwrap();
-        ctx.load_html(
-            "https://example.com/",
-            "<html><body></body></html>",
-        )
-        .await
-        .unwrap();
+        ctx.load_html("https://example.com/", "<html><body></body></html>")
+            .await
+            .unwrap();
         let probe = r#"(() => {
             const NS = 'http://www.w3.org/2000/svg';
             const svg = document.createElementNS(NS, 'svg');
@@ -9125,7 +10107,11 @@ mod tests {
                 .collect()
         };
         // The ink of "jjj" starts a pixel left of the origin: the box follows and the width absorbs it.
-        assert_eq!(box_of("jjj"), vec![9.0, 36.0, 11.672, 17.0], "box of \"jjj\"");
+        assert_eq!(
+            box_of("jjj"),
+            vec![9.0, 36.0, 11.672, 17.0],
+            "box of \"jjj\""
+        );
         // Monospace: ink is narrower than layout, so the layout is taken on the right.
         assert_eq!(
             box_of("mono"),
@@ -9142,7 +10128,11 @@ mod tests {
             box_of("tight"),
             "edge spaces are not in the box"
         );
-        assert_eq!(box_of("empty"), vec![0.0, 0.0, 0.0, 0.0], "empty text has no box");
+        assert_eq!(
+            box_of("empty"),
+            vec![0.0, 0.0, 0.0, 0.0],
+            "empty text has no box"
+        );
     }
 
     /// A comma selector list returns elements in document order, not grouped by
@@ -9170,9 +10160,21 @@ mod tests {
              })",
         )
         .await;
-        assert_eq!(out["all"], serde_json::json!(["b1", "i1", "s1", "i2", "t1", "b2"]), "{out}");
-        assert_eq!(out["two"], serde_json::json!(["b1", "i1", "i2", "b2"]), "{out}");
-        assert_eq!(out["nested"], serde_json::json!(["b1", "t1", "b2"]), "{out}");
+        assert_eq!(
+            out["all"],
+            serde_json::json!(["b1", "i1", "s1", "i2", "t1", "b2"]),
+            "{out}"
+        );
+        assert_eq!(
+            out["two"],
+            serde_json::json!(["b1", "i1", "i2", "b2"]),
+            "{out}"
+        );
+        assert_eq!(
+            out["nested"],
+            serde_json::json!(["b1", "t1", "b2"]),
+            "{out}"
+        );
     }
 
     /// Pseudo-classes and all four combinators. The old engine read `:root` as a tag
@@ -9317,7 +10319,11 @@ mod tests {
             }
         });
         let engine = Engine::new(EngineConfig {
-            pool: PoolConfig { workers: 1, max_live_contexts: 2, max_heap_mb: None },
+            pool: PoolConfig {
+                workers: 1,
+                max_live_contexts: 2,
+                max_heap_mb: None,
+            },
             use_real_network: true,
             ..Default::default()
         })
@@ -9325,18 +10331,42 @@ mod tests {
         let ctx = engine.new_context().await.unwrap();
         ctx.navigate(&format!("http://{addr}/")).await.unwrap();
         ctx.run_event_loop().await.unwrap();
-        let out = probe(&ctx, "__ptJSON.stringify({ self: globalThis.__self, after: globalThis.__after })").await;
-        assert_eq!(out["self"]["cs"], true, "currentScript is the script itself: {out}");
-        assert_eq!(out["self"]["found"], 1, "its own entry is visible while running: {out}");
+        let out = probe(
+            &ctx,
+            "__ptJSON.stringify({ self: globalThis.__self, after: globalThis.__after })",
+        )
+        .await;
+        assert_eq!(
+            out["self"]["cs"], true,
+            "currentScript is the script itself: {out}"
+        );
+        assert_eq!(
+            out["self"]["found"], 1,
+            "its own entry is visible while running: {out}"
+        );
         assert_eq!(out["self"]["inst"], true, "{out}");
         assert_eq!(
             out["self"]["keys"],
-            serde_json::json!(["name", "entryType", "startTime", "duration", "navigationId",
-                               "initiatorType", "deliveryType", "nextHopProtocol"]),
+            serde_json::json!([
+                "name",
+                "entryType",
+                "startTime",
+                "duration",
+                "navigationId",
+                "initiatorType",
+                "deliveryType",
+                "nextHopProtocol"
+            ]),
             "fields in browser order: {out}"
         );
-        assert_eq!(out["self"]["type"], "text/javascript", "MIME trimmed, as in a browser: {out}");
-        assert_eq!(out["after"], true, "currentScript is null again afterwards: {out}");
+        assert_eq!(
+            out["self"]["type"], "text/javascript",
+            "MIME trimmed, as in a browser: {out}"
+        );
+        assert_eq!(
+            out["after"], true,
+            "currentScript is null again afterwards: {out}"
+        );
     }
 
     /// Focus is four events, not two: `blur` and `focusout` on the old element, `focus`
@@ -9413,7 +10443,10 @@ mod tests {
         }
         assert_eq!(out["ready:interactive"], true, "{out}");
         assert_eq!(out["ready:complete"], true, "{out}");
-        assert_eq!(out["persisted"], false, "a normal load, not a back navigation: {out}");
+        assert_eq!(
+            out["persisted"], false,
+            "a normal load, not a back navigation: {out}"
+        );
     }
 
     // A member's descriptor kind reads as one string, and the challenge's graph walk
@@ -9466,11 +10499,17 @@ mod tests {
         assert_eq!(out["title"], "agsec", "read and write: {out}");
         assert_eq!(out["ownerDocument"], "agec", "{out}");
         assert_eq!(out["appendChild"], "vfwec", "a method is a value: {out}");
-        assert_eq!(out["elementNode"], "vne", "a constant cannot be overwritten: {out}");
+        assert_eq!(
+            out["elementNode"], "vne",
+            "a constant cannot be overwritten: {out}"
+        );
         assert_eq!(out["geolocation"], "agec", "{out}");
         assert_eq!(out["body"], "agsec", "{out}");
         assert_eq!(out["svgPx"], "vne", "{out}");
-        assert_eq!(out["svgPxValue"], 5, "a constant is a number, not empty: {out}");
+        assert_eq!(
+            out["svgPxValue"], 5,
+            "a constant is a number, not empty: {out}"
+        );
         assert_eq!(
             out["lifecycle"],
             serde_json::json!(["complete", "BODY", true, 1]),
@@ -9751,10 +10790,16 @@ mod tests {
         assert_eq!(out["scripts"], 1);
         assert_eq!(out["forms"], 1);
         assert_eq!(out["images"], 1);
-        assert_eq!(out["docLinks"], 1, "document.links is <a href>, not every <a>");
+        assert_eq!(
+            out["docLinks"], 1,
+            "document.links is <a href>, not every <a>"
+        );
         assert_eq!(out["anchors"], 1, "and document.anchors is <a name>");
         assert_eq!(out["sheets"], 2, "a <style> and a stylesheet <link>");
-        assert_eq!(out["referrer"], "string", "never undefined — it is read raw");
+        assert_eq!(
+            out["referrer"], "string",
+            "never undefined — it is read raw"
+        );
         assert_eq!(
             out["show"],
             serde_json::json!([1, 4, 128]),
@@ -9794,8 +10839,11 @@ mod tests {
             v => panic!("expected the probe result, got {v:?}"),
         };
         assert_eq!(out["connected"], true);
-        assert_eq!((out["w"].as_i64(), out["h"].as_i64()), (Some(304), Some(69)),
-                   "an element in a closed shadow root is laid out like any other");
+        assert_eq!(
+            (out["w"].as_i64(), out["h"].as_i64()),
+            (Some(304), Some(69)),
+            "an element in a closed shadow root is laid out like any other"
+        );
         assert_eq!(out["offset"], serde_json::json!([304, 69]));
     }
 
@@ -9832,10 +10880,21 @@ mod tests {
         // The declared size is the content box: Chrome draws a 2 px border around an
         // `<iframe>`, so the outer box is 4 px larger. Chrome 151: a bare `<iframe>` gives
         // 304x154 for 300x150 content.
-        assert_eq!(out["attr"], serde_json::json!([304, 69]), "width/height attributes");
+        assert_eq!(
+            out["attr"],
+            serde_json::json!([304, 69]),
+            "width/height attributes"
+        );
         assert_eq!(out["style"], serde_json::json!([304, 69]), "and inline CSS");
-        assert_eq!(out["offset"], serde_json::json!([304, 69]), "offsetWidth/Height agree");
-        assert_eq!(out["plainHasBox"], true, "an unsized element still has a box");
+        assert_eq!(
+            out["offset"],
+            serde_json::json!([304, 69]),
+            "offsetWidth/Height agree"
+        );
+        assert_eq!(
+            out["plainHasBox"], true,
+            "an unsized element still has a box"
+        );
     }
 
     /// An `XMLHttpRequest` is an `EventTarget`, and ours was not: `addEventListener`
@@ -9955,11 +11014,17 @@ mod tests {
         })()"#).await;
         assert_eq!(out["visible"], true, "{out}");
         assert_eq!(out["hidden"], false, "display:none is not visible: {out}");
-        assert_eq!(out["moved"], true, "rects are relative to the window: {out}");
+        assert_eq!(
+            out["moved"], true,
+            "rects are relative to the window: {out}"
+        );
         assert_eq!(out["centred"], true, "{out}");
         assert_eq!(out["scrolled"], true, "{out}");
         assert_eq!(out["by"], 50, "scrollBy from 0: {out}");
-        assert_eq!(out["top"], 50, "the root element reports the document's scroll: {out}");
+        assert_eq!(
+            out["top"], 50,
+            "the root element reports the document's scroll: {out}"
+        );
     }
 
     /// A binary body leaves as its bytes. `String(new Uint8Array(…))` is "1,2,3", and that
@@ -9978,17 +11043,31 @@ mod tests {
                     let mut got = 0;
                     loop {
                         let n = stream.read(&mut buf[got..]).await.unwrap_or(0);
-                        if n == 0 { break; }
+                        if n == 0 {
+                            break;
+                        }
                         got += n;
                         let text = String::from_utf8_lossy(&buf[..got]).to_string();
                         if let Some(at) = text.find("\r\n\r\n") {
-                            let len = text.lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length: ").map(|v| v.trim().parse::<usize>().unwrap_or(0))).unwrap_or(0);
-                            if got >= at + 4 + len { break; }
+                            let len = text
+                                .lines()
+                                .find_map(|l| {
+                                    l.to_ascii_lowercase()
+                                        .strip_prefix("content-length: ")
+                                        .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                                })
+                                .unwrap_or(0);
+                            if got >= at + 4 + len {
+                                break;
+                            }
                         }
                     }
                     let text = String::from_utf8_lossy(&buf[..got]).to_string();
                     let reply = match text.find("\r\n\r\n") {
-                        Some(at) if text.starts_with("POST") => buf[at + 4..got].iter().map(|b| format!("{b:02x}")).collect::<String>(),
+                        Some(at) if text.starts_with("POST") => buf[at + 4..got]
+                            .iter()
+                            .map(|b| format!("{b:02x}"))
+                            .collect::<String>(),
                         _ => "<html><body>x</body></html>".to_string(),
                     };
                     let resp = format!("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{reply}", reply.len());
@@ -9997,13 +11076,19 @@ mod tests {
             }
         });
         let engine = Engine::new(EngineConfig {
-            pool: PoolConfig { workers: 1, max_live_contexts: 2, max_heap_mb: None },
+            pool: PoolConfig {
+                workers: 1,
+                max_live_contexts: 2,
+                max_heap_mb: None,
+            },
             use_real_network: true,
             ..Default::default()
         })
         .expect("engine");
         let ctx = engine.new_context().await.unwrap();
-        ctx.navigate(&format!("http://127.0.0.1:{}/", addr.port())).await.unwrap();
+        ctx.navigate(&format!("http://127.0.0.1:{}/", addr.port()))
+            .await
+            .unwrap();
         ctx.evaluate(r#"(() => {
             const u8 = new Uint8Array([0, 255, 1, 128, 10]);
             fetch('/p', { method: 'POST', body: u8 }).then(r => r.text()).then(t => { globalThis.__a = t; });
@@ -10012,11 +11097,23 @@ mod tests {
         })()"#).await.unwrap();
         for _ in 0..50 {
             ctx.run_event_loop().await.unwrap();
-            if ctx.evaluate("typeof __c").await.unwrap() == Value::String("string".into()) { break; }
+            if ctx.evaluate("typeof __c").await.unwrap() == Value::String("string".into()) {
+                break;
+            }
         }
-        assert_eq!(ctx.evaluate("__a").await.unwrap(), Value::String("00ff01800a".into()));
-        assert_eq!(ctx.evaluate("__b").await.unwrap(), Value::String("ff01".into()), "a view sends its own window");
-        assert_eq!(ctx.evaluate("__c").await.unwrap(), Value::String("00ff01800a".into()));
+        assert_eq!(
+            ctx.evaluate("__a").await.unwrap(),
+            Value::String("00ff01800a".into())
+        );
+        assert_eq!(
+            ctx.evaluate("__b").await.unwrap(),
+            Value::String("ff01".into()),
+            "a view sends its own window"
+        );
+        assert_eq!(
+            ctx.evaluate("__c").await.unwrap(),
+            Value::String("00ff01800a".into())
+        );
     }
 
     /// The Turnstile VM calls `document.replaceChild(root, root)` and then looks for
@@ -10028,9 +11125,12 @@ mod tests {
         let _serial = serial().await;
         let engine = engine(1, 2);
         let ctx = engine.new_context().await.unwrap();
-        ctx.load_html("https://example.com/", "<html><head></head><body><p id=p>x</p></body></html>")
-            .await
-            .unwrap();
+        ctx.load_html(
+            "https://example.com/",
+            "<html><head></head><body><p id=p>x</p></body></html>",
+        )
+        .await
+        .unwrap();
         let out = probe(&ctx, r#"(() => {
             const de = document.documentElement, p = document.getElementById('p');
             const same = document.replaceChild(de, de) === de && document.documentElement === de && de.isConnected;
@@ -10066,7 +11166,14 @@ mod tests {
                     let n = stream.read(&mut buf).await.unwrap_or(0);
                     let req = String::from_utf8_lossy(&buf[..n]).to_string();
                     let resp = if req.starts_with("GET /echo") {
-                        let cookie = req.lines().find_map(|l| l.strip_prefix("cookie: ").or_else(|| l.strip_prefix("Cookie: "))).unwrap_or("").to_string();
+                        let cookie = req
+                            .lines()
+                            .find_map(|l| {
+                                l.strip_prefix("cookie: ")
+                                    .or_else(|| l.strip_prefix("Cookie: "))
+                            })
+                            .unwrap_or("")
+                            .to_string();
                         format!("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{cookie}", cookie.len())
                     } else {
                         let body = "<html><body>x</body></html>";
@@ -10077,20 +11184,34 @@ mod tests {
             }
         });
         let engine = Engine::new(EngineConfig {
-            pool: PoolConfig { workers: 1, max_live_contexts: 2, max_heap_mb: None },
+            pool: PoolConfig {
+                workers: 1,
+                max_live_contexts: 2,
+                max_heap_mb: None,
+            },
             use_real_network: true,
             ..Default::default()
         })
         .expect("engine");
         let ctx = engine.new_context().await.unwrap();
-        ctx.navigate(&format!("http://127.0.0.1:{}/", addr.port())).await.unwrap();
-        assert_eq!(ctx.evaluate("document.cookie").await.unwrap(), Value::String("hdr=h1".into()), "a header cookie is visible, an HttpOnly one is not");
-        ctx.evaluate(r#"(() => {
+        ctx.navigate(&format!("http://127.0.0.1:{}/", addr.port()))
+            .await
+            .unwrap();
+        assert_eq!(
+            ctx.evaluate("document.cookie").await.unwrap(),
+            Value::String("hdr=h1".into()),
+            "a header cookie is visible, an HttpOnly one is not"
+        );
+        ctx.evaluate(
+            r#"(() => {
             document.cookie = 'js=v; path=/';
             document.cookie = 'hdr=; max-age=0; path=/';
             document.cookie = 'ho=hack; path=/; HttpOnly';
             fetch('/echo').then(r => r.text()).then(t => { globalThis.__sent = t; });
-        })()"#).await.unwrap();
+        })()"#,
+        )
+        .await
+        .unwrap();
         for _ in 0..50 {
             ctx.run_event_loop().await.unwrap();
             if ctx.evaluate("typeof __sent").await.unwrap() == Value::String("string".into()) {
@@ -10099,10 +11220,19 @@ mod tests {
         }
         let sent = ctx.evaluate("__sent").await.unwrap();
         let sent = sent.as_str().unwrap_or_default();
-        assert!(sent.contains("js=v"), "a script cookie leaves with the next request: {sent}");
-        assert!(sent.contains("ho=secret"), "script cannot replace an HttpOnly cookie: {sent}");
+        assert!(
+            sent.contains("js=v"),
+            "a script cookie leaves with the next request: {sent}"
+        );
+        assert!(
+            sent.contains("ho=secret"),
+            "script cannot replace an HttpOnly cookie: {sent}"
+        );
         assert!(!sent.contains("hdr="), "an expired write deletes: {sent}");
-        assert_eq!(ctx.evaluate("document.cookie").await.unwrap(), Value::String("js=v".into()));
+        assert_eq!(
+            ctx.evaluate("document.cookie").await.unwrap(),
+            Value::String("js=v".into())
+        );
     }
 
     /// A host that accepts and never answers must not hold the page: in Chrome a hung
@@ -10137,21 +11267,35 @@ mod tests {
             }
         });
         let engine = Engine::new(EngineConfig {
-            pool: PoolConfig { workers: 1, max_live_contexts: 2, max_heap_mb: None },
+            pool: PoolConfig {
+                workers: 1,
+                max_live_contexts: 2,
+                max_heap_mb: None,
+            },
             use_real_network: true,
             ..Default::default()
         })
         .expect("engine");
         let ctx = engine.new_context().await.unwrap();
         let t = std::time::Instant::now();
-        let _ = ctx.navigate(&format!("http://127.0.0.1:{}/", addr.port())).await;
+        let _ = ctx
+            .navigate(&format!("http://127.0.0.1:{}/", addr.port()))
+            .await;
         while t.elapsed() < std::time::Duration::from_secs(8)
-            && ctx.evaluate("document.title").await.unwrap_or_default() != Value::String("async;timer;".into())
+            && ctx.evaluate("document.title").await.unwrap_or_default()
+                != Value::String("async;timer;".into())
         {
             let _ = ctx.run_event_loop().await;
         }
-        assert_eq!(ctx.evaluate("document.title").await.unwrap(), Value::String("async;timer;".into()));
-        assert!(t.elapsed() < std::time::Duration::from_secs(8), "took {:?}", t.elapsed());
+        assert_eq!(
+            ctx.evaluate("document.title").await.unwrap(),
+            Value::String("async;timer;".into())
+        );
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(8),
+            "took {:?}",
+            t.elapsed()
+        );
     }
 
     /// The engine's own work (cascade, layout, colors, stack formatting) must not run
@@ -10162,7 +11306,12 @@ mod tests {
         let _serial = serial().await;
         let engine = engine(1, 2);
         let ctx = engine.new_context().await.unwrap();
-        ctx.load_html("https://example.com/", "<html><head></head><body></body></html>").await.unwrap();
+        ctx.load_html(
+            "https://example.com/",
+            "<html><head></head><body></body></html>",
+        )
+        .await
+        .unwrap();
         let out = probe(&ctx, r#"(() => {
             const n = {};
             for (const m of ['trim', 'toLowerCase', 'replace', 'split', 'slice', 'indexOf', 'charCodeAt']) {
@@ -10216,7 +11365,11 @@ mod tests {
             }
         });
         let engine = Engine::new(EngineConfig {
-            pool: PoolConfig { workers: 1, max_live_contexts: 2, max_heap_mb: None },
+            pool: PoolConfig {
+                workers: 1,
+                max_live_contexts: 2,
+                max_heap_mb: None,
+            },
             use_real_network: true,
             ..Default::default()
         })
@@ -10226,13 +11379,24 @@ mod tests {
         let _ = ctx.navigate(&home).await;
         let t = std::time::Instant::now();
         while t.elapsed() < std::time::Duration::from_secs(5)
-            && ctx.evaluate("document.title").await.unwrap_or_default() != Value::String("home loaded".into())
+            && ctx.evaluate("document.title").await.unwrap_or_default()
+                != Value::String("home loaded".into())
         {
             let _ = ctx.run_event_loop().await;
         }
-        assert_eq!(ctx.evaluate("document.title").await.unwrap(), Value::String("home loaded".into()));
-        assert_eq!(ctx.evaluate("location.href").await.unwrap(), Value::String(home));
-        assert_eq!(posts.load(std::sync::atomic::Ordering::SeqCst), 1, "the form was posted once");
+        assert_eq!(
+            ctx.evaluate("document.title").await.unwrap(),
+            Value::String("home loaded".into())
+        );
+        assert_eq!(
+            ctx.evaluate("location.href").await.unwrap(),
+            Value::String(home)
+        );
+        assert_eq!(
+            posts.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the form was posted once"
+        );
     }
 
     /// Text and JSON responses are shown as Chrome 151 builds them: a `<pre>` (styled
@@ -10245,7 +11409,14 @@ mod tests {
         let j = text_document_markup("application/ld+json", "{\"a\":1}").unwrap();
         assert_eq!(j, "<html><head><meta name=\"color-scheme\" content=\"light dark\"><meta charset=\"utf-8\"></head><body><pre>{\"a\":1}</pre><div class=\"json-formatter-container\"></div></body></html>");
         assert!(text_document_markup("text/javascript", "x").is_some());
-        for other in ["text/html", "text/xml", "application/xml", "text/csv", "image/png", "application/octet-stream"] {
+        for other in [
+            "text/html",
+            "text/xml",
+            "application/xml",
+            "text/csv",
+            "image/png",
+            "application/octet-stream",
+        ] {
             assert!(text_document_markup(other, "x").is_none(), "{other}");
         }
     }
@@ -10265,7 +11436,15 @@ mod tests {
                 let n = stream.read(&mut buf).await.unwrap_or(0);
                 let req = String::from_utf8_lossy(&buf[..n]).to_lowercase();
                 let (ctype, body) = if req.starts_with("get /api") {
-                    ("text/plain", if req.contains("x-test: yes") { "header" } else { "plain" }.to_string())
+                    (
+                        "text/plain",
+                        if req.contains("x-test: yes") {
+                            "header"
+                        } else {
+                            "plain"
+                        }
+                        .to_string(),
+                    )
                 } else {
                     ("text/html", "<html><head><title></title><script src=/a.js></script></head><body>\
                        <script>fetch('/gone').catch(() => document.title += 'failed;');\
@@ -10279,7 +11458,11 @@ mod tests {
             }
         });
         let engine = Engine::new(EngineConfig {
-            pool: PoolConfig { workers: 1, max_live_contexts: 2, max_heap_mb: None },
+            pool: PoolConfig {
+                workers: 1,
+                max_live_contexts: 2,
+                max_heap_mb: None,
+            },
             use_real_network: true,
             ..Default::default()
         })
@@ -10290,35 +11473,75 @@ mod tests {
         let log = seen.clone();
         tokio::spawn(async move {
             while let Some(p) = held.recv().await {
-                log.lock().unwrap().push((p.id.clone(), p.url.clone(), p.resource_type));
+                log.lock()
+                    .unwrap()
+                    .push((p.id.clone(), p.url.clone(), p.resource_type));
                 let d = if p.url.ends_with("/a.js") {
-                    Decision::Fulfill { status: 200, headers: Default::default(), body: b"document.title += 'fulfilled;';".to_vec() }
+                    Decision::Fulfill {
+                        status: 200,
+                        headers: Default::default(),
+                        body: b"document.title += 'fulfilled;';".to_vec(),
+                    }
                 } else if p.url.ends_with("/gone") {
                     Decision::Fail
                 } else if p.url.ends_with("/api") {
                     let mut h = p.headers.clone();
                     h.insert("X-Test".into(), "yes".into());
-                    Decision::Continue { url: None, method: None, headers: Some(h), body: None }
+                    Decision::Continue {
+                        url: None,
+                        method: None,
+                        headers: Some(h),
+                        body: None,
+                    }
                 } else {
-                    Decision::Continue { url: None, method: None, headers: None, body: None }
+                    Decision::Continue {
+                        url: None,
+                        method: None,
+                        headers: None,
+                        body: None,
+                    }
                 };
                 let _ = p.reply.send(d);
             }
         });
-        let _ = ctx.navigate(&format!("http://127.0.0.1:{}/", addr.port())).await;
+        let _ = ctx
+            .navigate(&format!("http://127.0.0.1:{}/", addr.port()))
+            .await;
         let t = std::time::Instant::now();
-        let want = |v: &Value| v.as_str().is_some_and(|s| s.contains("failed;") && s.contains("header;"));
-        while t.elapsed() < std::time::Duration::from_secs(8) && !want(&ctx.evaluate("document.title").await.unwrap()) {
+        let want = |v: &Value| {
+            v.as_str()
+                .is_some_and(|s| s.contains("failed;") && s.contains("header;"))
+        };
+        while t.elapsed() < std::time::Duration::from_secs(8)
+            && !want(&ctx.evaluate("document.title").await.unwrap())
+        {
             let _ = ctx.run_event_loop().await;
         }
         let title = ctx.evaluate("document.title").await.unwrap();
-        assert!(want(&title) && title.as_str().unwrap().starts_with("fulfilled;"), "{title}");
+        assert!(
+            want(&title) && title.as_str().unwrap().starts_with("fulfilled;"),
+            "{title}"
+        );
         let seen = seen.lock().unwrap().clone();
-        let kinds: Vec<_> = seen.iter().map(|(_, u, k)| (u.rsplit('/').next().unwrap().to_string(), *k)).collect();
-        assert!(kinds.contains(&("".into(), "Document")) && kinds.contains(&("a.js".into(), "Script")), "{kinds:?}");
+        let kinds: Vec<_> = seen
+            .iter()
+            .map(|(_, u, k)| (u.rsplit('/').next().unwrap().to_string(), *k))
+            .collect();
+        assert!(
+            kinds.contains(&("".into(), "Document")) && kinds.contains(&("a.js".into(), "Script")),
+            "{kinds:?}"
+        );
         for rec in ctx.requests() {
-            let held = seen.iter().find(|(_, u, _)| *u == rec.url).expect("every request was held");
-            assert!(rec.announced && rec.request_id == held.0, "{} {}", rec.url, rec.request_id);
+            let held = seen
+                .iter()
+                .find(|(_, u, _)| *u == rec.url)
+                .expect("every request was held");
+            assert!(
+                rec.announced && rec.request_id == held.0,
+                "{} {}",
+                rec.url,
+                rec.request_id
+            );
         }
         ctx.stop_intercepting();
     }
@@ -10395,7 +11618,10 @@ mod tests {
             Value::String(s) => serde_json::from_str::<Value>(&s).unwrap(),
             v => panic!("expected the probe result, got {v:?}"),
         };
-        assert_eq!(out["ok"], true, "a blank iframe has a contentWindow at once");
+        assert_eq!(
+            out["ok"], true,
+            "a blank iframe has a contentWindow at once"
+        );
         assert_eq!(out["evaluated"], 2, "and its `eval` runs, synchronously");
         assert_eq!(out["ownRealm"], true, "with natives of its own, not ours");
         assert_eq!(out["hasDocument"], "object");
@@ -10602,11 +11828,7 @@ mod tests {
                     let mut buf = [0u8; 4096];
                     let n = stream.read(&mut buf).await.unwrap_or(0);
                     let req = String::from_utf8_lossy(&buf[..n]).to_string();
-                    let path = req
-                        .split_whitespace()
-                        .nth(1)
-                        .unwrap_or("/")
-                        .to_string();
+                    let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
                     if let Ok(mut l) = log.lock() {
                         l.push((path.clone(), req.to_ascii_lowercase()));
                     }
@@ -10664,7 +11886,9 @@ mod tests {
         let ctx = engine.new_context().await.unwrap();
         ctx.navigate(&url).await.unwrap();
 
-        let out = probe(&ctx, r#"__ptJSON.stringify({
+        let out = probe(
+            &ctx,
+            r#"__ptJSON.stringify({
             text: (document.querySelector('x-boxed') || {}).textContent,
             defined: typeof customElements.get('x-boxed'),
             meta: String(globalThis.__meta || '').split('/').pop(),
@@ -10674,9 +11898,15 @@ mod tests {
         )
         .await;
 
-        assert_eq!(out["text"], "built by a module", "the import chain ran: {out}");
+        assert_eq!(
+            out["text"], "built by a module",
+            "the import chain ran: {out}"
+        );
         assert_eq!(out["defined"], "function", "and defined its element");
-        assert_eq!(out["meta"], "app.js", "import.meta.url names the module itself");
+        assert_eq!(
+            out["meta"], "app.js",
+            "import.meta.url names the module itself"
+        );
         assert_eq!(out["trusted"], false);
     }
 
@@ -10705,7 +11935,9 @@ mod tests {
         ctx.evaluate("window.location = '/second'").await.unwrap();
         ctx.run_event_loop().await.unwrap();
 
-        let out = probe(&ctx, r#"__ptJSON.stringify({
+        let out = probe(
+            &ctx,
+            r#"__ptJSON.stringify({
             where: location.pathname,
             text: document.body.textContent.trim(),
             isObject: typeof location === 'object' && typeof location.href === 'string',
@@ -10714,11 +11946,17 @@ mod tests {
         .await;
         assert_eq!(out["where"], "/second", "the assignment navigated");
         assert_eq!(out["text"], "second");
-        assert_eq!(out["isObject"], true, "and location is still Location, not a string");
+        assert_eq!(
+            out["isObject"], true,
+            "and location is still Location, not a string"
+        );
 
         let seen = log.lock().unwrap().clone();
         let first = seen.iter().find(|(p, _)| p == "/").expect("the first load");
-        let second = seen.iter().find(|(p, _)| p == "/second").expect("the navigation");
+        let second = seen
+            .iter()
+            .find(|(p, _)| p == "/second")
+            .expect("the navigation");
         assert!(
             first.1.contains("sec-fetch-site: none") && first.1.contains("sec-fetch-user: ?1"),
             "an address someone asked for comes from nowhere, by a person"
@@ -10768,7 +12006,11 @@ mod tests {
                           globalThis.__pageClicks = 0;
                           document.getElementById('danger').addEventListener('click', () => { __pageClicks++; });
                         </script></body></html>"#;
-                    let body = if req.contains("GET /inner") { inner } else { outer };
+                    let body = if req.contains("GET /inner") {
+                        inner
+                    } else {
+                        outer
+                    };
                     let resp = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
                         body.len(),
@@ -10824,14 +12066,20 @@ mod tests {
         ctx.run_event_loop().await.unwrap();
 
         let out = probe(&ctx, "__ptJSON.stringify(globalThis.__fromWorker || {})").await;
-        assert_eq!(out["self"], "[object DedicatedWorkerGlobalScope]", "got: {out}");
+        assert_eq!(
+            out["self"], "[object DedicatedWorkerGlobalScope]",
+            "got: {out}"
+        );
         assert_eq!(out["nav"], "[object WorkerNavigator]");
         assert_eq!(out["loc"], "[object WorkerLocation]");
         assert_eq!(out["ua"], "present", "a worker still has a user agent");
         assert_eq!(out["plugins"], "undefined", "but no plugins");
         assert_eq!(out["webdriver"], "undefined", "and no webdriver");
         for absent in ["document", "window", "localStorage", "screen"] {
-            assert_eq!(out[absent], "undefined", "{absent} does not exist in a worker");
+            assert_eq!(
+                out[absent], "undefined",
+                "{absent} does not exist in a worker"
+            );
         }
         assert_eq!(out["fetch"], "function", "what a worker does have, it has");
         assert_eq!(out["json"], "function", "the language comes along");
@@ -11124,7 +12372,10 @@ mod tests {
             out["during"]["active"], "BODY",
             "and its body already has the focus"
         );
-        assert_eq!(out["dcl"], "interactive", "DOMContentLoaded fires at interactive");
+        assert_eq!(
+            out["dcl"], "interactive",
+            "DOMContentLoaded fires at interactive"
+        );
         assert_eq!(out["after"], "complete", "and load leaves it complete");
         assert_eq!(out["active"], "BODY", "activeElement is never null");
     }
@@ -11168,10 +12419,20 @@ mod tests {
             });
         })()"#).await;
 
-        assert_eq!(out["distinct"], true, "three interfaces, three prototypes: {out}");
+        assert_eq!(
+            out["distinct"], true,
+            "three interfaces, three prototypes: {out}"
+        );
         assert_eq!(
             out["canvasChain"],
-            serde_json::json!(["HTMLCanvasElement", "HTMLElement", "Element", "Node", "EventTarget", "Object"]),
+            serde_json::json!([
+                "HTMLCanvasElement",
+                "HTMLElement",
+                "Element",
+                "Node",
+                "EventTarget",
+                "Object"
+            ]),
             "a canvas climbs Chrome's ladder: {}",
             out["canvasChain"]
         );
@@ -11186,8 +12447,14 @@ mod tests {
         );
         assert_eq!(out["isCanvas"], true);
         assert_eq!(out["divIsNotCanvas"], true, "a div is not a canvas");
-        assert_eq!(out["climbs"], true, "and it is still an Element, a Node, a target");
-        assert_eq!(out["getContextOn"], true, "getContext belongs to the canvas");
+        assert_eq!(
+            out["climbs"], true,
+            "and it is still an Element, a Node, a target"
+        );
+        assert_eq!(
+            out["getContextOn"], true,
+            "getContext belongs to the canvas"
+        );
         assert_eq!(out["idOn"], true, "`id` to Element");
         assert_eq!(out["hiddenOn"], true, "`hidden` to HTMLElement");
     }
@@ -11247,8 +12514,16 @@ mod tests {
             "every function on the graph is the browser's own: {}",
             out["f"]
         );
-        assert_eq!(out["unknown"], serde_json::json!([]), "no unclassifiable value");
-        assert_eq!(out["inaccessible"], serde_json::json!([]), "no getter throws");
+        assert_eq!(
+            out["unknown"],
+            serde_json::json!([]),
+            "no unclassifiable value"
+        );
+        assert_eq!(
+            out["inaccessible"],
+            serde_json::json!([]),
+            "no getter throws"
+        );
         assert!(
             out["native"].as_u64().unwrap_or(0) > 1000,
             "and the graph is a browser's size: {out}"
@@ -11315,7 +12590,9 @@ mod tests {
             .await
             .unwrap();
 
-        let out = probe(&ctx, r#"(() => {
+        let out = probe(
+            &ctx,
+            r#"(() => {
             const p = trustedTypes.createPolicy('nokk-eval', { createScript: (s) => s });
             const code = p.createScript('function __declared(){ return 42 }');
             // As in Chrome: indirect eval declares globally, direct eval sees the local scope
@@ -11338,15 +12615,29 @@ mod tests {
               direct,
               evalOwn: Reflect.ownKeys(eval).join(','),
             });
-        })()"#).await;
+        })()"#,
+        )
+        .await;
 
         assert_eq!(out["kind"], "[object TrustedScript]");
-        assert_eq!(out["direct"], 10, "a direct eval of a TrustedScript sees the local scope");
-        assert_eq!(out["evalOwn"], "length,name", "eval stays the engine's own function");
-        assert_eq!(out["declared"], "function", "the declaration reached the global scope");
+        assert_eq!(
+            out["direct"], 10,
+            "a direct eval of a TrustedScript sees the local scope"
+        );
+        assert_eq!(
+            out["evalOwn"], "length,name",
+            "eval stays the engine's own function"
+        );
+        assert_eq!(
+            out["declared"], "function",
+            "the declaration reached the global scope"
+        );
         assert_eq!(out["value"], 42);
         assert_eq!(out["plain"], 2, "a plain string still evaluates");
-        assert_eq!(out["native"], true, "and eval still reads as the browser's own");
+        assert_eq!(
+            out["native"], true,
+            "and eval still reads as the browser's own"
+        );
         assert_eq!(out["enumerable"], false);
         assert_eq!(out["timer"], "accepted");
     }
@@ -11389,17 +12680,34 @@ mod tests {
         assert_eq!(
             out["brands"],
             serde_json::json!([
-                "[object GPU]", "[object StorageManager]", "[object Permissions]",
-                "[object NetworkInformation]", "[object Keyboard]", "[object MediaCapabilities]",
-                "[object NavigatorUAData]", "[object ScreenOrientation]"
+                "[object GPU]",
+                "[object StorageManager]",
+                "[object Permissions]",
+                "[object NetworkInformation]",
+                "[object Keyboard]",
+                "[object MediaCapabilities]",
+                "[object NavigatorUAData]",
+                "[object ScreenOrientation]"
             ]),
         );
         assert_eq!(out["adapter"], "[object GPUAdapter]");
-        assert_eq!(out["limits"], serde_json::json!(["[object GPUSupportedLimits]", 16384]));
-        assert_eq!(out["info"], serde_json::json!(["[object GPUAdapterInfo]", "intel"]));
-        assert_eq!(out["features"], serde_json::json!(["[object GPUSupportedFeatures]", true]));
+        assert_eq!(
+            out["limits"],
+            serde_json::json!(["[object GPUSupportedLimits]", 16384])
+        );
+        assert_eq!(
+            out["info"],
+            serde_json::json!(["[object GPUAdapterInfo]", "intel"])
+        );
+        assert_eq!(
+            out["features"],
+            serde_json::json!(["[object GPUSupportedFeatures]", true])
+        );
         assert_eq!(out["format"], "rgba8unorm");
-        assert_eq!(out["layout"], serde_json::json!(["[object KeyboardLayoutMap]", 48, "q"]));
+        assert_eq!(
+            out["layout"],
+            serde_json::json!(["[object KeyboardLayoutMap]", 48, "q"])
+        );
         assert_eq!(out["decoding"], true);
         assert_eq!(out["highEntropy"], "x86");
     }
@@ -11438,11 +12746,20 @@ mod tests {
             });
         })()"#).await;
 
-        assert!(out["advances"].as_u64().unwrap_or(0) > 0, "the clock moves inside one task: {out}");
-        assert!(out["distinct"].as_u64().unwrap_or(0) > 1, "and successive readings differ: {out}");
+        assert!(
+            out["advances"].as_u64().unwrap_or(0) > 0,
+            "the clock moves inside one task: {out}"
+        );
+        assert!(
+            out["distinct"].as_u64().unwrap_or(0) > 1,
+            "and successive readings differ: {out}"
+        );
         assert_eq!(out["quantum"], 0.1, "in Chrome's 0.1 ms steps");
         assert_eq!(out["monotonic"], true);
-        assert_eq!(out["coherent"], true, "timeOrigin + now() still tracks the wall clock");
+        assert_eq!(
+            out["coherent"], true,
+            "timeOrigin + now() still tracks the wall clock"
+        );
     }
 
     /// Font enumeration goes through `document.fonts.check('12px "Some Font"')`,
@@ -11458,7 +12775,9 @@ mod tests {
             .await
             .unwrap();
 
-        let out = probe(&ctx, r#"(() => {
+        let out = probe(
+            &ctx,
+            r#"(() => {
             const bad = (() => { try { document.fonts.check('not-a-font'); return 'no throw'; }
                                  catch (e) { return e.name; } })();
             return __ptJSON.stringify({
@@ -11474,13 +12793,18 @@ mod tests {
               lockMembers: Object.getOwnPropertyNames(Object.getPrototypeOf(navigator.locks))
                 .filter((k) => k !== 'constructor').sort(),
             });
-        })()"#).await;
+        })()"#,
+        )
+        .await;
 
         assert_eq!(out["tag"], "[object FontFaceSet]");
         assert_eq!(out["size"], 0);
         assert_eq!(out["status"], "loaded");
         assert_eq!(out["known"], true);
-        assert_eq!(out["unknown"], true, "a fallback is always there, so any family checks out");
+        assert_eq!(
+            out["unknown"], true,
+            "a fallback is always there, so any family checks out"
+        );
         assert_eq!(out["bad"], "SyntaxError");
         assert_eq!(out["iterable"], 0);
         // A browser does have the name on the window: `FontFaceSet` sits next to
@@ -11516,8 +12840,14 @@ mod tests {
 
         let out = pump_until(&ctx, "__ptJSON.stringify(__log)", 40).await;
         let said = out.as_str().unwrap_or("");
-        assert!(said.contains(r#""done":true"#), "the promise settled: {said}");
-        assert!(said.contains("[object WebAssembly.Module]"), "with a module: {said}");
+        assert!(
+            said.contains(r#""done":true"#),
+            "the promise settled: {said}"
+        );
+        assert!(
+            said.contains("[object WebAssembly.Module]"),
+            "with a module: {said}"
+        );
     }
 
     /// `<template>` keeps its parsed markup in a fragment of its own, not in
@@ -11537,7 +12867,9 @@ mod tests {
         .await
         .unwrap();
 
-        let out = probe(&ctx, r#"(() => {
+        let out = probe(
+            &ctx,
+            r#"(() => {
             const tag = (v) => Object.prototype.toString.call(v);
             const t = document.getElementById('t');
             const made = document.createElement('template');
@@ -11555,7 +12887,9 @@ mod tests {
               cloneIface: tag(clone),
               fragment: Object.getOwnPropertyNames(DocumentFragment.prototype).length,
             });
-        })()"#).await;
+        })()"#,
+        )
+        .await;
 
         assert_eq!(out["content"], "[object DocumentFragment]");
         assert_eq!(out["nodeType"], 11);
@@ -11567,8 +12901,14 @@ mod tests {
         assert_eq!(out["madeKids"], 1, "innerHTML parses into the content");
         assert_eq!(out["madeOwn"], 0);
         assert_eq!(out["cloneKids"], 2, "a deep clone brings the content along");
-        assert_eq!(out["cloneIface"], "[object HTMLTemplateElement]", "and keeps its interface");
-        assert_eq!(out["fragment"], 12, "DocumentFragment is its own interface: Chrome's 11 + constructor");
+        assert_eq!(
+            out["cloneIface"], "[object HTMLTemplateElement]",
+            "and keeps its interface"
+        );
+        assert_eq!(
+            out["fragment"], 12,
+            "DocumentFragment is its own interface: Chrome's 11 + constructor"
+        );
     }
 
     /// Cloudflare's collector worker is 291 bytes and runs its task under one
@@ -11599,13 +12939,25 @@ mod tests {
 
         let out = pump_until(&ctx, "__ptJSON.stringify(__log)", 40).await;
         let said = out.as_str().unwrap_or("");
-        assert!(said.contains(r#""done":true"#), "the worker answered: {said}");
-        assert!(said.contains("trusted=true"), "its message was trusted: {said}");
+        assert!(
+            said.contains(r#""done":true"#),
+            "the worker answered: {said}"
+        );
+        assert!(
+            said.contains("trusted=true"),
+            "its message was trusted: {said}"
+        );
         assert!(said.contains("origin=[]"), "with an empty origin: {said}");
         assert!(said.contains("source=null"), "and no source: {said}");
         assert!(said.contains("data=task"), "carrying what was sent: {said}");
-        assert!(said.contains("gate=true"), "so the collector's own gate opens: {said}");
-        assert!(said.contains(r#""replyTrusted":true"#), "and the answer home is trusted too: {said}");
+        assert!(
+            said.contains("gate=true"),
+            "so the collector's own gate opens: {said}"
+        );
+        assert!(
+            said.contains(r#""replyTrusted":true"#),
+            "and the answer home is trusted too: {said}"
+        );
     }
 
     /// `document.styleSheets` was a list of literals with an empty `cssRules`.
@@ -11633,7 +12985,9 @@ mod tests {
         .await
         .unwrap();
 
-        let out = probe(&ctx, r#"(() => {
+        let out = probe(
+            &ctx,
+            r#"(() => {
             const tag = (v) => Object.prototype.toString.call(v);
             const ss = document.styleSheets, s0 = ss[0], r0 = s0.cssRules[0];
             return __ptJSON.stringify({
@@ -11645,11 +12999,17 @@ mod tests {
               texts: [...s0.cssRules].map((r) => r.cssText),
               stable: document.styleSheets[0] === document.styleSheets[0],
             });
-        })()"#).await;
+        })()"#,
+        )
+        .await;
 
         assert_eq!(out["list"], "[object StyleSheetList]");
         assert_eq!(out["len"], 1);
-        assert_eq!(out["own"], serde_json::json!(["0"]), "own properties are the indices, nothing else");
+        assert_eq!(
+            out["own"],
+            serde_json::json!(["0"]),
+            "own properties are the indices, nothing else"
+        );
         assert_eq!(out["sheet"], "[object CSSStyleSheet]");
         assert_eq!(out["media"], "screen");
         assert_eq!(out["owner"], "style");
@@ -11674,7 +13034,10 @@ opacity: 0.9; flex-flow: column; }",
             ]),
             "serialised the way Chrome serialises them"
         );
-        assert_eq!(out["stable"], true, "and the sheet is the same object each time");
+        assert_eq!(
+            out["stable"], true,
+            "and the sheet is the same object each time"
+        );
     }
 
     /// A collector that wants a canvas fingerprint from a worker has exactly one
@@ -11713,7 +13076,10 @@ opacity: 0.9; flex-flow: column; }",
 
         let out = pump_until(&ctx, "__ptJSON.stringify(__log)", 40).await;
         let said = out.as_str().unwrap_or("");
-        assert!(said.contains("\"done\":true"), "the worker answered: {said}");
+        assert!(
+            said.contains("\"done\":true"),
+            "the worker answered: {said}"
+        );
         assert!(
             said.contains("[object OffscreenCanvasRenderingContext2D]"),
             "and its context is the interface a worker has: {said}"
@@ -11736,7 +13102,9 @@ opacity: 0.9; flex-flow: column; }",
             .await
             .unwrap();
 
-        let out = probe(&ctx, r#"(() => {
+        let out = probe(
+            &ctx,
+            r#"(() => {
             const f = document.createElement('iframe');
             f.src = 'about:blank';
             document.body.appendChild(f);
@@ -11747,7 +13115,9 @@ opacity: 0.9; flex-flow: column; }",
               eval: w ? String(w.eval('2 + 2')) : 'no window',
               parentIsUs: w ? w.parent === window : false,
             });
-        })()"#).await;
+        })()"#,
+        )
+        .await;
 
         assert_eq!(out["window"], "object");
         assert_eq!(out["document"], "object");
@@ -11857,7 +13227,10 @@ opacity: 0.9; flex-flow: column; }",
         })()"#).await;
 
         assert_eq!(out["imported"], true, "template content landed in the body");
-        assert_eq!(out["shallow"], 0, "without `deep` only the node itself is copied");
+        assert_eq!(
+            out["shallow"], 0,
+            "without `deep` only the node itself is copied"
+        );
         assert_eq!(out["adopted"], true);
         assert_eq!(
             out["noArgs"],
@@ -11899,7 +13272,9 @@ opacity: 0.9; flex-flow: column; }",
             .await
             .unwrap();
 
-        let out = probe(&ctx, r#"(() => {
+        let out = probe(
+            &ctx,
+            r#"(() => {
             const v = document.createElement('video');
             const a = document.createElement('audio');
             const ask = (t) => (t.slice(0, 5) === 'audio' ? a : v).canPlayType(t);
@@ -11925,7 +13300,9 @@ opacity: 0.9; flex-flow: column; }",
               mseAacBare: MediaSource.isTypeSupported('audio/aac;'),
               mseMp4Bare: MediaSource.isTypeSupported('audio/mp4;'),
             });
-        })()"#).await;
+        })()"#,
+        )
+        .await;
 
         for (key, want) in [
             ("mp4ac3", ""),
@@ -11946,9 +13323,15 @@ opacity: 0.9; flex-flow: column; }",
             assert_eq!(out[key], want, "{key} answers unlike a browser: {out}");
         }
         assert_eq!(out["mseTs"], true, "MediaSource accepts MPEG-TS");
-        assert_eq!(out["mseMp4Mp3"], false, "but not mp3 in mp4, though canPlayType says `probably`");
+        assert_eq!(
+            out["mseMp4Mp3"], false,
+            "but not mp3 in mp4, though canPlayType says `probably`"
+        );
         assert_eq!(out["mseMp4Avc"], true);
-        assert_eq!(out["mseMkv"], false, "MediaSource rejects Matroska entirely");
+        assert_eq!(
+            out["mseMkv"], false,
+            "MediaSource rejects Matroska entirely"
+        );
         assert_eq!(out["mseAacBare"], true);
         assert_eq!(out["mseMp4Bare"], false);
     }
@@ -12003,7 +13386,10 @@ opacity: 0.9; flex-flow: column; }",
             Some(0),
             "the page must see no calls: {out}"
         );
-        assert_eq!(out["px"][0], 255, "and the offscreen canvas still draws: {out}");
+        assert_eq!(
+            out["px"][0], 255,
+            "and the offscreen canvas still draws: {out}"
+        );
         assert_eq!(out["px"][2], 255);
         assert_eq!(out["bmp"], "16x16");
         assert_eq!(out["tag"], "[object OffscreenCanvasRenderingContext2D]");
@@ -12086,7 +13472,10 @@ opacity: 0.9; flex-flow: column; }",
             "style is set and serialized as in a browser: {out}"
         );
         assert_eq!(out["cls"], "a");
-        assert_eq!(out["text"], "\u{43f}\u{440}\u{438}\u{432}\u{435}\u{442}<i>x</i>");
+        assert_eq!(
+            out["text"],
+            "\u{43f}\u{440}\u{438}\u{432}\u{435}\u{442}<i>x</i>"
+        );
     }
 
     /// The challenge captures the whole computed style, the largest part of its report.
@@ -12100,7 +13489,8 @@ opacity: 0.9; flex-flow: column; }",
         let ctx = engine.new_context().await.unwrap();
         ctx.load_html(
             "https://example.com/",
-            concat!(r#"<html><head><style>
+            concat!(
+                r#"<html><head><style>
               body { font: 16px/1.4 system-ui, sans-serif; color: #111; }
               #w { display: flex; border: 1px solid #e0e0e0; border-radius: 4px;
                    box-shadow: 0 0 5px rgba(0,0,0,0.1); background: rgba(255,255,255,0.9); }
@@ -12110,8 +13500,11 @@ opacity: 0.9; flex-flow: column; }",
                      text-decoration: underline dotted red; }
               a { color: rebeccapurple; }
             </style></head><body>
-              <div id=w><div id=box></div><a id=lnk href=#>"#, "\u{441}\u{441}\u{44b}\u{43b}\u{43a}\u{430}", r#"</a></div>
-            </body></html>"#),
+              <div id=w><div id=box></div><a id=lnk href=#>"#,
+                "\u{441}\u{441}\u{44b}\u{43b}\u{43a}\u{430}",
+                r#"</a></div>
+            </body></html>"#
+            ),
         )
         .await
         .unwrap();
@@ -12147,13 +13540,19 @@ opacity: 0.9; flex-flow: column; }",
         assert_eq!(out["names"], 475, "as many names as a browser: {out}");
         assert_eq!(out["shorthands"], 0, "no shorthands among them");
         assert_eq!(out["bgW"], "rgba(255, 255, 255, 0.9)");
-        assert_eq!(out["radiusW"], "4px", "logical corner mirrors the physical one");
+        assert_eq!(
+            out["radiusW"], "4px",
+            "logical corner mirrors the physical one"
+        );
         assert_eq!(out["shadowW"], "rgba(0, 0, 0, 0.1) 0px 0px 5px 0px");
         assert_eq!(out["lineW"], "22.4px", "a multiplier serializes in pixels");
         assert_eq!(out["borderW"], "rgb(224, 224, 224)|solid|1px");
         assert_eq!(out["logical"], "rgb(224, 224, 224)");
         assert_eq!(out["bgBox"], "rgb(0, 0, 255)");
-        assert_eq!(out["sizeBox"], "14px", "font size from the `font` shorthand");
+        assert_eq!(
+            out["sizeBox"], "14px",
+            "font size from the `font` shorthand"
+        );
         assert_eq!(out["lineBox"], "21px");
         assert_eq!(out["variantBox"], "small-caps");
         assert_eq!(out["styleBox"], "italic");
@@ -12162,16 +13561,28 @@ opacity: 0.9; flex-flow: column; }",
         assert_eq!(out["transBox"], "0.2s|ease-in-out");
         assert_eq!(out["minBox"], "auto", "flex item: min is `auto`");
         assert_eq!(out["displayBox"], "block");
-        assert_eq!(out["caretBox"], "rgb(17, 17, 17)", "`currentColor` is the element's colour");
+        assert_eq!(
+            out["caretBox"], "rgb(17, 17, 17)",
+            "`currentColor` is the element's colour"
+        );
         assert_eq!(out["colourLnk"], "rgb(102, 51, 153)");
-        assert_eq!(out["fontW"], "16px / 22.4px system-ui, sans-serif",
-                   "the `font` shorthand serializes whole, with line height: {out}");
-        assert_eq!(out["fontBox"], "italic small-caps 700 14px / 21px Georgia, serif");
+        assert_eq!(
+            out["fontW"], "16px / 22.4px system-ui, sans-serif",
+            "the `font` shorthand serializes whole, with line height: {out}"
+        );
+        assert_eq!(
+            out["fontBox"],
+            "italic small-caps 700 14px / 21px Georgia, serif"
+        );
         assert_eq!(out["transitionBox"], "0.2s ease-in-out");
-        assert_eq!(out["webkitBox"], "2px solid rgb(0, 120, 212)",
-                   "vendor names of logical sides answer the same: {out}");
-        assert_eq!(out["webkitAlias"], "row",
-                   "`webkitFlexDirection` is just an alias of `flex-direction`");
+        assert_eq!(
+            out["webkitBox"], "2px solid rgb(0, 120, 212)",
+            "vendor names of logical sides answer the same: {out}"
+        );
+        assert_eq!(
+            out["webkitAlias"], "row",
+            "`webkitFlexDirection` is just an alias of `flex-direction`"
+        );
         assert_eq!(out["strokeLnk"], "0px rgb(102, 51, 153)");
         assert_eq!(out["cursorLnk"], "pointer", "a link has its UA style");
         assert_eq!(out["decorLnk"], "underline");
@@ -12226,7 +13637,12 @@ variationSettings,weight",
         if out["native"] == true {
             assert_eq!(
                 out["result"],
-                serde_json::json!(["DejaVu Sans", "Liberation Sans", "NetworkError", "NetworkError"]),
+                serde_json::json!([
+                    "DejaVu Sans",
+                    "Liberation Sans",
+                    "NetworkError",
+                    "NetworkError"
+                ]),
                 "installed fonts found, substituted and made-up ones not: {out}"
             );
             assert_eq!(
@@ -12236,7 +13652,12 @@ variationSettings,weight",
         } else {
             assert_eq!(
                 out["result"],
-                serde_json::json!(["NetworkError", "NetworkError", "NetworkError", "NetworkError"]),
+                serde_json::json!([
+                    "NetworkError",
+                    "NetworkError",
+                    "NetworkError",
+                    "NetworkError"
+                ]),
                 "without fonts everything rejects: {out}"
             );
         }
@@ -12355,17 +13776,46 @@ variationSettings,weight",
             });
         })()"#).await;
 
-        assert_eq!(out["params"], serde_json::json!([["1", "2"], "a=1&a=2&b=", 3, 3]));
+        assert_eq!(
+            out["params"],
+            serde_json::json!([["1", "2"], "a=1&a=2&b=", 3, 3])
+        );
         assert_eq!(out["form"], serde_json::json!([["a", "a"], 2]));
-        assert_eq!(out["transfer"], serde_json::json!([8, 0]), "transfer detaches the source buffer");
-        assert_eq!(out["parsed"], serde_json::json!(["P", "\u{43f}\u{440}\u{438}\u{432}\u{435}\u{442}", "text/html"]));
-        assert_eq!(out["xml"], "<div xmlns=\"http://www.w3.org/1999/xhtml\"></div>");
-        assert_eq!(out["xmlVoid"], "<br xmlns=\"http://www.w3.org/1999/xhtml\" />");
-        assert_eq!(out["supports"], serde_json::json!([true, true, false, true]));
+        assert_eq!(
+            out["transfer"],
+            serde_json::json!([8, 0]),
+            "transfer detaches the source buffer"
+        );
+        assert_eq!(
+            out["parsed"],
+            serde_json::json!([
+                "P",
+                "\u{43f}\u{440}\u{438}\u{432}\u{435}\u{442}",
+                "text/html"
+            ])
+        );
+        assert_eq!(
+            out["xml"],
+            "<div xmlns=\"http://www.w3.org/1999/xhtml\"></div>"
+        );
+        assert_eq!(
+            out["xmlVoid"],
+            "<br xmlns=\"http://www.w3.org/1999/xhtml\" />"
+        );
+        assert_eq!(
+            out["supports"],
+            serde_json::json!([true, true, false, true])
+        );
         assert_eq!(out["decoded"], "\u{41f}\u{440}\u{438}\u{432}\u{435}\u{442}");
         assert_eq!(out["koi"], "\u{43f}\u{440}\u{438}\u{432}\u{435}\u{442}");
-        assert_eq!(out["labels"], serde_json::json!(["windows-1251", "windows-1252"]));
-        assert_eq!(out["holes"], serde_json::json!([0x20ac, 0x81, 0x8d, 0x8f, 0x90, 0x9d, 0xff]));
+        assert_eq!(
+            out["labels"],
+            serde_json::json!(["windows-1251", "windows-1252"])
+        );
+        assert_eq!(
+            out["holes"],
+            serde_json::json!([0x20ac, 0x81, 0x8d, 0x8f, 0x90, 0x9d, 0xff])
+        );
         assert_eq!(out["koiu"], serde_json::json!([0x45e, 0x40e]));
         assert_eq!(out["badLabel"], "threw RangeError");
         assert_eq!(out["requestType"], "text/plain;charset=UTF-8");
@@ -12411,7 +13861,12 @@ variationSettings,weight",
         let out = probe(&ctx, "__ptJSON.stringify(window.__nav)").await;
         assert_eq!(
             out["perms"],
-            serde_json::json!(["prompt", "granted", "threw NotSupportedError", "threw TypeError"]),
+            serde_json::json!([
+                "prompt",
+                "granted",
+                "threw NotSupportedError",
+                "threw TypeError"
+            ]),
             "permission table as in a browser: {out}"
         );
         assert_eq!(
@@ -12420,11 +13875,17 @@ variationSettings,weight",
             "three unnamed devices, as a browser without permission: {out}"
         );
         assert_eq!(out["battery"], serde_json::json!([true, 1, 0, "forever"]));
-        assert_eq!(out["io"], serde_json::json!([[0, 0.5], "10px 10px 10px 10px", null]));
+        assert_eq!(
+            out["io"],
+            serde_json::json!([[0, 0.5], "10px 10px 10px 10px", null])
+        );
         assert_eq!(out["session"], serde_json::json!(["none", "function"]));
         assert_eq!(out["constraints"], 36);
-        assert_eq!(out["activation"], serde_json::json!([false, false]),
-                   "false for both before a gesture: {out}");
+        assert_eq!(
+            out["activation"],
+            serde_json::json!([false, false]),
+            "false for both before a gesture: {out}"
+        );
         assert_eq!(out["scheduling"], "function");
     }
 
@@ -12450,13 +13911,17 @@ variationSettings,weight",
             ctx.run_event_loop().await.unwrap();
         }
 
-        let out = probe(&ctx, r#"(() => {
+        let out = probe(
+            &ctx,
+            r#"(() => {
             const s = window.__stamps;
             const d = [];
             for (let i = 1; i < s.length; i++) d.push(Math.round((s[i] - s[i - 1]) * 1000) / 1000);
             return __ptJSON.stringify({ count: s.length, deltas: d,
               tenths: s.every((x) => Math.abs(x * 10 - Math.round(x * 10)) < 1e-9) });
-        })()"#).await;
+        })()"#,
+        )
+        .await;
 
         assert!(
             out["count"].as_u64().unwrap_or(0) >= 5,
@@ -12481,11 +13946,16 @@ variationSettings,weight",
         let _serial = serial().await;
         let engine = engine(1, 2);
         let ctx = engine.new_context().await.unwrap();
-        ctx.load_html("https://example.com/", "<!doctype html><html><body></body></html>")
-            .await
-            .unwrap();
+        ctx.load_html(
+            "https://example.com/",
+            "<!doctype html><html><body></body></html>",
+        )
+        .await
+        .unwrap();
 
-        let out = probe(&ctx, r#"(() => {
+        let out = probe(
+            &ctx,
+            r#"(() => {
             const st = document.createElement('style');
             st.textContent = `
               .a { box-shadow: inset 0 0 0 rgb(34, 139, 73); }
@@ -12505,11 +13975,17 @@ variationSettings,weight",
             `;
             document.documentElement.appendChild(st);
             return __ptJSON.stringify([...st.sheet.cssRules].map((r) => r.cssText));
-        })()"#).await;
+        })()"#,
+        )
+        .await;
 
         let got: Vec<String> = out
             .as_array()
-            .map(|a| a.iter().map(|v| v.as_str().unwrap_or("").to_string()).collect())
+            .map(|a| {
+                a.iter()
+                    .map(|v| v.as_str().unwrap_or("").to_string())
+                    .collect()
+            })
             .unwrap_or_default();
         let want = [
             ".a { box-shadow: rgb(34, 139, 73) 0px 0px 0px inset; }",
@@ -12567,14 +14043,36 @@ variationSettings,weight",
         })()"#).await;
 
         assert_eq!(out["a"]["h"], 54.0, "two paragraphs: 19 + 16 + 19: {out}");
-        assert_eq!(out["a"]["kids"][0], 0.0, "the first child's margin escaped: {out}");
-        assert_eq!(out["a"]["kids"][1], 35.0, "one margin between paragraphs, not two: {out}");
-        assert_eq!(out["b"]["h"], 0.0, "an empty block collapses entirely: {out}");
-        assert_eq!(out["c"]["h"], 51.0, "a border keeps the margin inside: {out}");
+        assert_eq!(
+            out["a"]["kids"][0], 0.0,
+            "the first child's margin escaped: {out}"
+        );
+        assert_eq!(
+            out["a"]["kids"][1], 35.0,
+            "one margin between paragraphs, not two: {out}"
+        );
+        assert_eq!(
+            out["b"]["h"], 0.0,
+            "an empty block collapses entirely: {out}"
+        );
+        assert_eq!(
+            out["c"]["h"], 51.0,
+            "a border keeps the margin inside: {out}"
+        );
         assert_eq!(out["c"]["kids"][0], 17.0, "border plus margin: {out}");
-        assert_eq!(out["d"]["h"], 0.0, "`<html>` in a fragment makes no node: {out}");
-        assert_eq!(out["d"]["kids"].as_array().map(|a| a.len()), Some(0), "and no children: {out}");
-        assert_eq!(out["border"], "1px", "the shorthand reads via the longhand: {out}");
+        assert_eq!(
+            out["d"]["h"], 0.0,
+            "`<html>` in a fragment makes no node: {out}"
+        );
+        assert_eq!(
+            out["d"]["kids"].as_array().map(|a| a.len()),
+            Some(0),
+            "and no children: {out}"
+        );
+        assert_eq!(
+            out["border"], "1px",
+            "the shorthand reads via the longhand: {out}"
+        );
     }
 
     /// Inline children share a line, wrap by width and sit on a common baseline; an
@@ -12603,7 +14101,9 @@ variationSettings,weight",
         .await
         .unwrap();
 
-        let out = probe(&ctx, r#"(() => {
+        let out = probe(
+            &ctx,
+            r#"(() => {
             const pick = (id) => { const d = document.getElementById(id);
               const base = d.getBoundingClientRect();
               return { h: parseFloat(getComputedStyle(d).height),
@@ -12612,13 +14112,24 @@ variationSettings,weight",
                           Math.round(r.width), Math.round(r.height)]; }) };
             };
             return __ptJSON.stringify({ a: pick('a'), b: pick('b'), c: pick('c'), d: pick('d') });
-        })()"#).await;
+        })()"#,
+        )
+        .await;
 
         let kids = |key: &str| -> Vec<Vec<f64>> {
             out[key]["kids"]
                 .as_array()
-                .map(|a| a.iter().map(|r| r.as_array().unwrap().iter()
-                    .filter_map(|v| v.as_f64()).collect()).collect())
+                .map(|a| {
+                    a.iter()
+                        .map(|r| {
+                            r.as_array()
+                                .unwrap()
+                                .iter()
+                                .filter_map(|v| v.as_f64())
+                                .collect()
+                        })
+                        .collect()
+                })
                 .unwrap_or_default()
         };
         let h = |key: &str| out[key]["h"].as_f64().unwrap_or_default();
@@ -12626,7 +14137,10 @@ variationSettings,weight",
         let a = kids("a");
         assert_eq!(a.len(), 2, "both words present: {out}");
         assert_eq!(a[0][1], a[1][1], "both words on one line: {out}");
-        assert_eq!(a[1][0], a[0][2], "the second starts where the first ended: {out}");
+        assert_eq!(
+            a[1][0], a[0][2],
+            "the second starts where the first ended: {out}"
+        );
         assert_eq!(a[0][3], h("a"), "line height is the box height: {out}");
 
         assert_eq!(h("b"), 0.0, "an empty inline box makes no line: {out}");
@@ -12634,9 +14148,15 @@ variationSettings,weight",
         let c = kids("c");
         assert_eq!(c[0][0], 0.0, "first inline-block at the left edge: {out}");
         assert_eq!(c[1][0], 30.0, "second right after it: {out}");
-        assert_eq!(c[0][1] + c[0][3], c[1][1] + c[1][3],
-            "both bottoms on the common baseline: {out}");
-        assert!(h("c") > c[0][1] + c[0][3], "descent remains below the baseline: {out}");
+        assert_eq!(
+            c[0][1] + c[0][3],
+            c[1][1] + c[1][3],
+            "both bottoms on the common baseline: {out}"
+        );
+        assert!(
+            h("c") > c[0][1] + c[0][3],
+            "descent remains below the baseline: {out}"
+        );
 
         let d = kids("d");
         assert_eq!(d[0][0], 0.0, "wrapped content starts at the left: {out}");
@@ -12661,28 +14181,56 @@ variationSettings,weight",
         .await
         .unwrap();
 
-        let out = probe(&ctx, r#"(() => {
+        let out = probe(
+            &ctx,
+            r#"(() => {
             const g = (sel) => { const cs = getComputedStyle(document.querySelector(sel));
               return [cs.marginTop, cs.marginLeft, cs.unicodeBidi, cs.fontSize]; };
             return __ptJSON.stringify({ body: g('body'), p: g('p'), h1: g('h1'), pre: g('pre'),
               ul: g('ul'), quote: g('blockquote'), input: g('input'), div: g('div'),
               h1w: getComputedStyle(document.querySelector('h1')).fontWeight });
-        })()"#).await;
+        })()"#,
+        )
+        .await;
 
         let row = |key: &str| -> Vec<String> {
             out[key]
                 .as_array()
-                .map(|a| a.iter().map(|v| v.as_str().unwrap_or("").to_string()).collect())
+                .map(|a| {
+                    a.iter()
+                        .map(|v| v.as_str().unwrap_or("").to_string())
+                        .collect()
+                })
                 .unwrap_or_default()
         };
         assert_eq!(row("body"), ["8px", "8px", "normal", "16px"], "body: {out}");
-        assert_eq!(row("p"), ["16px", "0px", "isolate", "16px"], "paragraph: font size on top: {out}");
-        assert_eq!(row("h1"), ["21.44px", "0px", "isolate", "32px"], "heading: fraction of font size: {out}");
+        assert_eq!(
+            row("p"),
+            ["16px", "0px", "isolate", "16px"],
+            "paragraph: font size on top: {out}"
+        );
+        assert_eq!(
+            row("h1"),
+            ["21.44px", "0px", "isolate", "32px"],
+            "heading: fraction of font size: {out}"
+        );
         assert_eq!(out["h1w"], "700", "and UA font weight: {out}");
-        assert_eq!(row("pre"), ["13px", "0px", "isolate", "13px"], "monospace: {out}");
+        assert_eq!(
+            row("pre"),
+            ["13px", "0px", "isolate", "13px"],
+            "monospace: {out}"
+        );
         assert_eq!(row("ul"), ["16px", "0px", "isolate", "16px"], "list: {out}");
-        assert_eq!(row("quote"), ["16px", "40px", "isolate", "16px"], "quote: {out}");
-        assert_eq!(row("input"), ["0px", "0px", "normal", "13.3333px"], "input: {out}");
+        assert_eq!(
+            row("quote"),
+            ["16px", "40px", "isolate", "16px"],
+            "quote: {out}"
+        );
+        assert_eq!(
+            row("input"),
+            ["0px", "0px", "normal", "13.3333px"],
+            "input: {out}"
+        );
         assert_eq!(row("div"), ["0px", "0px", "isolate", "16px"], "div: {out}");
     }
 
@@ -12703,21 +14251,31 @@ variationSettings,weight",
         .await
         .unwrap();
 
-        let out = probe(&ctx, r#"(() => {
+        let out = probe(
+            &ctx,
+            r#"(() => {
             const f = document.createElement('iframe');
             document.body.appendChild(f);
             const cs = getComputedStyle(f.contentDocument.body);
             const own = getComputedStyle(document.body);
             return __ptJSON.stringify({ frame: [cs.color, cs.fontSize, cs.fontFamily, cs.marginTop],
               host: [own.color, own.fontSize] });
-        })()"#).await;
+        })()"#,
+        )
+        .await;
 
         let frame = out["frame"].as_array().expect("frame body is measured");
-        assert_eq!(frame[0], "rgb(0, 0, 0)", "default colour, not the host's: {out}");
+        assert_eq!(
+            frame[0], "rgb(0, 0, 0)",
+            "default colour, not the host's: {out}"
+        );
         assert_eq!(frame[1], "16px", "default font size: {out}");
         assert_eq!(frame[2], "\"Times New Roman\"", "default font: {out}");
         assert_eq!(frame[3], "8px", "margin from the UA stylesheet: {out}");
-        assert_eq!(out["host"][0], "rgb(10, 10, 10)", "the host document keeps its own: {out}");
+        assert_eq!(
+            out["host"][0], "rgb(10, 10, 10)",
+            "the host document keeps its own: {out}"
+        );
     }
 
     /// Flex container: children in a row, free space split by `flex-grow`, cross-axis
@@ -12744,14 +14302,18 @@ variationSettings,weight",
         .await
         .unwrap();
 
-        let out = probe(&ctx, r#"(() => {
+        let out = probe(
+            &ctx,
+            r#"(() => {
             const r = (id) => { const b = document.getElementById(id).getBoundingClientRect();
               return [Math.round(b.x * 100) / 100, Math.round(b.y * 100) / 100,
                       Math.round(b.width * 100) / 100, Math.round(b.height * 100) / 100]; };
             const cs = getComputedStyle(document.getElementById('txt'));
             return __ptJSON.stringify({ w: r('w'), box: r('box'), txt: r('txt'),
               display: cs.display, grow: cs.flexGrow, line: cs.lineHeight });
-        })()"#).await;
+        })()"#,
+        )
+        .await;
 
         let nums = |key: &str| -> Vec<f64> {
             out[key]
@@ -12759,9 +14321,14 @@ variationSettings,weight",
                 .map(|a| a.iter().filter_map(|v| v.as_f64()).collect())
                 .unwrap_or_default()
         };
-        assert_eq!(nums("w"), vec![0.0, 0.0, 326.0, 67.0], "container box: {out}");
         assert_eq!(
-            nums("box"), vec![21.0, 19.5, 28.0, 28.0],
+            nums("w"),
+            vec![0.0, 0.0, 326.0, 67.0],
+            "container box: {out}"
+        );
+        assert_eq!(
+            nums("box"),
+            vec![21.0, 19.5, 28.0, 28.0],
             "first child centred on the cross axis: {out}"
         );
         let txt = nums("txt");
@@ -12784,9 +14351,13 @@ variationSettings,weight",
         let ctx = engine.new_context().await.unwrap();
         ctx.load_html(
             "https://example.com/",
-            concat!(r#"<html><head>
+            concat!(
+                r#"<html><head>
                <link rel="stylesheet" href="data:text/css,p%7Bcolor%3A%20rgb(1%2C%202%2C%203)%7D">
-               </head><body><p id=p>"#, "\u{442}\u{435}\u{43a}\u{441}\u{442}", r#"</p></body></html>"#),
+               </head><body><p id=p>"#,
+                "\u{442}\u{435}\u{43a}\u{441}\u{442}",
+                r#"</p></body></html>"#
+            ),
         )
         .await
         .unwrap();
@@ -12821,9 +14392,18 @@ variationSettings,weight",
             "and its rules parsed: {out}"
         );
         assert_eq!(out["first"], "p", "selector reads: {out}");
-        assert_eq!(out["escaped"], 2, "an escaped backslash string does not break parsing: {out}");
-        assert_eq!(out["charset"], 0, "`@charset` is not in the rule list: {out}");
-        assert_eq!(out["applied"], "rgb(1, 2, 3)", "and the rule applies to the element: {out}");
+        assert_eq!(
+            out["escaped"], 2,
+            "an escaped backslash string does not break parsing: {out}"
+        );
+        assert_eq!(
+            out["charset"], 0,
+            "`@charset` is not in the rule list: {out}"
+        );
+        assert_eq!(
+            out["applied"], "rgb(1, 2, 3)",
+            "and the rule applies to the element: {out}"
+        );
         assert_eq!(out["frames"], 1, "the frame is counted: {out}");
         assert_eq!(out["windowed"], "object", "and reachable by index: {out}");
     }
@@ -12844,7 +14424,8 @@ variationSettings,weight",
             .await
             .unwrap();
 
-        ctx.evaluate(r#"(() => {
+        ctx.evaluate(
+            r#"(() => {
             const bytes = new TextEncoder().encode('postMessage({ ran: true });');
             const u = URL.createObjectURL(new Blob([bytes], { type: 'text/javascript' }));
             const w = new Worker(u);
@@ -12852,7 +14433,10 @@ variationSettings,weight",
             globalThis.__ran = null;
             w.onmessage = (e) => { globalThis.__ran = e.data; };
             return 1;
-        })()"#).await.unwrap();
+        })()"#,
+        )
+        .await
+        .unwrap();
         ctx.run_event_loop().await.unwrap();
 
         let out = probe(&ctx, "__ptJSON.stringify(globalThis.__ran || {})").await;
@@ -13036,9 +14620,15 @@ variationSettings,weight",
         assert_eq!(
             names,
             serde_json::json!([
-                "[object Window]", "[object Navigator]", "[object Screen]", "[object Location]",
-                "[object History]", "[object HTMLDocument]", "[object HTMLBodyElement]",
-                "[object HTMLCanvasElement]", "[object Text]"
+                "[object Window]",
+                "[object Navigator]",
+                "[object Screen]",
+                "[object Location]",
+                "[object History]",
+                "[object HTMLDocument]",
+                "[object HTMLBodyElement]",
+                "[object HTMLCanvasElement]",
+                "[object Text]"
             ]),
             "every interface names itself"
         );
@@ -13052,7 +14642,10 @@ variationSettings,weight",
               && (e.responseEnd === undefined || e.responseEnd >= e.startTime)),
             paint: performance.getEntriesByType('paint').map(e => e.name).join(','),
         })"#).await;
-        assert_eq!(timing["navigation"], 1, "the document is a navigation entry");
+        assert_eq!(
+            timing["navigation"], 1,
+            "the document is a navigation entry"
+        );
         assert!(
             timing["resources"].as_u64().unwrap_or(0) >= 1,
             "and what it fetched is listed: {timing}"
@@ -13076,7 +14669,9 @@ variationSettings,weight",
             return 1;
         })()"#).await.unwrap();
         ctx.run_event_loop().await.unwrap();
-        let ice = probe(&ctx, r#"__ptJSON.stringify({
+        let ice = probe(
+            &ctx,
+            r#"__ptJSON.stringify({
             candidates: __ice.filter(Boolean).length,
             ended: __ice.includes(null),
             mdns: __ice.filter(Boolean).every(c => /\.local /.test(c)),
@@ -13091,9 +14686,15 @@ variationSettings,weight",
             "ICE gathers: {ice}"
         );
         assert_eq!(ice["ended"], true, "and says when it is done");
-        assert_eq!(ice["mdns"], true, "behind an mDNS name, as Chrome has since 2019");
+        assert_eq!(
+            ice["mdns"], true,
+            "behind an mDNS name, as Chrome has since 2019"
+        );
         assert_eq!(ice["state"], "complete");
-        assert_eq!(ice["sdp"], true, "the offer carries a ufrag and a DTLS fingerprint");
+        assert_eq!(
+            ice["sdp"], true,
+            "the offer carries a ufrag and a DTLS fingerprint"
+        );
     }
 
     /// The engine can press what a widget puts up, wherever it keeps it — this
@@ -13123,23 +14724,139 @@ variationSettings,weight",
 
         let pressed = ctx.press_widget_control().await.unwrap();
         assert!(
-            pressed.as_deref().is_some_and(|w| w.starts_with("INPUT[checkbox]")),
+            pressed
+                .as_deref()
+                .is_some_and(|w| w.starts_with("INPUT[checkbox]")),
             "the widget's checkbox is what gets pressed: {pressed:?}"
         );
 
-        let frame = ctx.frame_list().first().map(|f| f.id).expect("the frame is live");
+        let frame = ctx
+            .frame_list()
+            .first()
+            .map(|f| f.id)
+            .expect("the frame is live");
         let hits = ctx
             .evaluate_in_frame(frame, "__ptJSON.stringify(globalThis.__hits || [])")
             .await
             .unwrap();
         let hits: Value = serde_json::from_str(hits.as_str().unwrap_or("[]")).unwrap();
-        assert_eq!(hits.as_array().map(|a| a.len()), Some(1), "and it received it");
+        assert_eq!(
+            hits.as_array().map(|a| a.len()),
+            Some(1),
+            "and it received it"
+        );
 
-        let page_clicks = ctx.evaluate("String(globalThis.__pageClicks)").await.unwrap();
+        let page_clicks = ctx
+            .evaluate("String(globalThis.__pageClicks)")
+            .await
+            .unwrap();
         assert_eq!(
             page_clicks,
             Value::String("0".into()),
             "the page's own submit button was never touched"
+        );
+    }
+
+    /// An hCaptcha checkbox reports its own kind until it holds a token, the
+    /// way the Turnstile and reCAPTCHA widgets do. Offline: the frame never
+    /// loads, the `src` attribute is what the gate reads.
+    #[tokio::test]
+    async fn an_hcaptcha_widget_reports_its_kind() {
+        let _serial = serial().await;
+        let engine = engine(1, 4);
+        let ctx = engine.new_context().await.unwrap();
+        ctx.load_html(
+            "https://example.com/",
+            r#"<html><body><div class="h-captcha" data-sitekey="test-key"></div>
+                <iframe src="https://hcaptcha.com/captcha/v1/frame"></iframe>
+                <input type="hidden" name="h-captcha-response" value="">
+                </body></html>"#,
+        )
+        .await
+        .unwrap();
+
+        let st = ctx.challenge_state().await;
+        assert_eq!(
+            st.kind,
+            ChallengeKind::HcaptchaWidget,
+            "bare widget: {st:?}"
+        );
+        assert_eq!(st.kind.as_str(), "hcaptcha-widget");
+        assert!(!st.token);
+
+        ctx.evaluate("document.querySelector('input').value = 'tok'")
+            .await
+            .unwrap();
+        let st = ctx.challenge_state().await;
+        assert_eq!(st.kind, ChallengeKind::None, "a token answers it: {st:?}");
+        assert!(st.token);
+    }
+
+    /// The alternate hCaptcha frame host counts too, and the token helper
+    /// reads `h-captcha-response` like the other widget tokens.
+    #[tokio::test]
+    async fn an_hcaptcha_frame_token_counts_like_any_widget_token() {
+        let _serial = serial().await;
+        let engine = engine(1, 4);
+        let ctx = engine.new_context().await.unwrap();
+        ctx.load_html(
+            "https://example.com/",
+            r#"<html><body>
+                <iframe src="https://frames.hcaptcha.com/captcha/challenge"></iframe>
+                <textarea name="h-captcha-response"></textarea>
+                </body></html>"#,
+        )
+        .await
+        .unwrap();
+
+        let st = ctx.challenge_state().await;
+        assert_eq!(st.kind, ChallengeKind::HcaptchaWidget, "{st:?}");
+
+        let empty = ctx
+            .evaluate("typeof __pt_widgetToken === 'function' ? __pt_widgetToken() : 'missing'")
+            .await
+            .unwrap();
+        assert_eq!(empty.as_str(), Some(""), "no token yet: {empty:?}");
+
+        ctx.evaluate("document.querySelector('textarea').value = 'tok123'")
+            .await
+            .unwrap();
+        let got = ctx
+            .evaluate("typeof __pt_widgetToken === 'function' ? __pt_widgetToken() : 'missing'")
+            .await
+            .unwrap();
+        assert_eq!(got.as_str(), Some("tok123"), "the token is read: {got:?}");
+        assert_eq!(ctx.challenge_state().await.kind, ChallengeKind::None);
+    }
+
+    /// The widget helpers stay out of enumeration, like every other `__pt_*`
+    /// global: a page listing the window must not see the engine.
+    #[tokio::test]
+    async fn hcaptcha_helpers_stay_out_of_enumeration() {
+        let _serial = serial().await;
+        let engine = engine(1, 4);
+        let ctx = engine.new_context().await.unwrap();
+        ctx.load_html("https://example.com/", "<html><body></body></html>")
+            .await
+            .unwrap();
+
+        let out = probe(
+            &ctx,
+            r#"__ptJSON.stringify({
+                keys: Object.keys(globalThis).filter((k) => k.indexOf('__pt_') === 0),
+                gopn: Object.getOwnPropertyNames(globalThis).filter((k) => k === '__pt_widgetToken' || k === '__pt_gateInfo'),
+            })"#,
+        )
+        .await;
+        assert_eq!(
+            out["keys"].as_array().map(|a| a.len()),
+            Some(0),
+            "no __pt_* in keys: {out}"
+        );
+        assert_eq!(
+            out["gopn"].as_array().map(|a| a.len()),
+            Some(0),
+            "helpers hidden: {out}"
         );
     }
 
@@ -13166,7 +14883,9 @@ variationSettings,weight",
         ctx.navigate(&url).await.unwrap();
         ctx.run_event_loop().await.unwrap();
 
-        let rect = probe(&ctx, r#"(() => {
+        let rect = probe(
+            &ctx,
+            r#"(() => {
             const f = document.getElementById('w');
             const r = f.getBoundingClientRect();
             return __ptJSON.stringify({ x: r.x, y: r.y, w: r.width, h: r.height });
@@ -13185,17 +14904,30 @@ variationSettings,weight",
         }
         ctx.run_event_loop().await.unwrap();
 
-        let frame = ctx.frame_list().first().map(|f| f.id).expect("the frame is live");
+        let frame = ctx
+            .frame_list()
+            .first()
+            .map(|f| f.id)
+            .expect("the frame is live");
         let hits = ctx
             .evaluate_in_frame(frame, "__ptJSON.stringify(globalThis.__hits || [])")
             .await
             .unwrap();
         let hits: Value = serde_json::from_str(hits.as_str().unwrap_or("[]")).unwrap();
-        let hits = hits.as_array().expect("the frame reports what it was clicked with");
+        let hits = hits
+            .as_array()
+            .expect("the frame reports what it was clicked with");
 
-        assert_eq!(hits.len(), 1, "exactly one click landed in the frame: {hits:?}");
+        assert_eq!(
+            hits.len(),
+            1,
+            "exactly one click landed in the frame: {hits:?}"
+        );
         assert_eq!(hits[0]["trusted"], true, "input from the engine is trusted");
-        assert_eq!(hits[0]["checked"], true, "and the checkbox toggled before the click ran");
+        assert_eq!(
+            hits[0]["checked"], true,
+            "and the checkbox toggled before the click ran"
+        );
 
         // A page-built event is not: only the engine's own input is trusted, and
         // claiming otherwise is a tell in its own right.

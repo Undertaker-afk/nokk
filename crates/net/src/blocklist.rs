@@ -28,6 +28,21 @@ fn blocklist() -> &'static HashSet<&'static str> {
     })
 }
 
+/// Vendors whose assets a challenge needs to load: never blocked, even if an
+/// upstream list names them. Suffix-matched, so the bare `hcaptcha.com` entry
+/// already covers `js.hcaptcha.com`, `frames.hcaptcha.com`,
+/// `newassets.hcaptcha.com`, `api.hcaptcha.com`, etc. The challenge hosts are
+/// listed explicitly as well so a future refactor to exact-match cannot
+/// silently starve the widget of `api.js` / `/captcha/*` (live-test failure
+/// mode #1: `challenge_state` stuck at `hcaptcha && !token` → `Timeout`).
+const ALLOWLIST: &[&str] = &["hcaptcha.com", "js.hcaptcha.com", "newassets.hcaptcha.com"];
+
+fn is_allowlisted(host: &str) -> bool {
+    ALLOWLIST
+        .iter()
+        .any(|a| host == *a || host.ends_with(&format!(".{a}")))
+}
+
 /// Whether `host` is a blocked tracker/ad/analytics domain.
 ///
 /// Matches the exact host and every parent domain, so `www.google-analytics.com`
@@ -36,6 +51,9 @@ fn blocklist() -> &'static HashSet<&'static str> {
 pub fn is_blocked(host: &str) -> bool {
     let bl = blocklist();
     let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if is_allowlisted(&host) {
+        return false;
+    }
     if bl.contains(host.as_str()) {
         return true;
     }
@@ -99,6 +117,34 @@ mod tests {
             "challenges.cloudflare.com",
         ] {
             assert!(!is_blocked(host), "{host} must not be blocked");
+        }
+    }
+
+    #[test]
+    fn hcaptcha_challenge_hosts_are_hard_allowlisted() {
+        // Live-test failure mode #1: over-aggressive blocking of the widget's
+        // frames or api.js leaves challenge_state stuck at hcaptcha && !token.
+        // All hosts the challenge loads must pass, case-insensitively, with or
+        // without a trailing dot.
+        for host in [
+            "hcaptcha.com",
+            "js.hcaptcha.com",
+            "newassets.hcaptcha.com",
+            "frames.hcaptcha.com",
+            "api.hcaptcha.com",
+            "c.hcaptcha.com",
+            "JS.HCAPTCHA.COM",
+            "js.hcaptcha.com.",
+        ] {
+            assert!(!is_blocked(host), "{host} must not be blocked");
+        }
+        for url in [
+            "https://js.hcaptcha.com/1/api.js",
+            "https://newassets.hcaptcha.com/captcha/v1/frame",
+            "https://frames.hcaptcha.com/captcha/challenge",
+            "https://api.hcaptcha.com/siteverify",
+        ] {
+            assert!(!is_blocked_url(url), "{url} must not be blocked");
         }
     }
 
