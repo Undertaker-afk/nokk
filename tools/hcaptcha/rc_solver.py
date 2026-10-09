@@ -35,6 +35,13 @@ def d1():
         print('d1 on', dev, flush=True)
     return _d1['m']
 
+def fetch_img(url):
+    import hashlib
+    r = requests.get(url, headers=UA, timeout=25)
+    r.raise_for_status()
+    im = Image.open(io.BytesIO(r.content)).convert('RGB')
+    return im, hashlib.sha256(r.content).hexdigest()[:12]
+
 def d1_classify(tiles, prompt):
     import torch
     m = d1()
@@ -82,11 +89,10 @@ def solve(url, port=9380, budget=420):
                 time.sleep(4); continue
             prompt = data['prompt']
             print('ROUND %d PROMPT: %s' % (rounds, prompt), flush=True)
-            tiles = []
-            ok = True
             import hashlib, os
             os.makedirs(r'C:\Users\THW-User\AppData\Local\Temp\opencode\rc-tiles', exist_ok=True)
-            raws = []
+            raws, seen_src = [], list(data['tiles'])
+            ok = True
             for u in data['tiles']:
                 try:
                     r = requests.get(u, headers=UA, timeout=25)
@@ -104,7 +110,8 @@ def solve(url, port=9380, budget=420):
             uniq = {}
             for im in raws:
                 uniq.setdefault(hashlib.sha256(im.tobytes()).hexdigest(), im)
-            if len(uniq) == 1 and len(raws) in (9, 16):
+            composite = len(uniq) == 1 and len(raws) in (9, 16)
+            if composite:
                 # static composite variant: one shared image, tiles are grid crops
                 n = int(len(raws) ** 0.5)
                 base = raws[0]
@@ -139,6 +146,40 @@ def solve(url, port=9380, budget=420):
                     return {'solved': False, 'why': 'budget'}
                 call('Nokk.press', {'frameUrl': 'bframe', 'selector': '#vtile%d' % i})
                 time.sleep(1.2)
+            if not composite:
+                # fade-swap settle: pressed tiles get replaced -> classify swaps until clean
+                for swap in range(10):
+                    if time.time() > t_end:
+                        return {'solved': False, 'why': 'budget'}
+                    time.sleep(2.5)
+                    raw2 = ev(EXTRACT)
+                    if raw2.startswith('JSERR'):
+                        break
+                    urls2 = json.loads(raw2)['tiles']
+                    changed = [i for i in range(len(urls2)) if i < len(seen_src) and urls2[i] and urls2[i] != seen_src[i]]
+                    if not changed:
+                        print('settle: no swaps', flush=True)
+                        break
+                    print('settle: swapped tiles', changed, flush=True)
+                    new_picks = []
+                    for i in changed:
+                        try:
+                            im, _ = fetch_img(urls2[i])
+                        except Exception as e:
+                            print('swap fetch failed:', str(e)[:80], flush=True)
+                            continue
+                        seen_src[i] = urls2[i]
+                        s = d1_classify([im.resize((384, 384))], prompt)[0]
+                        print('swap tile %d score %.2f' % (i, s), flush=True)
+                        if s >= 0.60:
+                            new_picks.append(i)
+                    for i in new_picks:
+                        ev(TAG)
+                        call('Nokk.press', {'frameUrl': 'bframe', 'selector': '#vtile%d' % i})
+                        time.sleep(1.2)
+                    if not new_picks:
+                        print('settle: swaps clean', flush=True)
+                        break
             try:
                 st = ev("[...document.querySelectorAll('.rc-imageselect-tile')].map(el => (el.querySelector('.rc-imageselect-checkbox')||{}).className || '').join(' | ')")
                 print('TOGGLE-CHECK:', st.encode('ascii','replace').decode()[:300], flush=True)
