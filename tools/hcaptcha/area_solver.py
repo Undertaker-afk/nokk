@@ -137,6 +137,33 @@ def d1_batch(crops, prompt):
         res = m.system_one_batch(reqs)
     return [res[i]["answers"]["c%d" % i]["noul"] for i in range(len(crops))]
 
+def qwen_ground(crop_img, noun):
+    """Native bbox grounding via qwen2.5vl. Returns (nx, ny) in crop coords or None."""
+    import base64 as _b, io as _io, json as _j, re as _re, urllib.request as _u
+    buf = _io.BytesIO(); crop_img.save(buf, format='PNG')
+    body = _j.dumps({"model": "qwen2.5vl:7b",
+        "prompt": "Find the %s in this image. Output its bounding box as JSON with keys x_min, y_min, x_max, y_max in 0-1000 scale." % noun,
+        "images": [_b.b64encode(buf.getvalue()).decode()],
+        "stream": False, "options": {"num_predict": 120, "temperature": 0}}).encode()
+    try:
+        req = _u.Request("http://127.0.0.1:11434/api/generate", data=body,
+                         headers={"Content-Type": "application/json"})
+        txt = (_j.loads(_u.urlopen(req, timeout=600).read()).get("response", "") or "")
+        print('ground raw:', txt.strip()[:200], flush=True)
+        m = _re.search(r'\{[^{}]*"x_min"\s*:\s*(\d+)[^{}]*"y_min"\s*:\s*(\d+)[^{}]*"x_max"\s*:\s*(\d+)[^{}]*"y_max"\s*:\s*(\d+)', txt)
+        if not m:
+            m2 = _re.search(r'"bbox_2d"\s*:\s*\[\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\]', txt)
+            if m2:
+                x0, y0, x1, y1 = map(int, m2.groups())
+            else:
+                return None
+        else:
+            x0, y0, x1, y1 = map(int, m.groups())
+        return ((x0 + x1) / 2 / 1000, (y0 + y1) / 2 / 1000)
+    except Exception as e:
+        print('ground err:', str(e)[:100], flush=True)
+        return None
+
 def som_dots(img, n=5):
     """Numbered dots overlay; return (img, [(label, x, y)])."""
     W, H = img.size
@@ -210,31 +237,37 @@ def solve(cid, port=9420):
         noun = ' '.join(words[:3]) if words else prompt[:40]
         W, H = img.size
         big = img.resize((512, 512)) if max(W, H) < 400 else img
-        ax = d1_half(big, noun, 0)
-        ay = d1_half(big, noun, 1)
-        px_ = dict(ax.get('probabilities') or {})
-        py_ = dict(ay.get('probabilities') or {})
-        cx = 0.25 if ax.get('choice') == 'left' else (0.75 if ax.get('choice') == 'right' else 0.5)
-        cy = 0.25 if ay.get('choice') == 'top' else (0.75 if ay.get('choice') == 'bottom' else 0.5)
-        print('bisect: (%.2f, %.2f)' % (cx, cy), flush=True)
-        # refine: Set-of-Marks dots on winning quadrant, d1 picks nearest dot
-        qx0, qy0 = (cx - 0.25) * W, (cy - 0.25) * H
-        qx1, qy1 = (cx + 0.25) * W, (cy + 0.25) * H
-        quad = img.crop((int(qx0), int(qy0), int(qx1), int(qy1)))
-        marked, pts = som_dots(quad.resize((512, 512)), 5)
-        am = d1_mark(marked, [lab for lab, _, _ in pts], noun)
-        try:
-            pick = int(am.get('choice'))
-        except (TypeError, ValueError):
-            pick = None
-        if pick is None:
-            probs = am.get('probabilities') or {}
-            pick = max([int(k) for k in probs] or [13], key=lambda k: probs.get(str(k), probs.get(k, 0)))
-        lab, dx, dy = pts[pick - 1]
-        ix = qx0 + dx * (qx1 - qx0) / 512
-        iy = qy0 + dy * (qy1 - qy0) / 512
-        nx, ny = ix / W, iy / H
-        print('TARGET norm: %.3f %.3f (labels %s)' % (nx, ny, d['labels']), flush=True)
+        # primary: native grounding on FULL image
+        gfull = qwen_ground(big, noun)
+        if gfull is not None:
+            # refine: re-ground on quadrant crop around first fix for precision
+            qx0 = max(0, int((gfull[0] - 0.25) * W)); qy0 = max(0, int((gfull[1] - 0.25) * H))
+            qx1 = min(W, int((gfull[0] + 0.25) * W)); qy1 = min(H, int((gfull[1] + 0.25) * H))
+            quad = img.crop((qx0, qy0, qx1, qy1))
+            g2 = qwen_ground(quad.resize((512, 512)), noun)
+            if g2 is not None:
+                nx = (qx0 + g2[0] * (qx1 - qx0)) / W
+                ny = (qy0 + g2[1] * (qy1 - qy0)) / H
+            else:
+                nx, ny = gfull
+            print('TARGET norm: %.3f %.3f (labels %s)' % (nx, ny, d['labels']), flush=True)
+        else:
+            ax = d1_half(big, noun, 0)
+            ay = d1_half(big, noun, 1)
+            cx = 0.25 if ax.get('choice') == 'left' else (0.75 if ax.get('choice') == 'right' else 0.5)
+            cy = 0.25 if ay.get('choice') == 'top' else (0.75 if ay.get('choice') == 'bottom' else 0.5)
+            print('bisect-fallback: (%.2f, %.2f)' % (cx, cy), flush=True)
+            qx0, qy0 = (cx - 0.25) * W, (cy - 0.25) * H
+            qx1, qy1 = (cx + 0.25) * W, (cy + 0.25) * H
+            quad = img.crop((int(qx0), int(qy0), int(qx1), int(qy1)))
+            g = qwen_ground(quad.resize((512, 512)), noun)
+            if g is None:
+                print('ground failed; quadrant center fallback', flush=True)
+                nx, ny = cx, cy
+            else:
+                nx = (qx0 + g[0] * (qx1 - qx0)) / W
+                ny = (qy0 + g[1] * (qy1 - qy0)) / H
+            print('TARGET norm: %.3f %.3f (labels %s)' % (nx, ny, d['labels']), flush=True)
         # wait for canvas, compute page coords with their margin formula
         oxoy = None
         ageo = None
